@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Controle de Coleta - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+  <!-- ===== Topbar ===== -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+      <div class="logo-pequena-area">
+        <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== App ===== -->
+  <div class="app">
+
+    <!-- ===== Painel Form ===== -->
+    <div class="painel">
+      <h1>Controle de Coleta</h1>
+      <div class="sub">
+        Lançamento, coleta e painel de coletas aguardando
+      </div>
+
+      <!-- Botões modo -->
+      <div class="tipo-retido">
+        <button type="button" id="btnModoLancar" class="ativo">Lançar Coleta</button>
+        <button type="button" id="btnModoColetado">Coletas Coletadas</button>
+      </div>
+
+      <!-- ===== BLOCO LANÇAR ===== -->
+      <div id="blocoLancar" class="bloco-form ativo">
+
+        <label class="label">Número da Coleta</label>
+        <input
+          type="text"
+          id="numeroColeta"
+          class="input-padrao"
+          autocomplete="off"
+          placeholder="Ex.: 12345">
+
+        <label class="label">Nome do Parceiro</label>
+        <input
+          type="text"
+          id="nomeParceiro"
+          class="input-padrao"
+          autocomplete="off"
+          placeholder="Ex.: FITLOG TRANSPORTES E LOGISTICA">
+
+        <label class="label">Número da Nota Fiscal</label>
+        <input
+          type="text"
+          id="numeroNotaFiscal"
+          class="input-padrao"
+          autocomplete="off"
+          placeholder="Ex.: 987654">
+
+        <label class="label">Nome do Cliente</label>
+        <input
+          type="text"
+          id="nomeCliente"
+          class="input-padrao"
+          autocomplete="off"
+          placeholder="Ex.: CLIENTE XPTO">
+
+        <div class="acoes">
+          <button type="button" class="btn primario" id="btnLancarColeta">
+            Lançar coleta
+          </button>
+
+          <button type="button" class="btn secundario" id="btnLimparLancamento">
+            Limpar
+          </button>
+        </div>
+      </div>
+
+      <!-- ===== BLOCO COLETADO ===== -->
+      <div id="blocoColetado" class="bloco-form">
+
+        <label class="label">Número da Coleta / Nota Fiscal</label>
+        <input
+          type="text"
+          id="codigoColetado"
+          class="input-padrao"
+          autocomplete="off"
+          placeholder="Digite o número da coleta ou da NF">
+
+        <div class="acoes">
+          <button type="button" class="btn primario" id="btnMarcarColetado">
+            Coletado
+          </button>
+
+          <button type="button" class="btn secundario" id="btnLimparColetado">
+            Limpar
+          </button>
+        </div>
+      </div>
+
+      <div id="statusColeta" class="status"></div>
+    </div>
+
+    <!-- ===== Painel Tabela ===== -->
+    <div class="painel">
+
+      <div class="resultado-topo">
+        <h2>Painel de Coletas</h2>
+        <div class="resultado-total" id="resultadoTotalColetas">0 resultado(s)</div>
+      </div>
+
+      <label class="label">Filtrar por Parceiro</label>
+      <select id="filtroParceiro" class="input-padrao">
+        <option value="">Todos</option>
+      </select>
+
+      <div class="resultado-tabela-wrap">
+        <table class="resultado-tabela">
+          <thead id="theadColetas"></thead>
+          <tbody id="tbodyColetas"></tbody>
+        </table>
+      </div>
+
+      <div class="resultado-vazio" id="resultadoVazioColetas">
+        Nenhuma coleta aguardando no momento.
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- ===== Scripts ===== -->
+  <script src="/app.js"></script>
+
+  <script>
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxN_rSiNwXi09fWqno65zSW_w8TSDjyx9tWdJd4SYz1DeynKW3r-T_7smjmt2Zhr5_D/exec";
+
+    // ===== MENU GLOBAL =====
+    iniciarMenu("controle_coleta");
+
+    // ===== ELEMENTOS =====
+    const btnModoLancar = document.getElementById("btnModoLancar");
+    const btnModoColetado = document.getElementById("btnModoColetado");
+
+    const blocoLancar = document.getElementById("blocoLancar");
+    const blocoColetado = document.getElementById("blocoColetado");
+
+    const numeroColeta = document.getElementById("numeroColeta");
+    const nomeParceiro = document.getElementById("nomeParceiro");
+    const numeroNotaFiscal = document.getElementById("numeroNotaFiscal");
+    const nomeCliente = document.getElementById("nomeCliente");
+
+    const btnLancarColeta = document.getElementById("btnLancarColeta");
+    const btnLimparLancamento = document.getElementById("btnLimparLancamento");
+
+    const codigoColetado = document.getElementById("codigoColetado");
+    const btnMarcarColetado = document.getElementById("btnMarcarColetado");
+    const btnLimparColetado = document.getElementById("btnLimparColetado");
+
+    const statusBox = document.getElementById("statusColeta");
+
+    const resultadoTotalColetas = document.getElementById("resultadoTotalColetas");
+    const theadColetas = document.getElementById("theadColetas");
+    const tbodyColetas = document.getElementById("tbodyColetas");
+    const resultadoVazioColetas = document.getElementById("resultadoVazioColetas");
+    const filtroParceiro = document.getElementById("filtroParceiro");
+
+    // ===== FUNÇÕES =====
+    function mostrarStatus(tipo, msg) {
+      statusBox.className = "status " + tipo;
+      statusBox.textContent = msg;
+    }
+
+    function selecionarModo(modo) {
+      const isLancar = modo === "lancar";
+
+      btnModoLancar.classList.toggle("ativo", isLancar);
+      btnModoColetado.classList.toggle("ativo", !isLancar);
+
+      blocoLancar.classList.toggle("ativo", isLancar);
+      blocoColetado.classList.toggle("ativo", !isLancar);
+    }
+
+    btnModoLancar.onclick = () => selecionarModo("lancar");
+    btnModoColetado.onclick = () => selecionarModo("coletado");
+
+    function escapeHtml(texto) {
+      return String(texto ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;")
+        .replace(/'/g,"&#039;");
+    }
+
+    function limparTabelaColetas() {
+      theadColetas.innerHTML = "";
+      tbodyColetas.innerHTML = "";
+      resultadoTotalColetas.textContent = "0 resultado(s)";
+      resultadoVazioColetas.style.display = "block";
+      filtroParceiro.innerHTML = '<option value="">Todos</option>';
+    }
+
+    function renderizarColetas(headers, rows) {
+      limparTabelaColetas();
+
+      if (!rows.length) return;
+
+      resultadoVazioColetas.style.display = "none";
+      resultadoTotalColetas.textContent = rows.length + " resultado(s)";
+
+      const trHead = document.createElement("tr");
+
+      headers.forEach(h => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        trHead.appendChild(th);
+      });
+
+      theadColetas.appendChild(trHead);
+
+      const parceiros = new Set();
+
+      rows.forEach(row => {
+        const tr = document.createElement("tr");
+
+        row.forEach(val => {
+          const td = document.createElement("td");
+          td.innerHTML = escapeHtml(val);
+          tr.appendChild(td);
+        });
+
+        tbodyColetas.appendChild(tr);
+
+        parceiros.add(row[1]);
+      });
+
+      parceiros.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p;
+        opt.textContent = p;
+        filtroParceiro.appendChild(opt);
+      });
+    }
+
+    filtroParceiro.onchange = () => {
+      const filtro = filtroParceiro.value;
+
+      Array.from(tbodyColetas.children).forEach(tr => {
+        const parceiro = tr.children[1]?.textContent || "";
+        tr.style.display = (!filtro || filtro === parceiro) ? "" : "none";
+      });
+    };
+
+    async function carregarPainelColetas() {
+      try {
+        const res = await fetch(WEBAPP_URL + "?acao=listarColetasAguardando&t=" + Date.now());
+        const data = await res.json();
+
+        if (!data.ok) return limparTabelaColetas();
+
+        renderizarColetas(data.headers || [], data.rows || []);
+
+      } catch {
+        limparTabelaColetas();
+      }
+    }
+
+    // ===== AÇÕES =====
+    btnLancarColeta.onclick = async () => {
+      const coleta = numeroColeta.value.trim();
+      const parceiro = nomeParceiro.value.trim();
+      const notaFiscal = numeroNotaFiscal.value.trim();
+      const cliente = nomeCliente.value.trim();
+
+      if (!coleta) return mostrarStatus("erro", "Informe o número da coleta");
+      if (!parceiro) return mostrarStatus("erro", "Informe o nome do parceiro");
+      if (!notaFiscal) return mostrarStatus("erro", "Informe o número da Nota Fiscal");
+
+      mostrarStatus("aviso", "Lançando coleta...");
+
+      try {
+        const res = await fetch(WEBAPP_URL, {
+          method: "POST",
+          body: new URLSearchParams({
+            acao: "lancarColeta",
+            coleta,
+            parceiro,
+            notaFiscal,
+            cliente
+          })
+        });
+
+        const data = await res.json();
+
+        if (!data.ok) {
+          return mostrarStatus("erro", data.mensagem || "Erro ao lançar coleta");
+        }
+
+        mostrarStatus("ok", "Coleta lançada com sucesso");
+
+        numeroColeta.value = "";
+        nomeParceiro.value = "";
+        numeroNotaFiscal.value = "";
+        nomeCliente.value = "";
+        numeroColeta.focus();
+
+        carregarPainelColetas();
+
+      } catch {
+        mostrarStatus("erro", "Erro de conexão");
+      }
+    };
+
+    btnMarcarColetado.onclick = async () => {
+      const codigo = codigoColetado.value.trim();
+
+      if (!codigo) return mostrarStatus("erro", "Informe o número da coleta ou da NF");
+
+      mostrarStatus("aviso", "Marcando como coletado...");
+
+      try {
+        const res = await fetch(WEBAPP_URL, {
+          method: "POST",
+          body: new URLSearchParams({
+            acao: "marcarColetado",
+            codigo
+          })
+        });
+
+        const data = await res.json();
+
+        if (!data.ok) {
+          return mostrarStatus("erro", data.mensagem || "Erro ao marcar como coletado");
+        }
+
+        mostrarStatus("ok", "Coletado");
+
+        codigoColetado.value = "";
+        codigoColetado.focus();
+
+        carregarPainelColetas();
+
+      } catch {
+        mostrarStatus("erro", "Erro de conexão");
+      }
+    };
+
+    btnLimparLancamento.onclick = () => {
+      numeroColeta.value = "";
+      nomeParceiro.value = "";
+      numeroNotaFiscal.value = "";
+      nomeCliente.value = "";
+      numeroColeta.focus();
+    };
+
+    btnLimparColetado.onclick = () => {
+      codigoColetado.value = "";
+      codigoColetado.focus();
+    };
+
+    codigoColetado.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        btnMarcarColetado.click();
+      }
+    });
+
+    nomeCliente.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        btnLancarColeta.click();
+      }
+    });
+
+    // ===== INIT =====
+    carregarPainelColetas();
+  </script>
+
+</body>
+</html>

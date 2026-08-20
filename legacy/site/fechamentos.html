@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fechamentos - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .usuario-box {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.6);
+      color: #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .usuario-box strong {
+      color: #fff;
+    }
+
+    .filtros-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .parceiros-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .parceiro-btn {
+      padding: 14px 10px;
+      border-radius: 12px;
+      border: 2px solid #334155;
+      background: #1f2937;
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      transition: .15s ease;
+    }
+
+    .parceiro-btn.ativo {
+      background: #2563eb;
+      border-color: #60a5fa;
+    }
+
+    .acoes-fechamento {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    .resumo-totais {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .card-total {
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 14px;
+      background: rgba(15, 23, 42, 0.55);
+    }
+
+    .card-total .rotulo {
+      font-size: 12px;
+      opacity: .8;
+      margin-bottom: 6px;
+    }
+
+    .card-total .valor {
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .obs-box {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px dashed #475569;
+      border-radius: 12px;
+      color: #cbd5e1;
+      background: rgba(15, 23, 42, 0.35);
+    }
+
+    .resultado-tabela-wrap {
+      overflow: auto;
+      margin-top: 14px;
+      border-radius: 14px;
+      border: 1px solid #334155;
+    }
+
+    .resultado-tabela {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1500px;
+    }
+
+    .resultado-tabela th,
+    .resultado-tabela td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #334155;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .resultado-tabela thead th {
+      position: sticky;
+      top: 0;
+      background: #0f172a;
+      z-index: 1;
+    }
+
+    .resultado-vazio {
+      margin-top: 14px;
+      padding: 16px;
+      border: 1px dashed #334155;
+      border-radius: 12px;
+      color: #cbd5e1;
+      display: none;
+    }
+
+    .cabecalho-previa {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.55);
+      border: 1px solid #334155;
+      color: #e2e8f0;
+    }
+
+    @media (max-width: 980px) {
+      .filtros-grid,
+      .resumo-totais,
+      .parceiros-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+      <div class="logo-pequena-area">
+        <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+      </div>
+    </div>
+  </div>
+
+  <div class="app">
+    <div class="painel">
+      <h1>Fechamentos Parceiros</h1>
+      <div class="sub">Prévia e geração de fechamento por parceiro</div>
+
+      <div class="usuario-box">
+        <div>Usuário atual: <strong id="usuarioAtualInfo">não definido</strong></div>
+        <a href="/configuracoes.html" class="btn suave">Configurações</a>
+      </div>
+
+      <label class="label" style="margin-top:16px;">Selecione o parceiro</label>
+      <div class="parceiros-grid" id="parceirosGrid">
+        <button class="parceiro-btn ativo" type="button" data-parceiro="FITLOG">FITLOG</button>
+        <button class="parceiro-btn" type="button" data-parceiro="MAEX">MAEX</button>
+        <button class="parceiro-btn" type="button" data-parceiro="DISPLAN">DISPLAN</button>
+        <button class="parceiro-btn" type="button" data-parceiro="ARGIUS">ARGIUS</button>
+        <button class="parceiro-btn" type="button" data-parceiro="TRD">TRD</button>
+      </div>
+
+      <div class="filtros-grid">
+        <div>
+          <label class="label">Data inicial (referência de cabeçalho)</label>
+          <input type="date" id="dataInicial" class="input-padrao">
+        </div>
+
+        <div>
+          <label class="label">Data final</label>
+          <input type="date" id="dataFinal" class="input-padrao">
+        </div>
+
+        <div>
+          <label class="label">Situação</label>
+          <input type="text" class="input-padrao" value="Somente registros sem status OK" disabled>
+        </div>
+      </div>
+
+      <div class="acoes-fechamento">
+        <button type="button" id="btnBuscarFechamento" class="btn primario">Buscar prévia</button>
+        <button type="button" id="btnExportarFechamento" class="btn secundario">Exportar</button>
+        <button type="button" id="btnLimparFechamento" class="btn suave">Limpar</button>
+      </div>
+
+      <div id="statusFechamento" class="status"></div>
+
+      <div class="obs-box" id="obsParceiro">
+        O arquivo padrão será usado para FITLOG, MAEX e DISPLAN. Para ARGIUS e TRD a lógica fica separada.
+      </div>
+
+      <div class="cabecalho-previa">
+        Período de referência: <strong id="textoPeriodo">não definido</strong> |
+        Parceiro: <strong id="textoParceiro">FITLOG</strong>
+      </div>
+
+      <div class="resumo-totais">
+        <div class="card-total">
+          <div class="rotulo">Quantidade</div>
+          <div class="valor" id="totalQuantidade">0</div>
+        </div>
+
+        <div class="card-total">
+          <div class="rotulo">Frete Parceiro</div>
+          <div class="valor" id="totalFreteParceiro">R$ 0,00</div>
+        </div>
+
+        <div class="card-total">
+          <div class="rotulo">Total Comissão</div>
+          <div class="valor" id="totalComissao">R$ 0,00</div>
+        </div>
+
+        <div class="card-total">
+          <div class="rotulo">Média Comissão</div>
+          <div class="valor" id="mediaComissao">R$ 0,00</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="painel" id="painelTabela">
+      <div class="resultado-topo">
+        <h2>Prévia do fechamento</h2>
+        <div class="resultado-total" id="resultadoTotalFechamento">0 resultado(s)</div>
+      </div>
+
+      <div class="resultado-tabela-wrap">
+        <table class="resultado-tabela">
+          <thead id="theadFechamentos"></thead>
+          <tbody id="tbodyFechamentos"></tbody>
+        </table>
+      </div>
+
+      <div class="resultado-vazio" id="resultadoVazioFechamentos">
+        Nenhum registro encontrado para os filtros informados.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxn6zo8e5ROAmfHaiNK5SKVfeBI6bh7E9G10dksj5z7_p29rEDB5JYcBRryW-jm0iPqEg/exec";
+  </script>
+
+  <script src="/app.js"></script>
+
+  <script>
+    const STORAGE_USUARIO = "mvf_usuario_nome";
+    const STORAGE_PARCEIRO = "mvf_fechamentos_parceiro";
+    const STORAGE_DATA_INICIAL = "mvf_fechamentos_data_inicial";
+    const STORAGE_DATA_FINAL = "mvf_fechamentos_data_final";
+
+    const usuarioAtualInfo = document.getElementById("usuarioAtualInfo");
+    const dataInicial = document.getElementById("dataInicial");
+    const dataFinal = document.getElementById("dataFinal");
+    const btnBuscarFechamento = document.getElementById("btnBuscarFechamento");
+    const btnExportarFechamento = document.getElementById("btnExportarFechamento");
+    const btnLimparFechamento = document.getElementById("btnLimparFechamento");
+    const statusFechamento = document.getElementById("statusFechamento");
+    const obsParceiro = document.getElementById("obsParceiro");
+
+    const textoPeriodo = document.getElementById("textoPeriodo");
+    const textoParceiro = document.getElementById("textoParceiro");
+    const totalQuantidade = document.getElementById("totalQuantidade");
+    const totalFreteParceiro = document.getElementById("totalFreteParceiro");
+    const totalComissao = document.getElementById("totalComissao");
+    const mediaComissao = document.getElementById("mediaComissao");
+    const resultadoTotalFechamento = document.getElementById("resultadoTotalFechamento");
+    const theadFechamentos = document.getElementById("theadFechamentos");
+    const tbodyFechamentos = document.getElementById("tbodyFechamentos");
+    const resultadoVazioFechamentos = document.getElementById("resultadoVazioFechamentos");
+
+    let parceiroAtual = "FITLOG";
+    let ultimaResposta = [];
+
+    function obterUsuario() {
+      return (localStorage.getItem(STORAGE_USUARIO) || "").trim();
+    }
+
+    function aplicarPermissaoTela() {
+      const usuario = obterUsuario();
+      if (usuarioAtualInfo) {
+        usuarioAtualInfo.textContent = usuario || "não definido";
+      }
+    }
+
+    function mostrarStatus(tipo, msg) {
+      statusFechamento.className = "status " + (tipo || "");
+      statusFechamento.textContent = msg || "";
+    }
+
+    function formatarMoeda(valor) {
+      return Number(valor || 0).toLocaleString("pt-BR", {
+        style: "currency",
+        currency: "BRL"
+      });
+    }
+
+    function formatarPeriodoCabecalho() {
+      const ini = dataInicial.value || "--/--/----";
+      const fim = dataFinal.value || "--/--/----";
+      textoPeriodo.textContent = ini + " até " + fim;
+      textoParceiro.textContent = parceiroAtual;
+    }
+
+    function salvarPreferencias() {
+      localStorage.setItem(STORAGE_PARCEIRO, parceiroAtual);
+      localStorage.setItem(STORAGE_DATA_INICIAL, dataInicial.value || "");
+      localStorage.setItem(STORAGE_DATA_FINAL, dataFinal.value || "");
+    }
+
+    function restaurarPreferencias() {
+      const parceiroSalvo = localStorage.getItem(STORAGE_PARCEIRO) || "FITLOG";
+      const dataInicialSalva = localStorage.getItem(STORAGE_DATA_INICIAL) || "";
+      const dataFinalSalva = localStorage.getItem(STORAGE_DATA_FINAL) || "";
+
+      selecionarParceiro(parceiroSalvo);
+      dataInicial.value = dataInicialSalva;
+      dataFinal.value = dataFinalSalva;
+      formatarPeriodoCabecalho();
+    }
+
+    function selecionarParceiro(parceiro) {
+      parceiroAtual = parceiro;
+
+      document.querySelectorAll(".parceiro-btn").forEach(btn => {
+        btn.classList.toggle("ativo", btn.dataset.parceiro === parceiro);
+      });
+
+      obsParceiro.textContent = ["ARGIUS", "TRD"].includes(parceiroAtual)
+        ? "ARGIUS e TRD não seguem a mesma lógica da exportação padrão."
+        : "Esse parceiro usa a exportação padrão.";
+
+      formatarPeriodoCabecalho();
+      salvarPreferencias();
+    }
+
+    function limparTabela() {
+      theadFechamentos.innerHTML = "";
+      tbodyFechamentos.innerHTML = "";
+      resultadoTotalFechamento.textContent = "0 resultado(s)";
+      resultadoVazioFechamentos.style.display = "block";
+      totalQuantidade.textContent = "0";
+      totalFreteParceiro.textContent = "R$ 0,00";
+      totalComissao.textContent = "R$ 0,00";
+      mediaComissao.textContent = "R$ 0,00";
+      ultimaResposta = [];
+    }
+
+    function escapeHtml(texto) {
+      return String(texto ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function renderizarTabela(rows) {
+      limparTabela();
+
+      if (!Array.isArray(rows) || !rows.length) return;
+
+      const headers = [
+        "ENTRADA",
+        "CTE",
+        "NF",
+        "REMETENTE",
+        "DESTINATÁRIO",
+        "CIDADE",
+        "ENTREGA",
+        "T.D.E",
+        "T.D.A",
+        "DEDICADO",
+        "FRETE PARCEIRO",
+        "TOTAL COMISSÃO"
+      ];
+
+      theadFechamentos.innerHTML =
+        "<tr>" + headers.map(h => "<th>" + h + "</th>").join("") + "</tr>";
+
+      tbodyFechamentos.innerHTML = rows.map(item => `
+        <tr>
+          <td>${escapeHtml(item.entrada || "")}</td>
+          <td>${escapeHtml(item.cte || "")}</td>
+          <td>${escapeHtml(item.nf || "")}</td>
+          <td>${escapeHtml(item.remetente || "")}</td>
+          <td>${escapeHtml(item.destinatario || "")}</td>
+          <td>${escapeHtml(item.cidade || "")}</td>
+          <td>${escapeHtml(item.entrega || "")}</td>
+          <td>${escapeHtml(item.tde || "")}</td>
+          <td>${escapeHtml(item.tda || "")}</td>
+          <td>${escapeHtml(item.dedicado || "")}</td>
+          <td>${escapeHtml(item.freteParceiro || "")}</td>
+          <td>${escapeHtml(item.totalComissao || "")}</td>
+        </tr>
+      `).join("");
+
+      resultadoTotalFechamento.textContent = rows.length + " resultado(s)";
+      resultadoVazioFechamentos.style.display = "none";
+      ultimaResposta = rows;
+
+      const somaFrete = rows.reduce((acc, item) => acc + (Number(item.freteParceiroNumero || 0) || 0), 0);
+      const somaComissao = rows.reduce((acc, item) => acc + (Number(item.totalComissaoNumero || 0) || 0), 0);
+
+      totalQuantidade.textContent = String(rows.length);
+      totalFreteParceiro.textContent = formatarMoeda(somaFrete);
+      totalComissao.textContent = formatarMoeda(somaComissao);
+      mediaComissao.textContent = formatarMoeda(rows.length ? (somaComissao / rows.length) : 0);
+    }
+
+    function jsonp(url) {
+      return new Promise((resolve, reject) => {
+        const callbackName = "cb_" + Date.now() + "_" + Math.floor(Math.random() * 10000);
+        const script = document.createElement("script");
+        const urlObj = new URL(url);
+
+        urlObj.searchParams.set("callback", callbackName);
+
+        function limpar() {
+          try {
+            delete window[callbackName];
+          } catch (e) {}
+
+          if (script.parentNode) {
+            script.parentNode.removeChild(script);
+          }
+        }
+
+        window[callbackName] = function(data) {
+          limpar();
+          resolve(data);
+        };
+
+        script.onerror = function() {
+          limpar();
+          reject(new Error("Falha na consulta"));
+        };
+
+        script.src = urlObj.toString();
+        document.body.appendChild(script);
+      });
+    }
+
+    async function buscarFechamento() {
+      if (!dataFinal.value) {
+        mostrarStatus("erro", "Informe a data final.");
+        return;
+      }
+
+      mostrarStatus("aviso", "Buscando dados do fechamento...");
+      formatarPeriodoCabecalho();
+      salvarPreferencias();
+
+      try {
+        const url = new URL(WEBAPP_URL);
+        url.searchParams.set("acao", "buscarFechamentosParceiros");
+        url.searchParams.set("parceiro", parceiroAtual);
+        url.searchParams.set("dataInicial", dataInicial.value || "");
+        url.searchParams.set("dataFinal", dataFinal.value);
+
+        const data = await jsonp(url.toString());
+
+        if (!data || !data.ok) {
+          limparTabela();
+          mostrarStatus("erro", (data && data.mensagem) || "Não foi possível carregar o fechamento.");
+          return;
+        }
+
+        renderizarTabela(data.rows || []);
+
+        if (!Array.isArray(data.rows) || !data.rows.length) {
+          mostrarStatus("aviso", "Nenhum registro encontrado para os filtros informados.");
+          return;
+        }
+
+        mostrarStatus("ok", "Fechamento carregado com sucesso.");
+
+      } catch (erro) {
+        limparTabela();
+        mostrarStatus("erro", "Erro de conexão ao buscar o fechamento.");
+      }
+    }
+
+    function exportarFechamento() {
+      if (!dataFinal.value) {
+        mostrarStatus("erro", "Informe a data final antes de exportar.");
+        return;
+      }
+
+      if (!ultimaResposta.length) {
+        mostrarStatus("erro", "Não há dados na prévia para exportar.");
+        return;
+      }
+
+      const url = new URL(WEBAPP_URL);
+      url.searchParams.set("acao", "exportarFechamentoParceiros");
+      url.searchParams.set("parceiro", parceiroAtual);
+      url.searchParams.set("dataInicial", dataInicial.value || "");
+      url.searchParams.set("dataFinal", dataFinal.value || "");
+      url.searchParams.set("usuario", obterUsuario());
+
+      window.open(url.toString(), "_blank");
+    }
+
+    document.querySelectorAll(".parceiro-btn").forEach(btn => {
+      btn.addEventListener("click", () => selecionarParceiro(btn.dataset.parceiro));
+    });
+
+    btnBuscarFechamento.addEventListener("click", buscarFechamento);
+    btnExportarFechamento.addEventListener("click", exportarFechamento);
+
+    btnLimparFechamento.addEventListener("click", () => {
+      dataInicial.value = "";
+      dataFinal.value = "";
+      mostrarStatus("", "");
+      limparTabela();
+      formatarPeriodoCabecalho();
+      salvarPreferencias();
+    });
+
+    dataInicial.addEventListener("change", () => {
+      formatarPeriodoCabecalho();
+      salvarPreferencias();
+    });
+
+    dataFinal.addEventListener("change", () => {
+      formatarPeriodoCabecalho();
+      salvarPreferencias();
+    });
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      await iniciarMenu("fechamentos");
+      restaurarPreferencias();
+      aplicarPermissaoTela();
+      limparTabela();
+    });
+  </script>
+</body>
+</html>

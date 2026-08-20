@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dedicados - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+<!-- ===== Topbar ===== -->
+
+<div class="topbar">
+  <div class="topbar-left">
+    <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+
+<div class="logo-pequena-area">
+  <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+</div>
+
+
+  </div>
+</div>
+
+<div class="app">
+
+  <!-- ===== BUSCA / LANÇAMENTO ===== -->
+
+  <div class="painel">
+    <h1>Dedicados</h1>
+    <div class="sub">
+      Busca, lançamento e edição de valores dedicados
+    </div>
+
+
+<label class="label">Nota Fiscal</label>
+<input type="text" id="nf" class="input-padrao" placeholder="Digite a NF">
+
+<div class="acoes">
+  <button class="btn primario" onclick="buscar()">Buscar</button>
+  <button class="btn secundario" onclick="buscarSalvos()">Buscar Salvos</button>
+</div>
+
+<div id="resultado" class="historico-lista" style="margin-top:15px;"></div>
+
+<label class="label">Valor Dedicado</label>
+<input type="number" id="valor" class="input-padrao" placeholder="Digite o valor">
+
+<div class="acoes">
+  <button class="btn primario" onclick="salvar()">Salvar</button>
+  <button class="btn secundario" onclick="atualizar()">Atualizar</button>
+</div>
+
+<div id="status" class="status"></div>
+
+
+  </div>
+
+  <!-- ===== PAINEL ===== -->
+
+  <div class="painel">
+
+
+<div class="resultado-topo">
+  <h2>Painel de Dedicados</h2>
+  <div class="resultado-total" id="total">0 resultado(s)</div>
+</div>
+
+<label class="label">Filtrar por Parceiro</label>
+<select id="filtroParceiro" class="input-padrao">
+  <option value="">Todos</option>
+</select>
+
+<label class="label">Filtrar por Data (opcional)</label>
+<input type="date" id="filtroData" class="input-padrao">
+
+<div class="resultado-tabela-wrap">
+  <table class="resultado-tabela">
+    <thead>
+      <tr>
+        <th>Data</th>
+        <th>Motorista</th>
+        <th>NF</th>
+        <th>CTE</th>  
+        <th>Parceiro</th>
+        <th>Destino</th>
+        <th>Valor</th>
+        
+      </tr>
+    </thead>
+    <tbody id="tbodyDedicados"></tbody>
+  </table>
+</div>
+
+<div class="resultado-vazio" id="vazio">
+  Nenhum registro encontrado.
+</div>
+
+
+  </div>
+
+</div>
+
+<script src="/app.js"></script>
+
+<script>
+const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwTRPzECS-YVJwFjhNNOJzBRYMo14Uum9mhxhw73mEGHNV7DRAiKQGcb8P_iD_QA3Kj/exec";
+
+iniciarMenu("dedicados");
+
+let selecionado = null;
+let linhaSelecionada = null;
+let dadosGlobais = [];
+
+// ===== STATUS =====
+function statusMsg(tipo, msg){
+  const el = document.getElementById("status");
+  el.className = "status " + tipo;
+  el.textContent = msg;
+
+  setTimeout(() => {
+    el.textContent = "";
+    el.className = "status";
+  }, 3000);
+}
+
+// ===== RESET =====
+function resetBusca(){
+  document.getElementById("nf").value = "";
+  document.getElementById("valor").value = "";
+  document.getElementById("resultado").innerHTML = "";
+
+  selecionado = null;
+  linhaSelecionada = null;
+}
+
+// ===== BUSCAR =====
+async function buscar(){
+  const nf = document.getElementById("nf").value;
+
+  const res = await fetch(`${WEBAPP_URL}?acao=buscarNFdedicado&nf=${nf}`);
+  const lista = await res.json();
+
+  renderBusca(lista);
+}
+
+function renderBusca(lista){
+  const div = document.getElementById("resultado");
+  div.innerHTML = "";
+
+  if(!lista.length){
+    div.innerHTML = "Nenhum resultado";
+    return;
+  }
+
+  lista.forEach(item=>{
+    const el = document.createElement("div");
+    el.className = "card-resultado";
+
+    el.innerHTML = `
+      <div><b>Data:</b> ${item.data || "-"}</div>
+      <div><b>Motorista:</b> ${item.motorista || "-"}</div>
+      <div><b>NF:</b> ${item.nf || "-"}</div>
+      <div><b>Remetente:</b> ${item.remetente || "-"}</div>
+      <div><b>Destinatário:</b> ${item.destinatario || "-"}</div>
+      <div><b>Parceiro:</b> ${item.parceiro || "-"}</div>
+      <div><b>CTE:</b> ${item.cte || "-"}</div>
+    `;
+
+    el.onclick = ()=>{
+      document.querySelectorAll("#resultado .card-resultado")
+        .forEach(c=>c.classList.remove("ativo"));
+
+      el.classList.add("ativo");
+
+      selecionado = item;
+      linhaSelecionada = null;
+    };
+
+    div.appendChild(el);
+  });
+}
+
+// ===== SALVAR =====
+async function salvar(){
+  if(!selecionado){
+    statusMsg("erro","Selecione um registro");
+    return;
+  }
+
+  const valor = document.getElementById("valor").value;
+
+  const res = await fetch(WEBAPP_URL,{
+    method:"POST",
+    body: JSON.stringify({
+      acao:"salvarDedicado",
+      dados: selecionado,
+      valor
+    })
+  });
+
+  const resp = await res.json();
+
+  statusMsg("ok", resp.msg);
+
+  resetBusca(); // ✅ limpa tudo
+  carregarPainel();
+}
+
+// ===== SALVOS =====
+async function buscarSalvos(){
+  const nf = document.getElementById("nf").value;
+
+  const res = await fetch(`${WEBAPP_URL}?acao=buscarSalvos&nf=${nf}`);
+  const lista = await res.json();
+
+  renderSalvos(lista);
+}
+
+function renderSalvos(lista){
+  const div = document.getElementById("resultado");
+  div.innerHTML = "";
+
+  if(!lista.length){
+    div.innerHTML = "Nenhum registro salvo";
+    return;
+  }
+
+  lista.forEach(item=>{
+    const el = document.createElement("div");
+    el.className = "card-resultado";
+
+    el.innerHTML = `
+      <div><b>NF:</b> ${item.nf || "-"}</div>
+      <div><b>Remetente:</b> ${item.remetente || "-"}</div>
+      <div><b>Destinatário:</b> ${item.destinatario || "-"}</div>
+      <div><b>Parceiro:</b> ${item.parceiro || "-"}</div>
+      <div><b>CTE:</b> ${item.cte || "-"}</div>
+      <div><b>Valor:</b> ${item.valor || "-"}</div>
+    `;
+
+    el.onclick = ()=>{
+      document.querySelectorAll("#resultado .card-resultado")
+        .forEach(c=>c.classList.remove("ativo"));
+
+      el.classList.add("ativo");
+
+      linhaSelecionada = item.linha;
+      selecionado = null;
+
+      document.getElementById("valor").value = item.valor || "";
+    };
+
+    div.appendChild(el);
+  });
+}
+
+// ===== ATUALIZAR =====
+async function atualizar(){
+  if(!linhaSelecionada){
+    statusMsg("erro","Selecione salvo");
+    return;
+  }
+
+  const valor = document.getElementById("valor").value;
+
+  const res = await fetch(WEBAPP_URL,{
+    method:"POST",
+    body: JSON.stringify({
+      acao:"atualizarDedicado",
+      linha: linhaSelecionada,
+      valor
+    })
+  });
+
+  const resp = await res.json();
+
+  statusMsg("ok", resp.msg);
+
+  resetBusca(); // ✅ limpa tudo
+  carregarPainel();
+}
+
+// ===== PAINEL =====
+function renderPainel(lista){
+  const tbody = document.getElementById("tbodyDedicados");
+  const vazio = document.getElementById("vazio");
+
+  tbody.innerHTML = "";
+
+  if(!lista.length){
+    vazio.style.display = "block";
+    document.getElementById("total").innerText = "0 resultado(s)";
+    return;
+  }
+
+  vazio.style.display = "none";
+
+  lista.forEach(r=>{
+    const tr = document.createElement("tr");
+
+    tr.innerHTML = `
+      <td>${r[0] || "-"}</td>
+      <td>${r[1] || "-"}</td>
+      <td>${r[2] || "-"}</td>
+      <td>${r[3] || "-"}</td>
+      <td>${r[4] || "-"}</td>
+      <td>${r[5] || "-"}</td>
+      <td>${r[6] || "-"}</td>
+    `;
+
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById("total").innerText =
+    lista.length + " resultado(s)";
+}
+
+// ===== FILTRO =====
+function aplicarFiltros(){
+  let lista = [...dadosGlobais];
+
+  const parceiro = document.getElementById("filtroParceiro").value;
+  const data = document.getElementById("filtroData").value;
+
+  if(parceiro){
+    lista = lista.filter(r=>r[4] === parceiro);
+  }
+
+  if(data){
+    const [ano, mes, dia] = data.split("-");
+    const dataFormatada = `${dia}/${mes}/${ano}`;
+
+    lista = lista.filter(r => r[0]?.startsWith(dataFormatada));
+  }
+
+  renderPainel(lista);
+}
+
+// ===== LOAD =====
+async function carregarPainel(){
+  const res = await fetch(`${WEBAPP_URL}?acao=listarDedicados&t=${Date.now()}`);
+  const json = await res.json();
+
+  if(!json.ok) return;
+
+  dadosGlobais = json.rows;
+
+  const parceiros = [...new Set(dadosGlobais.map(r=>r[4]))];
+
+  document.getElementById("filtroParceiro").innerHTML =
+    '<option value="">Todos</option>' +
+    parceiros.map(p=>`<option>${p}</option>`).join("");
+
+  aplicarFiltros();
+}
+
+setInterval(carregarPainel,60000);
+
+document.getElementById("filtroParceiro").onchange = aplicarFiltros;
+document.getElementById("filtroData").onchange = aplicarFiltros;
+
+carregarPainel();
+</script>
+</body>
+</html>

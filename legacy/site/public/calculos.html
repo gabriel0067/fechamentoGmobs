@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cálculos - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+
+  <style>
+    .retorno-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .retorno-item {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 14px;
+      color: #e2e8f0;
+    }
+
+    .retorno-item .titulo {
+      font-size: 12px;
+      opacity: 0.8;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    .retorno-item .valor {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      word-break: break-word;
+    }
+
+    .retorno-item.full {
+      grid-column: 1 / -1;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="app">
+
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+        <div class="logo-pequena-area">
+          <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+        </div>
+      </div>
+    </div>
+
+    <div class="painel">
+      <h1>Cálculos</h1>
+
+      <div class="sub">
+        Informe o romaneio, valor manual e quantidade de NFs
+      </div>
+
+      <form id="formCalculos">
+        <label class="label">N° Romaneio</label>
+        <input
+          class="input-padrao"
+          id="romaneio"
+          autocomplete="off"
+          placeholder="Ex.: 33720"
+        >
+
+        <label class="label">Valor manual</label>
+        <input
+          class="input-padrao"
+          id="valorManual"
+          autocomplete="off"
+          placeholder="Ex.: 150+20*3"
+        >
+
+        <label class="label">Qntd NFs</label>
+        <input
+          class="input-padrao"
+          id="qntdNfs"
+          autocomplete="off"
+          placeholder="Ex.: 10+2-1"
+        >
+
+        <div class="acoes">
+          <button type="submit" class="btn primario">
+            Enviar
+          </button>
+
+          <button type="button" class="btn secundario" id="btnLimpar">
+            Limpar
+          </button>
+        </div>
+
+        <div id="statusCalculo" class="status"></div>
+      </form>
+    </div>
+
+    <div class="painel">
+      <h2>Retorno do cálculo</h2>
+
+      <div class="retorno-grid">
+  <div class="retorno-item">
+    <div class="titulo">Nome do Motorista</div>
+    <div class="valor" id="retornoMotorista">-</div>
+  </div>
+
+  <div class="retorno-item">
+    <div class="titulo">Data do Romaneio</div>
+    <div class="valor" id="retornoDataRomaneio">-</div>
+  </div>
+
+  <div class="retorno-item">
+    <div class="titulo">Romaneio encontrado</div>
+    <div class="valor" id="retornoRomaneioEncontrado">-</div>
+  </div>
+
+  <div class="retorno-item">
+    <div class="titulo">Quantidade total de entregas</div>
+    <div class="valor" id="retornoNfsFinal">-</div>
+  </div>
+
+  <div class="retorno-item">
+    <div class="titulo">Produção</div>
+    <div class="valor" id="retornoValorFinal">-</div>
+  </div>
+
+  <div class="retorno-item full">
+    <div class="titulo">Rotas</div>
+    <div class="valor" id="retornoRotas">-</div>
+  </div>
+</div>
+  </div>
+
+  <script src="/app.js"></script>
+
+  <script>
+    iniciarMenu("calculos");
+
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxN_rSiNwXi09fWqno65zSW_w8TSDjyx9tWdJd4SYz1DeynKW3r-T_7smjmt2Zhr5_D/exec";
+
+    const STORAGE_USUARIO = "mvf_usuario_nome";
+    const STORAGE_MAQUINA = "mvf_maquina_id";
+
+    const form = document.getElementById("formCalculos");
+    const inputRomaneio = document.getElementById("romaneio");
+    const inputValorManual = document.getElementById("valorManual");
+    const inputQntdNfs = document.getElementById("qntdNfs");
+    const btnLimpar = document.getElementById("btnLimpar");
+    const statusBox = document.getElementById("statusCalculo");
+
+    let baseAtual = null;
+
+    function mostrarStatus(tipo, msg) {
+      statusBox.className = "status " + tipo;
+      statusBox.textContent = msg;
+    }
+
+    function gerarIdMaquina() {
+      return "maq_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+
+    function obterMaquinaId() {
+      let maquinaId = localStorage.getItem(STORAGE_MAQUINA);
+
+      if (!maquinaId) {
+        maquinaId = gerarIdMaquina();
+        localStorage.setItem(STORAGE_MAQUINA, maquinaId);
+      }
+
+      return maquinaId;
+    }
+
+    function obterUsuario() {
+      return (localStorage.getItem(STORAGE_USUARIO) || "").trim();
+    }
+
+   function limparPainel() {
+  document.getElementById("retornoMotorista").textContent = "-";
+  document.getElementById("retornoDataRomaneio").textContent = "-";
+  document.getElementById("retornoRomaneioEncontrado").textContent = "-";
+  document.getElementById("retornoNfsFinal").textContent = "-";
+  document.getElementById("retornoValorFinal").textContent = "-";
+  document.getElementById("retornoRotas").textContent = "-";
+}
+
+    function limparCampos() {
+      inputRomaneio.value = "";
+      inputValorManual.value = "";
+      inputQntdNfs.value = "";
+      inputRomaneio.focus();
+      baseAtual = null;
+      limparPainel();
+    }
+
+    function formatarMoeda(valor) {
+      return Number(valor || 0).toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    function formatarNumero(valor) {
+      return Number(valor || 0).toLocaleString("pt-BR", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2
+      });
+    }
+
+    function avaliarExpressao(expressao, permitirMultiplicacao) {
+      const original = String(expressao || "").trim();
+      if (!original) return 0;
+
+      let limpa = original.replace(/\s+/g, "").replace(/,/g, ".");
+
+      const regex = permitirMultiplicacao
+        ? /^[0-9+\-*/().]+$/
+        : /^[0-9+\-().]+$/;
+
+      if (!regex.test(limpa)) return 0;
+
+      const resultado = Function('"use strict"; return (' + limpa + ')')();
+
+      if (typeof resultado !== "number" || !isFinite(resultado)) return 0;
+
+      return resultado;
+    }
+
+    function limparPainel() {
+  document.getElementById("retornoMotorista").textContent = "-";
+  document.getElementById("retornoDataRomaneio").textContent = "-";
+  document.getElementById("retornoRomaneioEncontrado").textContent = "-";
+  document.getElementById("retornoNfsFinal").textContent = "-";
+  document.getElementById("retornoValorFinal").textContent = "-";
+  document.getElementById("retornoRotas").textContent = "-";
+}
+
+    async function buscarBaseRomaneio() {
+      const romaneio = inputRomaneio.value.trim();
+
+      if (!romaneio) {
+        baseAtual = null;
+        limparPainel();
+        return false;
+      }
+
+      try {
+        mostrarStatus("aviso", "Buscando romaneio...");
+
+        const resposta = await fetch(
+          WEBAPP_URL + "?acao=buscarBaseCalculo&romaneio=" + encodeURIComponent(romaneio) + "&t=" + Date.now()
+        );
+
+        const data = await resposta.json();
+
+        if (!data.ok) {
+          baseAtual = null;
+          limparPainel();
+          mostrarStatus("erro", data.mensagem || "Romaneio não encontrado");
+          return false;
+        }
+
+        baseAtual = data;
+        atualizarPainelComBase();
+        mostrarStatus("ok", "Romaneio encontrado");
+        return true;
+
+      } catch (e) {
+        baseAtual = null;
+        limparPainel();
+        mostrarStatus("erro", "Erro ao buscar o romaneio");
+        return false;
+      }
+    }
+
+    function preencherPainelSalvo(dados) {
+  document.getElementById("retornoMotorista").textContent = dados.motorista || "-";
+  document.getElementById("retornoDataRomaneio").textContent = dados.dataRomaneio || "-";
+  document.getElementById("retornoRomaneioEncontrado").textContent = dados.romaneio || "-";
+  document.getElementById("retornoNfsFinal").textContent = dados.nfsFinalFormatado || "-";
+  document.getElementById("retornoValorFinal").textContent = dados.valorFinalFormatado || "-";
+  document.getElementById("retornoRotas").textContent = dados.rotas || "-";
+}
+    async function carregarUltimoCalculo() {
+      try {
+        const resposta = await fetch(
+          WEBAPP_URL + "?acao=ultimoCalculo&t=" + Date.now()
+        );
+
+        const dados = await resposta.json();
+
+        if (dados.ok && dados.romaneio) {
+          preencherPainelSalvo(dados);
+        }
+      } catch (e) {
+      }
+    }
+
+    inputRomaneio.addEventListener("blur", buscarBaseRomaneio);
+    inputValorManual.addEventListener("input", atualizarPainelComBase);
+    inputQntdNfs.addEventListener("input", atualizarPainelComBase);
+
+    inputRomaneio.addEventListener("keydown", async (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      await buscarBaseRomaneio();
+      inputValorManual.focus();
+    });
+
+    inputValorManual.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      inputQntdNfs.focus();
+    });
+
+    inputQntdNfs.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      form.requestSubmit();
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const romaneio = inputRomaneio.value.trim();
+      const valorManual = inputValorManual.value.trim();
+      const qntdNfs = inputQntdNfs.value.trim();
+      const usuario = obterUsuario();
+      const maquinaId = obterMaquinaId();
+
+      if (!romaneio) {
+        mostrarStatus("erro", "Informe o N° Romaneio");
+        return;
+      }
+
+      if (!valorManual) {
+        mostrarStatus("erro", "Informe o Valor manual");
+        return;
+      }
+
+      if (!qntdNfs) {
+        mostrarStatus("erro", "Informe a Qntd NFs");
+        return;
+      }
+
+      if (!usuario) {
+        mostrarStatus("erro", "Defina o usuário na página Configurações");
+        return;
+      }
+
+      mostrarStatus("aviso", "Enviando cálculo...");
+
+      try {
+        const resposta = await fetch(WEBAPP_URL, {
+          method: "POST",
+          body: new URLSearchParams({
+            acao: "salvarCalculo",
+            romaneio: romaneio,
+            valorManual: valorManual,
+            qntdNfs: qntdNfs,
+            usuario: usuario,
+            maquinaId: maquinaId
+          })
+        });
+
+        const data = await resposta.json();
+
+        if (data.ok) {
+          mostrarStatus("ok", "Cálculo salvo com sucesso");
+          preencherPainelSalvo(data);
+          inputRomaneio.value = "";
+          inputValorManual.value = "";
+          inputQntdNfs.value = "";
+          inputRomaneio.focus();
+          baseAtual = null;
+        } else {
+          mostrarStatus("erro", data.mensagem || "Erro ao salvar");
+        }
+      } catch (e) {
+        mostrarStatus("erro", "Erro de conexão");
+      }
+    });
+
+    btnLimpar.addEventListener("click", () => {
+      limparCampos();
+      mostrarStatus("", "");
+    });
+
+    carregarUltimoCalculo();
+  </script>
+
+</body>
+</html>

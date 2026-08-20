@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Banco de Dados - M V F</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+  <div class="app">
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="menu-btn" id="btnAbrirMenu">☰</button>
+        <div class="logo-pequena-area">
+          <img src="img/logo.png" class="logo-pequena" alt="Logo">
+        </div>
+      </div>
+    </div>
+
+    <div class="painel">
+      <h1>Importação de Dados</h1>
+
+      <div class="painel-importacoes">
+        <h2>Últimas Importações</h2>
+
+        <div class="card-importacao">
+          <div class="card-titulo">ROMANEIOS</div>
+          <div class="card-data" id="dataRomaneios"></div>
+        </div>
+
+        <div class="card-importacao">
+          <div class="card-titulo">BANCO_DE_DADOS</div>
+          <div class="card-data" id="dataBanco"></div>
+        </div>
+      </div>
+
+      <div class="sub">Importe arquivos XLS para a planilha</div>
+
+      <label class="label">Escolha a aba</label>
+      <select id="abaDestino">
+        <option value="ROMANEIOS">ROMANEIOS</option>
+        <option value="BANCO_DE_DADOS">BANCO_DE_DADOS</option>
+        <option value="DADOS_ROMANEIOS">DADOS_ROMANEIOS</option>
+      </select>
+
+      <label class="label">Arquivo XLS</label>
+      <input type="file" id="arquivoXls" accept=".xls,.xlsx">
+
+      <div class="acoes" style="margin-top:15px;">
+        <button class="btn primario" id="btnImportar">Importar arquivo</button>
+      </div>
+
+      <div id="statusImportacao" class="status"></div>
+
+      <div class="painel" style="margin-top:18px;">
+        <h2>Prévia da primeira linha</h2>
+        <div id="previewImportacao" style="white-space: pre-wrap; word-break: break-word; color: #e2e8f0;">
+          Nenhuma prévia ainda.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+
+  <script>
+    iniciarMenu("banco");
+
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxN_rSiNwXi09fWqno65zSW_w8TSDjyx9tWdJd4SYz1DeynKW3r-T_7smjmt2Zhr5_D/exec";
+
+    const CONFIG_IMPORTACAO = {
+  ROMANEIOS: ["B", "E", "I", "J", "K", "N", "P", "R", "S"],
+  BANCO_DE_DADOS: ["C", "F", "Q", "R", "U", "V", "W", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AQ", "AY", "BD", "BN"],
+  DADOS_ROMANEIOS: ["C", "G", "I", "AI", "AJ", "BN"]
+};
+
+    function mostrarStatus(tipo, msg) {
+      const status = document.getElementById("statusImportacao");
+      status.className = "status " + tipo;
+      status.textContent = msg;
+    }
+
+    function lerCelula(sheet, coluna, linhaNumero) {
+      const endereco = coluna + linhaNumero;
+      const celula = sheet[endereco];
+      return celula ? celula.v : "";
+    }
+
+    function processarLinha(sheet, linhaNumero, aba) {
+      const colunas = CONFIG_IMPORTACAO[aba];
+      return colunas.map(coluna => lerCelula(sheet, coluna, linhaNumero));
+    }
+
+    function formatarPreview(aba, linhaNumero, valores) {
+      const cols = CONFIG_IMPORTACAO[aba];
+      return cols.map((col, i) => `${col}${linhaNumero}: ${valores[i] ?? ""}`).join("\n");
+    }
+
+    async function buscarUltimaLinha(aba, id) {
+      try {
+        const resposta = await fetch(
+          WEBAPP_URL + "?acao=ultimaLinha&aba=" + encodeURIComponent(aba) + "&t=" + Date.now()
+        );
+
+        const dados = await resposta.json();
+
+        if (dados.ok) {
+          document.getElementById(id).textContent = dados.linha || "";
+        } else {
+          document.getElementById(id).textContent = "";
+        }
+      } catch (e) {
+        document.getElementById(id).textContent = "";
+      }
+    }
+
+    function carregarPainelImportacoes() {
+      buscarUltimaLinha("ROMANEIOS", "dataRomaneios");
+      buscarUltimaLinha("BANCO_DE_DADOS", "dataBanco");
+    }
+
+    document.getElementById("btnImportar").onclick = () => {
+      const file = document.getElementById("arquivoXls").files[0];
+      const abaDestino = document.getElementById("abaDestino").value;
+
+      if (!file) {
+        mostrarStatus("erro", "Selecione um arquivo XLS");
+        return;
+      }
+
+      const reader = new FileReader();
+
+      reader.onload = async function (e) {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: "array" });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+          if (!sheet["!ref"]) {
+            mostrarStatus("erro", "Planilha sem dados");
+            return;
+          }
+
+          const range = XLSX.utils.decode_range(sheet["!ref"]);
+          const ultimaLinha = range.e.r + 1;
+
+          let dadosFiltrados = [];
+
+          for (let linhaNumero = 1; linhaNumero <= ultimaLinha; linhaNumero++) {
+            const linha = processarLinha(sheet, linhaNumero, abaDestino);
+            dadosFiltrados.push(linha);
+          }
+
+          if (dadosFiltrados.length > 0) {
+            document.getElementById("previewImportacao").textContent =
+              formatarPreview(abaDestino, 1, dadosFiltrados[0]);
+          } else {
+            document.getElementById("previewImportacao").textContent =
+              "Nenhuma linha encontrada.";
+          }
+
+          mostrarStatus("aviso", "Importando dados...");
+
+          const resposta = await fetch(WEBAPP_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "text/plain;charset=utf-8"
+            },
+            body: JSON.stringify({
+              acao: "importarXls",
+              aba: abaDestino,
+              dados: dadosFiltrados
+            })
+          });
+
+          const retorno = await resposta.json();
+
+          if (retorno.ok) {
+            mostrarStatus("ok", "Importação concluída (" + retorno.linhasImportadas + " linhas)");
+            carregarPainelImportacoes();
+          } else {
+            mostrarStatus("erro", retorno.mensagem || "Erro ao importar");
+          }
+
+        } catch (err) {
+          mostrarStatus("erro", "Erro ao ler/importar o arquivo");
+          console.error(err);
+        }
+      };
+
+      reader.readAsArrayBuffer(file);
+    };
+
+    carregarPainelImportacoes();
+    setInterval(carregarPainelImportacoes, 2000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SAC e Docs Retidos - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+
+  <style>
+    .fontes-busca {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+      flex-wrap: wrap;
+    }
+
+    .fonte-btn {
+      flex: 1;
+      min-width: 220px;
+      padding: 14px;
+      border-radius: 12px;
+      border: 2px solid #334155;
+      background: #1f2937;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .fonte-btn.ativo {
+      background: #2563eb;
+      border-color: #60a5fa;
+    }
+
+    .resultado-topo {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    .resultado-total {
+      color: #e2e8f0;
+      font-weight: 600;
+    }
+
+    .resultado-tabela-wrap {
+      overflow-x: auto;
+      border: 1px solid #334155;
+      border-radius: 12px;
+    }
+
+    .resultado-tabela {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 900px;
+    }
+
+    .resultado-tabela th,
+    .resultado-tabela td {
+      border-bottom: 1px solid #334155;
+      padding: 10px 12px;
+      text-align: left;
+      color: #e2e8f0;
+      white-space: nowrap;
+    }
+
+    .resultado-tabela th {
+      background: rgba(37, 99, 235, 0.15);
+      color: #fff;
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+
+    .resultado-vazio {
+      color: #94a3b8;
+      padding: 12px 2px 0;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="app">
+
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+        <div class="logo-pequena-area">
+          <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+        </div>
+      </div>
+    </div>
+
+    <div class="painel">
+      <h1>SAC e Docs Retidos</h1>
+
+      <div class="sub">
+        Selecione a origem da pesquisa e pesquise em todas as colunas configuradas
+      </div>
+
+      <div class="fontes-busca">
+        <button type="button" class="fonte-btn ativo" data-tipo="docsCapa" id="btnDocsCapa">
+          Docs em Capa
+        </button>
+
+        <button type="button" class="fonte-btn" data-tipo="devolucaoColetas" id="btnDevolucaoColetas">
+          Devolução / Coletas Embarcadas
+        </button>
+      </div>
+
+      <label class="label" style="margin-top: 16px;">Pesquisar</label>
+      <input
+        type="text"
+        id="termoBusca"
+        class="input-padrao"
+        placeholder="Ex.: Mundo"
+        autocomplete="off"
+      >
+
+      <div class="acoes" style="margin-top: 15px;">
+        <button class="btn primario" id="btnPesquisar" type="button">
+          Pesquisar
+        </button>
+
+        <button class="btn secundario" id="btnLimparBusca" type="button">
+          Limpar
+        </button>
+      </div>
+
+      <div id="statusBusca" class="status"></div>
+    </div>
+
+    <div class="painel">
+      <div class="resultado-topo">
+        <h2>Resultados</h2>
+        <div class="resultado-total" id="resultadoTotal">0 resultados</div>
+      </div>
+
+      <div class="resultado-tabela-wrap">
+        <table class="resultado-tabela" id="tabelaResultados">
+          <thead id="theadResultados"></thead>
+          <tbody id="tbodyResultados"></tbody>
+        </table>
+      </div>
+
+      <div class="resultado-vazio" id="resultadoVazio">
+        Nenhuma pesquisa realizada ainda.
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/app.js"></script>
+
+  <script>
+    iniciarMenu("sacdocs");
+
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxN_rSiNwXi09fWqno65zSW_w8TSDjyx9tWdJd4SYz1DeynKW3r-T_7smjmt2Zhr5_D/exec";
+
+    const btnDocsCapa = document.getElementById("btnDocsCapa");
+    const btnDevolucaoColetas = document.getElementById("btnDevolucaoColetas");
+    const termoBusca = document.getElementById("termoBusca");
+    const btnPesquisar = document.getElementById("btnPesquisar");
+    const btnLimparBusca = document.getElementById("btnLimparBusca");
+    const statusBox = document.getElementById("statusBusca");
+    const resultadoTotal = document.getElementById("resultadoTotal");
+    const theadResultados = document.getElementById("theadResultados");
+    const tbodyResultados = document.getElementById("tbodyResultados");
+    const resultadoVazio = document.getElementById("resultadoVazio");
+
+    let tipoSelecionado = "docsCapa";
+
+    function mostrarStatus(tipo, msg) {
+      statusBox.className = "status " + tipo;
+      statusBox.textContent = msg;
+    }
+
+    function selecionarTipo(tipo) {
+      tipoSelecionado = tipo;
+
+      document.querySelectorAll(".fonte-btn").forEach(btn => {
+        btn.classList.toggle("ativo", btn.dataset.tipo === tipo);
+      });
+    }
+
+    function limparTabela() {
+      theadResultados.innerHTML = "";
+      tbodyResultados.innerHTML = "";
+      resultadoTotal.textContent = "0 resultados";
+      resultadoVazio.textContent = "Nenhuma pesquisa realizada ainda.";
+      resultadoVazio.style.display = "block";
+    }
+
+    function escapeHtml(texto) {
+      return String(texto ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function renderizarResultados(headers, rows) {
+      theadResultados.innerHTML = "";
+      tbodyResultados.innerHTML = "";
+
+      resultadoTotal.textContent = `${rows.length} resultado(s)`;
+
+      if (!rows.length) {
+        resultadoVazio.textContent = "Nenhum resultado encontrado.";
+        resultadoVazio.style.display = "block";
+        return;
+      }
+
+      resultadoVazio.style.display = "none";
+
+      const trHead = document.createElement("tr");
+      headers.forEach(header => {
+        const th = document.createElement("th");
+        th.textContent = header;
+        trHead.appendChild(th);
+      });
+      theadResultados.appendChild(trHead);
+
+      rows.forEach(linha => {
+        const tr = document.createElement("tr");
+
+        linha.forEach(valor => {
+          const td = document.createElement("td");
+          td.innerHTML = escapeHtml(valor);
+          tr.appendChild(td);
+        });
+
+        tbodyResultados.appendChild(tr);
+      });
+    }
+
+    async function pesquisar() {
+      const termo = termoBusca.value.trim();
+
+      if (!termo) {
+        mostrarStatus("erro", "Digite um termo para pesquisar");
+        return;
+      }
+
+      mostrarStatus("aviso", "Pesquisando...");
+
+      try {
+        const resposta = await fetch(
+          WEBAPP_URL +
+          "?acao=buscarSacDocs" +
+          "&tipo=" + encodeURIComponent(tipoSelecionado) +
+          "&termo=" + encodeURIComponent(termo) +
+          "&t=" + Date.now()
+        );
+
+        const data = await resposta.json();
+
+        if (!data.ok) {
+          mostrarStatus("erro", data.mensagem || "Erro ao pesquisar");
+          limparTabela();
+          return;
+        }
+
+        renderizarResultados(data.headers || [], data.rows || []);
+        mostrarStatus("ok", "Pesquisa concluída");
+      } catch (e) {
+        mostrarStatus("erro", "Erro de conexão");
+        limparTabela();
+      }
+    }
+
+    btnDocsCapa.addEventListener("click", () => selecionarTipo("docsCapa"));
+    btnDevolucaoColetas.addEventListener("click", () => selecionarTipo("devolucaoColetas"));
+
+    btnPesquisar.addEventListener("click", pesquisar);
+
+    btnLimparBusca.addEventListener("click", () => {
+      termoBusca.value = "";
+      mostrarStatus("", "");
+      limparTabela();
+      termoBusca.focus();
+    });
+
+    termoBusca.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        pesquisar();
+      }
+    });
+
+    limparTabela();
+  </script>
+
+</body>
+</html>

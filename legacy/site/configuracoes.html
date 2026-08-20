@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Configurações - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <div class="app">
+
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+        <div class="logo-pequena-area">
+          <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+        </div>
+      </div>
+    </div>
+
+    <div class="painel">
+      <h1>Configurações</h1>
+
+      <div class="sub">
+        Defina o usuário desta máquina/navegador
+      </div>
+
+      <label class="label">Usuário</label>
+      <input
+        class="input-padrao"
+        id="usuarioSistema"
+        placeholder="Ex.: Igor, Maria, João"
+        autocomplete="off"
+      >
+
+      <div class="acoes" style="margin-top: 15px;">
+        <button class="btn primario" id="btnSalvarUsuario" type="button">
+          Salvar usuário
+        </button>
+
+        <button class="btn secundario" id="btnLimparUsuario" type="button">
+          Limpar usuário
+        </button>
+      </div>
+
+      <div id="statusUsuario" class="status"></div>
+    </div>
+
+    <div class="painel">
+      <h2>Acessos rápidos</h2>
+
+      <div id="listaAcessos" style="display:grid; gap:14px; margin-top:14px;"></div>
+    </div>
+
+    <div class="painel">
+      <h2>Dados salvos</h2>
+
+      <div style="color:#e2e8f0; line-height:1.9;">
+        <div>Usuário atual: <strong id="usuarioAtualTexto">-</strong></div>
+        <div>ID da máquina: <strong id="maquinaAtualTexto">-</strong></div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/app.js"></script>
+
+  <script>
+    iniciarMenu("configuracoes");
+
+    const STORAGE_USUARIO = "mvf_usuario_nome";
+    const STORAGE_MAQUINA = "mvf_maquina_id";
+
+    const PLANILHA_ROMANEIOS = "1btR_pgmLkUvfz0EYQSqj-qgtuzfQDENvxPPC63eSxME";
+    const PLANILHA_CAPAS = "1nQXeZtMtg8mZtgtn9CTAYUsdCQUb5Ux18pW_T8DwWW8";
+    const PLANILHA_DEVOLUCAO = "1_KHuksMSxbzFjX21L3EMtB_thqOOSEjhEcauwt17hOw";
+    const PLANILHA_COLETA = "1btR_pgmLkUvfz0EYQSqj-qgtuzfQDENvxPPC63eSxME";
+
+    // COLE AQUI AS URLS REAIS DO APPS SCRIPT
+    const APPS_SCRIPT_ROMANEIOS = "";
+    const APPS_SCRIPT_CAPAS = "";
+    const APPS_SCRIPT_DEVOLUCAO = "";
+    const APPS_SCRIPT_COLETA = "https://script.google.com/u/0/home/projects/1UuKnw7ui7BAwKdmyeduWHOiMz4uxiJl1uKTA3oZOhSvn_c6smGjbUcAS/edit";
+
+    const inputUsuario = document.getElementById("usuarioSistema");
+    const btnSalvarUsuario = document.getElementById("btnSalvarUsuario");
+    const btnLimparUsuario = document.getElementById("btnLimparUsuario");
+    const statusUsuario = document.getElementById("statusUsuario");
+    const usuarioAtualTexto = document.getElementById("usuarioAtualTexto");
+    const maquinaAtualTexto = document.getElementById("maquinaAtualTexto");
+    const listaAcessos = document.getElementById("listaAcessos");
+
+    function gerarIdMaquina() {
+      return "maq_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+
+    function obterMaquinaId() {
+      let maquinaId = localStorage.getItem(STORAGE_MAQUINA);
+
+      if (!maquinaId) {
+        maquinaId = gerarIdMaquina();
+        localStorage.setItem(STORAGE_MAQUINA, maquinaId);
+      }
+
+      return maquinaId;
+    }
+
+    function atualizarTela() {
+      const usuario = (localStorage.getItem(STORAGE_USUARIO) || "").trim();
+      const maquinaId = obterMaquinaId();
+
+      inputUsuario.value = usuario;
+      usuarioAtualTexto.textContent = usuario || "-";
+      maquinaAtualTexto.textContent = maquinaId || "-";
+    }
+
+    function mostrarStatus(tipo, msg) {
+      statusUsuario.className = "status " + tipo;
+      statusUsuario.textContent = msg;
+    }
+
+    function abrirLink(url, nome) {
+      if (!url || !String(url).trim()) {
+        alert("O link do " + nome + " ainda não foi configurado.");
+        return;
+      }
+
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+
+    function urlPlanilha(id) {
+      return "https://docs.google.com/spreadsheets/d/" + id + "/edit";
+    }
+
+    function criarCardAcesso(titulo, descricao, planilhaUrl, scriptUrl) {
+      const card = document.createElement("div");
+      card.style.background = "rgba(15, 23, 42, 0.55)";
+      card.style.border = "1px solid rgba(148, 163, 184, 0.18)";
+      card.style.borderRadius = "14px";
+      card.style.padding = "16px";
+
+      card.innerHTML = `
+        <div style="font-size:18px; font-weight:700; color:#f8fafc; margin-bottom:6px;">
+          ${titulo}
+        </div>
+
+        <div style="color:#cbd5e1; margin-bottom:14px; line-height:1.5;">
+          ${descricao}
+        </div>
+
+        <div style="display:flex; flex-wrap:wrap; gap:10px;">
+          <button class="btn primario" type="button">Abrir planilha</button>
+          <button class="btn secundario" type="button">Abrir Apps Script</button>
+        </div>
+      `;
+
+      const botoes = card.querySelectorAll("button");
+      const btnPlanilha = botoes[0];
+      const btnScript = botoes[1];
+
+      btnPlanilha.onclick = () => abrirLink(planilhaUrl, "planilha de " + titulo);
+      btnScript.onclick = () => abrirLink(scriptUrl, "Apps Script de " + titulo);
+
+      return card;
+    }
+
+    function montarAcessosRapidos() {
+      listaAcessos.innerHTML = "";
+
+      const acessos = [
+        {
+          titulo: "ROMANEIOS / BANCO DE DADOS",
+          descricao: "Planilha principal usada em romaneios, banco de dados e cálculos.",
+          planilha: urlPlanilha(PLANILHA_ROMANEIOS),
+          script: APPS_SCRIPT_ROMANEIOS
+        },
+        {
+          titulo: "CAPAS",
+          descricao: "Planilha usada para geração de capas e consulta do LOG_ENVIO.",
+          planilha: urlPlanilha(PLANILHA_CAPAS),
+          script: APPS_SCRIPT_CAPAS
+        },
+        {
+          titulo: "DEVOLUÇÃO",
+          descricao: "Planilha usada para os registros de devolução.",
+          planilha: urlPlanilha(PLANILHA_DEVOLUCAO),
+          script: APPS_SCRIPT_DEVOLUCAO
+        },
+        {
+          titulo: "CONTROLE DE COLETA",
+          descricao: "Aba de controle de coleta dentro da planilha principal.",
+          planilha: urlPlanilha(PLANILHA_COLETA),
+          script: APPS_SCRIPT_COLETA
+        }
+      ];
+
+      acessos.forEach(item => {
+        listaAcessos.appendChild(
+          criarCardAcesso(item.titulo, item.descricao, item.planilha, item.script)
+        );
+      });
+    }
+
+    btnSalvarUsuario.onclick = () => {
+      const usuario = inputUsuario.value.trim();
+
+      if (!usuario) {
+        mostrarStatus("erro", "Digite um usuário válido");
+        return;
+      }
+
+      localStorage.setItem(STORAGE_USUARIO, usuario);
+      atualizarTela();
+      mostrarStatus("ok", "Usuário salvo com sucesso");
+    };
+
+    btnLimparUsuario.onclick = () => {
+      localStorage.removeItem(STORAGE_USUARIO);
+      atualizarTela();
+      mostrarStatus("ok", "Usuário removido com sucesso");
+      inputUsuario.focus();
+    };
+
+    inputUsuario.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        btnSalvarUsuario.click();
+      }
+    });
+
+    montarAcessosRapidos();
+    atualizarTela();
+  </script>
+
+</body>
+</html>

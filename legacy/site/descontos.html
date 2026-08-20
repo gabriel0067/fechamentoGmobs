@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Descontos - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+<script type="text/javascript" src="https://gc.kis.v2.scr.kaspersky-labs.com/FD126C42-EBFA-4E12-B309-BB3FDD723AC1/main.js?attr=fxG4jumenJAatEjG0i6t8tc7G5kLIPiJ8LEhl1xJMHzI0UrOogEAlQMQ2HubKlXk-LYlaInxD3fCgH6_lzQ7t7Jcd8ApRb0rDIKtUgZEc6bPcNdOOwwhAoAMBwoofo8IEBMlcnbJHrR4p1dlhbvnHFzcvtcjwNSidhrSCaVZ5I0E3CBlX09QfaqMzJ1k-yKraT-vVZ0M2VDcqyqNugH1enzhM-GvrmgyzSkAMv0NNHz8PXwy773g95u8tkQP_sbfebBGpSu_Z7lwv9X0tI38FA" charset="UTF-8"></script></head>
+<body>
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+      <div class="logo-pequena-area">
+        <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+      </div>
+    </div>
+  </div>
+
+  <div class="app">
+    <div class="painel">
+      <h1>Descontos</h1>
+      <div class="sub">
+        Lançamento de descontos para motoristas
+      </div>
+
+      <label class="label">Motorista</label>
+      <select id="motoristaDesconto" class="input-padrao">
+        <option value="">Carregando motoristas...</option>
+      </select>
+
+      <label class="label">Data do desconto</label>
+      <input
+        type="date"
+        id="dataDesconto"
+        class="input-padrao"
+      >
+      <div class="sub" style="margin-top:6px;">
+        01/01 para descontar 1°Quinzena de janeiro ou 16/01 para descontar na 2°Quinzena de Janeiro.
+      </div>
+
+      <label class="label">Valor total</label>
+      <input
+        type="text"
+        id="valorDesconto"
+        class="input-padrao"
+        placeholder="Ex.: 150,00"
+        inputmode="decimal"
+      >
+
+      <label class="label">Parcelas</label>
+      <select id="parcelasDesconto" class="input-padrao"></select>
+
+      <label class="label">Motivo</label>
+      <input
+        type="text"
+        id="motivoDesconto"
+        class="input-padrao"
+        placeholder="Ex.: Avaria, adiantamento, multa..."
+      >
+
+      <div class="acoes">
+        <button type="button" class="btn primario" id="btnSalvarDesconto">
+          Salvar desconto
+        </button>
+
+        <button type="button" class="btn secundario" id="btnLimparDesconto">
+          Limpar
+        </button>
+      </div>
+
+      <div id="statusDesconto" class="status"></div>
+    </div>
+
+    <div class="painel">
+      <h2>Prévia das parcelas</h2>
+      <div id="previewParcelas" style="white-space: pre-wrap; color:#e2e8f0;">
+        Nenhuma parcela calculada ainda.
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+
+  <script>
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxN_rSiNwXi09fWqno65zSW_w8TSDjyx9tWdJd4SYz1DeynKW3r-T_7smjmt2Zhr5_D/exec";
+
+    iniciarMenu("descontos");
+
+    const motoristaDesconto = document.getElementById("motoristaDesconto");
+    const dataDesconto = document.getElementById("dataDesconto");
+    const valorDesconto = document.getElementById("valorDesconto");
+    const parcelasDesconto = document.getElementById("parcelasDesconto");
+    const motivoDesconto = document.getElementById("motivoDesconto");
+    const btnSalvarDesconto = document.getElementById("btnSalvarDesconto");
+    const btnLimparDesconto = document.getElementById("btnLimparDesconto");
+    const statusDesconto = document.getElementById("statusDesconto");
+    const previewParcelas = document.getElementById("previewParcelas");
+
+    function mostrarStatus(tipo, msg) {
+      statusDesconto.className = "status " + tipo;
+      statusDesconto.textContent = msg;
+    }
+
+    function preencherParcelas() {
+      parcelasDesconto.innerHTML = "";
+      for (let i = 1; i <= 10; i++) {
+        const opt = document.createElement("option");
+        opt.value = i;
+        opt.textContent = i + "x";
+        parcelasDesconto.appendChild(opt);
+      }
+    }
+
+    function parseNumero(valor) {
+      let texto = String(valor || "").trim();
+      if (!texto) return 0;
+
+      texto = texto.replace(/\s+/g, "");
+
+      if (texto.includes(",") && texto.includes(".")) {
+        if (texto.lastIndexOf(",") > texto.lastIndexOf(".")) {
+          texto = texto.replace(/\./g, "").replace(",", ".");
+        } else {
+          texto = texto.replace(/,/g, "");
+        }
+      } else if (texto.includes(",")) {
+        texto = texto.replace(/\./g, "").replace(",", ".");
+      }
+
+      const numero = Number(texto);
+      return isFinite(numero) ? numero : 0;
+    }
+
+    function formatarValorBR(valor) {
+      return Number(valor || 0).toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    function formatarDataBR(data) {
+      return data.toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit"
+      });
+    }
+
+    function gerarDatasParcelas(dataInicial, parcelas) {
+      const datas = [];
+      let atual = new Date(
+        dataInicial.getFullYear(),
+        dataInicial.getMonth(),
+        dataInicial.getDate()
+      );
+
+      for (let i = 0; i < parcelas; i++) {
+        datas.push(new Date(atual));
+
+        if (i === parcelas - 1) break;
+
+        if (atual.getDate() === 1) {
+          atual = new Date(atual.getFullYear(), atual.getMonth(), 16);
+        } else {
+          atual = new Date(atual.getFullYear(), atual.getMonth() + 1, 1);
+        }
+      }
+
+      return datas;
+    }
+
+    function gerarValoresParcelas(valorTotal, parcelas) {
+      const totalCentavos = Math.round(Number(valorTotal || 0) * 100);
+      const base = Math.floor(totalCentavos / parcelas);
+      const resto = totalCentavos - (base * parcelas);
+
+      const valores = [];
+
+      for (let i = 0; i < parcelas; i++) {
+        const centavos = base + (i === parcelas - 1 ? resto : 0);
+        valores.push(centavos / 100);
+      }
+
+      return valores;
+    }
+
+    function atualizarPreviewParcelas() {
+      const valor = parseNumero(valorDesconto.value);
+      const parcelas = Number(parcelasDesconto.value || 1);
+      const data = dataDesconto.value;
+
+      if (!valor || !parcelas || !data) {
+        previewParcelas.textContent = "Nenhuma parcela calculada ainda.";
+        return;
+      }
+
+      const dataObj = new Date(data + "T00:00:00");
+      const dia = dataObj.getDate();
+
+      if (dia !== 1 && dia !== 16) {
+        previewParcelas.textContent = "01/01 para descontar 1°Quinzena de janeiro ou 16/01 para descontar na 2°Quinzena de Janeiro.";
+        return;
+      }
+
+      const datas = gerarDatasParcelas(dataObj, parcelas);
+      const valores = gerarValoresParcelas(valor, parcelas);
+
+      previewParcelas.textContent = datas
+        .map((d, i) => `Parcela ${i + 1}/${parcelas} - ${formatarDataBR(d)} - R$ ${formatarValorBR(valores[i])}`)
+        .join("\n");
+    }
+
+    async function carregarMotoristas() {
+      motoristaDesconto.innerHTML = '<option value="">Carregando...</option>';
+
+      try {
+        const res = await fetch(WEBAPP_URL + "?acao=listarMotoristasDescontos&t=" + Date.now());
+        const data = await res.json();
+
+        if (!data.ok) {
+          motoristaDesconto.innerHTML = '<option value="">Erro ao carregar</option>';
+          return;
+        }
+
+        motoristaDesconto.innerHTML = '<option value="">Selecione</option>';
+
+        (data.motoristas || []).forEach(nome => {
+          const opt = document.createElement("option");
+          opt.value = nome;
+          opt.textContent = nome;
+          motoristaDesconto.appendChild(opt);
+        });
+
+      } catch {
+        motoristaDesconto.innerHTML = '<option value="">Erro ao carregar</option>';
+      }
+    }
+
+    btnSalvarDesconto.onclick = async () => {
+      const motorista = motoristaDesconto.value;
+      const data = dataDesconto.value;
+      const valor = valorDesconto.value.trim();
+      const parcelas = parcelasDesconto.value;
+      const motivo = motivoDesconto.value.trim();
+
+      if (!motorista) {
+        mostrarStatus("erro", "Selecione o motorista.");
+        motoristaDesconto.focus();
+        return;
+      }
+
+      if (!data) {
+        mostrarStatus("erro", "Informe a data.");
+        dataDesconto.focus();
+        return;
+      }
+
+      const dia = new Date(data + "T00:00:00").getDate();
+      if (dia !== 1 && dia !== 16) {
+        mostrarStatus("erro", "01/01 para descontar 1°Quinzena de janeiro ou 16/01 para descontar na 2°Quinzena de Janeiro.");
+        dataDesconto.focus();
+        return;
+      }
+
+      if (!parseNumero(valor)) {
+        mostrarStatus("erro", "Informe um valor válido.");
+        valorDesconto.focus();
+        return;
+      }
+
+      if (!motivo) {
+        mostrarStatus("erro", "Informe o motivo.");
+        motivoDesconto.focus();
+        return;
+      }
+
+      mostrarStatus("aviso", "Salvando desconto...");
+
+      try {
+        const res = await fetch(WEBAPP_URL, {
+          method: "POST",
+          body: new URLSearchParams({
+            acao: "salvarDesconto",
+            motorista,
+            dataDesconto: data,
+            valor,
+            parcelas,
+            motivo
+          })
+        });
+
+        const retorno = await res.json();
+
+        if (!retorno.ok) {
+          mostrarStatus("erro", retorno.mensagem || "Erro ao salvar.");
+          return;
+        }
+
+        mostrarStatus("ok", retorno.mensagem || "Desconto salvo com sucesso.");
+
+        dataDesconto.value = "";
+        valorDesconto.value = "";
+        parcelasDesconto.value = "1";
+        motivoDesconto.value = "";
+        previewParcelas.textContent = "Nenhuma parcela calculada ainda.";
+        motoristaDesconto.focus();
+
+      } catch {
+        mostrarStatus("erro", "Erro de conexão.");
+      }
+    };
+
+    btnLimparDesconto.onclick = () => {
+      motoristaDesconto.value = "";
+      dataDesconto.value = "";
+      valorDesconto.value = "";
+      parcelasDesconto.value = "1";
+      motivoDesconto.value = "";
+      previewParcelas.textContent = "Nenhuma parcela calculada ainda.";
+      motoristaDesconto.focus();
+    };
+
+    dataDesconto.addEventListener("change", atualizarPreviewParcelas);
+    valorDesconto.addEventListener("input", atualizarPreviewParcelas);
+    parcelasDesconto.addEventListener("change", atualizarPreviewParcelas);
+
+    preencherParcelas();
+    carregarMotoristas();
+  </script>
+</body>
+</html>

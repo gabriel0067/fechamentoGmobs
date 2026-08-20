@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Faturamento de Parceiros</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="faturas.css" />
+</head>
+<body class="pagina-faturas">
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <button id="btnAbrirMenu" class="menu-btn" type="button">☰</button>
+
+      <div class="logo-pequena-area">
+        <img src="img/logo.png" class="logo-pequena" alt="Logo" />
+      </div>
+    </div>
+  </div>
+
+  <div class="app">
+    <div class="painel">
+      <h1>Lançamento de Faturas</h1>
+      <div class="sub">Lançamento de faturamento por parceiro</div>
+
+      <div class="grupoParceiros" id="grupoParceiros">
+        <button class="btnParceiro" data-parceiro="TRD" type="button">TRD</button>
+        <button class="btnParceiro" data-parceiro="ARGIUS" type="button">ARGIUS</button>
+        <button class="btnParceiro" data-parceiro="DISPLAN" type="button">DISPLAN</button>
+        <button class="btnParceiro" data-parceiro="TADEX" type="button">TADEX</button>
+        <button class="btnParceiro" data-parceiro="D&Y" type="button">D&amp;Y</button>
+        <button class="btnParceiro" data-parceiro="PAJUÇARA" type="button">PAJUÇARA</button>
+        <button class="btnParceiro" data-parceiro="RIO VERMELHO" type="button">RIO VERMELHO</button>
+        <button class="btnParceiro" data-parceiro="FITLOG" type="button">FITLOG</button>
+        <button class="btnParceiro" data-parceiro="MAEX" type="button">MAEX</button>
+        <button class="btnParceiro" data-parceiro="TJB" type="button">TJB</button>
+        <button class="btnParceiro" data-parceiro="BARUERI" type="button">BARUERI</button>
+      </div>
+
+      <input type="hidden" id="parceiroSelecionado" />
+      <input type="hidden" id="registroEditandoId" />
+
+      <label for="valorFatura">Valor da Fatura</label>
+      <input type="text" id="valorFatura" placeholder="R$ 0,00" autocomplete="off" />
+
+      <label for="quinzena">Quinzena</label>
+      <select id="quinzena">
+        <option value="">Selecione</option>
+        <option>1ª Quinzena de Janeiro</option>
+        <option>2ª Quinzena de Janeiro</option>
+        <option>1ª Quinzena de Fevereiro</option>
+        <option>2ª Quinzena de Fevereiro</option>
+        <option>1ª Quinzena de Março</option>
+        <option>2ª Quinzena de Março</option>
+        <option>1ª Quinzena de Abril</option>
+        <option>2ª Quinzena de Abril</option>
+        <option>1ª Quinzena de Maio</option>
+        <option>2ª Quinzena de Maio</option>
+        <option>1ª Quinzena de Junho</option>
+        <option>2ª Quinzena de Junho</option>
+        <option>1ª Quinzena de Julho</option>
+        <option>2ª Quinzena de Julho</option>
+        <option>1ª Quinzena de Agosto</option>
+        <option>2ª Quinzena de Agosto</option>
+        <option>1ª Quinzena de Setembro</option>
+        <option>2ª Quinzena de Setembro</option>
+        <option>1ª Quinzena de Outubro</option>
+        <option>2ª Quinzena de Outubro</option>
+        <option>1ª Quinzena de Novembro</option>
+        <option>2ª Quinzena de Novembro</option>
+        <option>1ª Quinzena de Dezembro</option>
+        <option>2ª Quinzena de Dezembro</option>
+      </select>
+
+      <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; justify-content:center;">
+        <button id="btnSalvarFatura" class="btn primario" type="button">SALVAR FATURA</button>
+        <button id="btnCancelarEdicao" class="btn secundario" type="button" style="display:none;">CANCELAR EDIÇÃO</button>
+      </div>
+
+      <div id="mensagem"></div>
+    </div>
+
+    <div class="painel">
+      <h2>Faturas Registradas</h2>
+
+      <div class="filtros">
+        <select id="filtroParceiro">
+          <option value="">Todos os Parceiros</option>
+          <option>TRD</option>
+          <option>ARGIUS</option>
+          <option>DISPLAN</option>
+          <option>TADEX</option>
+          <option>D&Y</option>
+          <option>PAJUÇARA</option>
+          <option>RIO VERMELHO</option>
+          <option>FITLOG</option>
+          <option>MAEX</option>
+          <option>TJB</option>
+          <option>BARUERI</option>
+        </select>
+
+        <select id="filtroQuinzena">
+          <option value="">Todas as Quinzenas</option>
+          <option>1ª Quinzena de Janeiro</option>
+          <option>2ª Quinzena de Janeiro</option>
+          <option>1ª Quinzena de Fevereiro</option>
+          <option>2ª Quinzena de Fevereiro</option>
+          <option>1ª Quinzena de Março</option>
+          <option>2ª Quinzena de Março</option>
+          <option>1ª Quinzena de Abril</option>
+          <option>2ª Quinzena de Abril</option>
+          <option>1ª Quinzena de Maio</option>
+          <option>2ª Quinzena de Maio</option>
+          <option>1ª Quinzena de Junho</option>
+          <option>2ª Quinzena de Junho</option>
+          <option>1ª Quinzena de Julho</option>
+          <option>2ª Quinzena de Julho</option>
+          <option>1ª Quinzena de Agosto</option>
+          <option>2ª Quinzena de Agosto</option>
+          <option>1ª Quinzena de Setembro</option>
+          <option>2ª Quinzena de Setembro</option>
+          <option>1ª Quinzena de Outubro</option>
+          <option>2ª Quinzena de Outubro</option>
+          <option>1ª Quinzena de Novembro</option>
+          <option>2ª Quinzena de Novembro</option>
+          <option>1ª Quinzena de Dezembro</option>
+          <option>2ª Quinzena de Dezembro</option>
+        </select>
+
+        <input type="text" id="pesquisa" placeholder="Pesquisar parceiro ou quinzena" />
+      </div>
+
+      <div class="cardsResumo">
+        <div class="cardResumo">
+          <h3>Total Geral</h3>
+          <span id="totalGeral">R$ 0,00</span>
+        </div>
+
+        <div class="cardResumo">
+          <h3>Total Filtrado</h3>
+          <span id="totalFiltrado">R$ 0,00</span>
+        </div>
+
+        <div class="cardResumo">
+          <h3>Lançamentos</h3>
+          <span id="totalLancamentos">0</span>
+        </div>
+      </div>
+
+      <div id="resumoPeriodo" class="resumo-periodo"></div>
+    </div>
+  </div>
+
+  <script>
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzL4Pw6JHrBLhH40wMwKU94gI0folVyUkZeFaLFwVWxXUmElJn1qh1Ii8k2sDKrki5p/exec";
+
+    let parceiroSelecionado = "";
+    let listaFaturas = [];
+
+    const botoesParceiro = document.querySelectorAll(".btnParceiro");
+    const campoValor = document.getElementById("valorFatura");
+    const campoQuinzena = document.getElementById("quinzena");
+    const campoMensagem = document.getElementById("mensagem");
+    const campoPesquisa = document.getElementById("pesquisa");
+    const filtroParceiro = document.getElementById("filtroParceiro");
+    const filtroQuinzena = document.getElementById("filtroQuinzena");
+    const btnSalvar = document.getElementById("btnSalvarFatura");
+    const btnCancelarEdicao = document.getElementById("btnCancelarEdicao");
+    const campoRegistroEditandoId = document.getElementById("registroEditandoId");
+    const resumoPeriodo = document.getElementById("resumoPeriodo");
+
+    function mostrarMensagem(texto, tipo = "ok") {
+      campoMensagem.textContent = texto;
+      campoMensagem.className = "";
+      campoMensagem.classList.add("status", tipo);
+    }
+
+    function limparMensagem() {
+      campoMensagem.textContent = "";
+      campoMensagem.className = "";
+    }
+
+    function formatarMoedaInput(valor) {
+      valor = valor.replace(/\D/g, "");
+      if (!valor) return "";
+      return (Number(valor) / 100).toLocaleString("pt-BR", {
+        style: "currency",
+        currency: "BRL"
+      });
+    }
+
+    function moedaTextoParaNumero(valor) {
+      if (!valor) return 0;
+      return Number(
+        String(valor)
+          .replace(/\s/g, "")
+          .replace("R$", "")
+          .replace(/\./g, "")
+          .replace(",", ".")
+          .trim()
+      ) || 0;
+    }
+
+    function formatarNumeroParaMoeda(valor) {
+      return Number(valor || 0).toLocaleString("pt-BR", {
+        style: "currency",
+        currency: "BRL"
+      });
+    }
+
+    function selecionarParceiro(parceiro) {
+      parceiroSelecionado = parceiro;
+      document.getElementById("parceiroSelecionado").value = parceiro;
+      botoesParceiro.forEach(botao => {
+        botao.classList.toggle("ativo", botao.dataset.parceiro === parceiro);
+      });
+    }
+
+    botoesParceiro.forEach(botao => {
+      botao.addEventListener("click", function () {
+        selecionarParceiro(this.dataset.parceiro);
+      });
+    });
+
+    campoValor.addEventListener("input", function () {
+      this.value = formatarMoedaInput(this.value);
+    });
+
+    btnSalvar.addEventListener("click", function () {
+      limparMensagem();
+
+      if (!WEBAPP_URL) {
+        mostrarMensagem("Configure a WEBAPP_URL antes de salvar.", "erro");
+        return;
+      }
+
+      if (!parceiroSelecionado) {
+        alert("Selecione um parceiro.");
+        return;
+      }
+
+      if (!campoValor.value) {
+        alert("Informe o valor.");
+        return;
+      }
+
+      if (!campoQuinzena.value) {
+        alert("Selecione a quinzena.");
+        return;
+      }
+
+      salvarFatura();
+    });
+
+    btnCancelarEdicao.addEventListener("click", function () {
+      limparFormulario();
+      mostrarMensagem("Edição cancelada.", "ok");
+    });
+
+    function limparFormulario() {
+      parceiroSelecionado = "";
+      document.getElementById("parceiroSelecionado").value = "";
+      campoRegistroEditandoId.value = "";
+      campoValor.value = "";
+      campoQuinzena.selectedIndex = 0;
+      btnSalvar.textContent = "SALVAR FATURA";
+      btnCancelarEdicao.style.display = "none";
+      botoesParceiro.forEach(b => b.classList.remove("ativo"));
+    }
+
+    async function salvarFatura() {
+      const dados = {
+        acao: campoRegistroEditandoId.value ? "editarFatura" : "salvarFatura",
+        id: campoRegistroEditandoId.value || "",
+        parceiro: parceiroSelecionado,
+        valor: campoValor.value,
+        quinzena: campoQuinzena.value
+      };
+
+      try {
+        const resposta = await fetch(WEBAPP_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8"
+          },
+          body: JSON.stringify(dados)
+        });
+
+        const retorno = await resposta.json();
+
+        if (retorno.ok) {
+          mostrarMensagem(
+            campoRegistroEditandoId.value ? "Fatura atualizada com sucesso." : "Fatura salva com sucesso.",
+            "ok"
+          );
+          limparFormulario();
+          carregarTabela();
+        } else {
+          mostrarMensagem(retorno.mensagem || "Erro ao salvar fatura.", "erro");
+        }
+      } catch (erro) {
+        console.error(erro);
+        mostrarMensagem("Erro de conexão com o Web App.", "erro");
+      }
+    }
+
+    async function carregarTabela() {
+      if (!WEBAPP_URL) return;
+
+      try {
+        const resposta = await fetch(WEBAPP_URL + "?acao=listarFaturas&t=" + new Date().getTime());
+        const retorno = await resposta.json();
+
+        if (!retorno.ok) {
+          mostrarMensagem(retorno.mensagem || "Erro ao carregar faturas.", "erro");
+          return;
+        }
+
+        listaFaturas = Array.isArray(retorno.rows) ? retorno.rows : [];
+        aplicarFiltros();
+        atualizarTotalGeral(listaFaturas);
+      } catch (erro) {
+        mostrarMensagem("Erro ao carregar dados da tabela.", "erro");
+        console.error(erro);
+      }
+    }
+
+    function atualizarTotalGeral(lista) {
+      const total = lista.reduce((acc, item) => acc + moedaTextoParaNumero(item.valor), 0);
+      document.getElementById("totalGeral").textContent = formatarNumeroParaMoeda(total);
+    }
+
+    function renderizarResumoPorPeriodo(lista) {
+      if (!lista.length) {
+        resumoPeriodo.innerHTML = `<div class="status aviso" style="display:block;">Nenhum registro encontrado para este período.</div>`;
+        document.getElementById("totalFiltrado").textContent = "R$ 0,00";
+        document.getElementById("totalLancamentos").textContent = "0";
+        return;
+      }
+
+      const periodo = filtroQuinzena.value || lista[0].quinzena || "Período não informado";
+
+      let html = `
+        <div class="resumo-cabecalho">
+          <div class="resumo-titulo">PERÍODO:</div>
+          <div class="resumo-periodo-nome">${periodo}</div>
+        </div>
+        <table class="resumo-tabela">
+          <thead>
+            <tr>
+              <th>PARCEIRO</th>
+              <th>VALOR</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      lista.forEach(item => {
+        html += `
+          <tr class="resumo-linha">
+            <td>${item.parceiro || ""}</td>
+            <td>${item.valor || "R$ 0,00"}</td>
+          </tr>
+        `;
+      });
+
+      html += `</tbody></table>`;
+      resumoPeriodo.innerHTML = html;
+    }
+
+    function aplicarFiltros() {
+      const parceiro = filtroParceiro.value.toUpperCase().trim();
+      const quinzena = filtroQuinzena.value.toUpperCase().trim();
+      const pesquisa = campoPesquisa.value.toUpperCase().trim();
+
+      const filtrada = listaFaturas.filter(item => {
+        const parceiroItem = String(item.parceiro || "").toUpperCase();
+        const quinzenaItem = String(item.quinzena || "").toUpperCase();
+        const dataItem = String(item.data || "").toUpperCase();
+        const valorItem = String(item.valor || "").toUpperCase();
+
+        const matchParceiro = !parceiro || parceiroItem === parceiro;
+        const matchQuinzena = !quinzena || quinzenaItem === quinzena;
+        const matchPesquisa =
+          !pesquisa ||
+          parceiroItem.includes(pesquisa) ||
+          quinzenaItem.includes(pesquisa) ||
+          dataItem.includes(pesquisa) ||
+          valorItem.includes(pesquisa);
+
+        return matchParceiro && matchQuinzena && matchPesquisa;
+      });
+
+      renderizarResumoPorPeriodo(filtrada);
+
+      const totalFiltrado = filtrada.reduce((acc, item) => acc + moedaTextoParaNumero(item.valor), 0);
+      document.getElementById("totalFiltrado").textContent = formatarNumeroParaMoeda(totalFiltrado);
+      document.getElementById("totalLancamentos").textContent = filtrada.length;
+    }
+
+    campoPesquisa.addEventListener("keyup", aplicarFiltros);
+    filtroParceiro.addEventListener("change", aplicarFiltros);
+    filtroQuinzena.addEventListener("change", aplicarFiltros);
+
+    carregarTabela();
+  </script>
+
+  <script src="menu.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      iniciarMenu("faturas");
+    });
+  </script>
+</body>
+</html>

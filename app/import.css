@@ -1,0 +1,114 @@
+.file-hidden {
+  display: none;
+}
+.import-card {
+  margin: 10px 0 17px;
+  background: linear-gradient(135deg, #fff 0%, #f1f8f4 100%);
+  border: 1px dashed #9bbbab;
+  border-radius: 15px;
+  padding: 24px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 18px;
+}
+.import-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 13px;
+  background: #174c35;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+}
+.import-card h3,
+.closing-controls h3 {
+  margin: 5px 0 6px;
+  font-size: 17px;
+}
+.import-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 760px;
+}
+.import-card small {
+  display: block;
+  margin-top: 10px;
+  color: #526158;
+}
+.closing-controls {
+  margin: 10px 0 17px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  display: grid;
+  grid-template-columns: 1fr 180px 180px auto;
+  align-items: end;
+  gap: 14px;
+}
+.closing-controls label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #68766f;
+  font-weight: 700;
+}
+.closing-controls input {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  padding: 10px;
+  border: 1px solid #dce2de;
+  border-radius: 8px;
+  color: #26332c;
+}
+.generate {
+  height: 39px;
+}
+button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.re-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #fff0e7;
+  color: #c55310;
+  font-size: 9px;
+  font-weight: 900;
+}
+@media (max-width: 900px) {
+  .closing-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+  .closing-controls > div,
+  .closing-controls .generate {
+    grid-column: span 2;
+  }
+  .import-card {
+    grid-template-columns: auto 1fr;
+  }
+  .import-card > button {
+    grid-column: 1/3;
+  }
+}
+@media (max-width: 700px) {
+  .import-card {
+    grid-template-columns: 1fr;
+  }
+  .import-card > button {
+    grid-column: auto;
+  }
+  .closing-controls {
+    grid-template-columns: 1fr;
+  }
+  .closing-controls > div,
+  .closing-controls .generate {
+    grid-column: auto;
+  }
+}

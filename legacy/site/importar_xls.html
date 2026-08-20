@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Importar Romaneios XLS</title>
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+</head>
+<body style="font-family: Arial; padding:20px">
+
+<h2>Importar Relatório de Romaneios (.xls)</h2>
+
+<input type="file" id="fileInput" accept=".xls,.xlsx" />
+<button onclick="enviar()">IMPORTAR</button>
+
+<script>
+let dadosPlanilha = [];
+
+document.getElementById('fileInput').addEventListener('change', function(e){
+    const file = e.target.files[0];
+    const reader = new FileReader();
+
+    reader.onload = function(evt){
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, {type: 'array'});
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+
+        dadosPlanilha = json;
+        alert("Arquivo lido com " + json.length + " linhas!");
+        console.log(json);
+    };
+
+    reader.readAsArrayBuffer(file);
+});
+
+function enviar(){
+    if(dadosPlanilha.length == 0){
+        alert("Carregue um arquivo primeiro!");
+        return;
+    }
+
+    fetch("https://script.google.com/macros/s/AKfycbx_qSPtFBnzP8eL5B1MvBBFY4BNkqLBvzNPao3tvsDTXcB6IutoRN6kCqmICsPA49a7Rw/exec", {
+        method: "POST",
+        body: JSON.stringify(dadosPlanilha)
+    })
+    .then(res => res.text())
+    .then(res => alert("Importado com sucesso!"))
+    .catch(err => alert("Erro ao enviar"));
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>M V F</title>
+
+  <link rel="stylesheet" href="/style.css">
+
+  <script type="text/javascript" src="https://gc.kis.v2.scr.kaspersky-labs.com/FD126C42-EBFA-4E12-B309-BB3FDD723AC1/main.js?attr=X05mdSokTdvy5N0K59CFqcX073fHXvKUwD6ITcHnS5P-bNj6WrSJ57wWWt899XzHA3_WpAxnfAaEoCfvE1yZmEpfSDfwulp5J3MtqzFVbUkoe4t9dZGN6qSfdf_rlB0ixoXlHuS4unSpZVCaiIdXQGlu7RX4OHZdR0KUcZmKb7TKhXSCtd6Tj-j0M6wk0xTt96yu-tXZWDlTZWsetY_d7mPTAWYobbfZF-ruLF1XBGY_cy5PipJ-7IrNd45Uv2g41uinV-7b5dCdE-nNMbwuTQ" charset="UTF-8"></script><style>
+    .fila-box {
+      margin-top: 18px;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 14px;
+      background: rgba(15, 23, 42, 0.55);
+    }
+
+    .fila-topo {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .fila-topo strong {
+      color: #fff;
+      font-size: 16px;
+    }
+
+    .fila-contador {
+      color: #cbd5e1;
+      font-size: 14px;
+    }
+
+    .fila-lista {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+
+    .fila-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      background: rgba(30, 41, 59, 0.7);
+    }
+
+    .fila-chave {
+      color: #e2e8f0;
+      font-family: monospace;
+      font-size: 14px;
+      word-break: break-all;
+    }
+
+    .fila-vazia {
+      color: #94a3b8;
+      padding: 6px 0;
+    }
+
+    .acoes-fila {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .btn-mini {
+      padding: 8px 12px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .btn-remover {
+      background: #7f1d1d;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+
+<div class="app">
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="menu-btn" id="btnAbrirMenu">☰</button>
+
+      <div class="logo-pequena-area">
+        <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+      </div>
+    </div>
+  </div>
+
+  <div class="painel">
+    <h1>Gerador de relatórios e capas</h1>
+
+    <div class="sub">
+      Sistema principal de leitura de CTe
+    </div>
+
+    <div class="top-actions">
+      <a class="btn suave"
+         href="https://docs.google.com/spreadsheets/d/1nQXeZtMtg8mZtgtn9CTAYUsdCQUb5Ux18pW_T8DwWW8/edit"
+         target="_blank">
+        Abrir planilha
+      </a>
+
+      <button class="btn suave" id="btnPdfCapa">
+        Gerar PDF da capa
+      </button>
+    </div>
+  </div>
+
+  <div class="painel">
+    <div class="label">Selecione o destino</div>
+
+    <div class="destinos" id="destinos">
+  <button class="destino-btn capa-btn" data-destino="CAPAS">CAPAS</button>
+  <button class="destino-btn ativo" data-destino="TRD">TRD</button>
+  <button class="destino-btn" data-destino="ARGIUS">ARGIUS</button>
+  <button class="destino-btn" data-destino="DISPLAN">DISPLAN</button>
+  <button class="destino-btn" data-destino="TADEX">TADEX</button>
+  <button class="destino-btn" data-destino="DEY">D&Y</button>  
+  <button class="destino-btn" data-destino="PAJU">PAJU</button>
+  <button class="destino-btn" data-destino="RVM">RVM</button>
+  <button class="destino-btn" data-destino="FITLOG">FITLOG</button>
+  <button class="destino-btn" data-destino="MAEX">MAEX</button>
+  <button class="destino-btn" data-destino="TJB">TJB</button>
+</div>
+
+    <form id="formEnvio">
+      <input type="hidden" id="destino" value="TRD">
+
+      <label class="label">Chave do CTe</label>
+
+      <input
+        class="input-chave"
+        type="text"
+        id="chave"
+        inputmode="numeric"
+        autocomplete="off"
+        placeholder="Bipe ou cole os 44 dígitos"
+      >
+
+      <div class="acoes">
+        <button type="button" class="btn primario" id="btnAdicionarFila">
+          Adicionar à fila
+        </button>
+
+        <button type="button" class="btn suave" id="btnEnviarFila">
+          Enviar fila
+        </button>
+
+        <button type="button" class="btn secundario" id="btnLimpar">
+          Limpar campo
+        </button>
+
+        <button type="button" class="btn perigo" id="btnLimparHistorico">
+          Limpar histórico
+        </button>
+      </div>
+
+      <div id="status" class="status"></div>
+
+      <div class="linha-info">
+        <span id="infoDestino">
+          Destino: TRD
+        </span>
+
+        <span id="infoUltima">
+          Última leitura: nenhuma
+        </span>
+      </div>
+    </form>
+
+    <div class="fila-box">
+      <div class="fila-topo">
+        <strong>Fila de chaves</strong>
+        <span class="fila-contador" id="contadorFila">0 chave(s)</span>
+      </div>
+
+      <div class="fila-lista" id="filaLista">
+        <div class="fila-vazia">Nenhuma chave adicionada.</div>
+      </div>
+
+      <div class="acoes-fila">
+        <button type="button" class="btn secundario" id="btnLimparFila">
+          Limpar fila
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="painel">
+    <h2>Últimos envios</h2>
+    <div class="historico-lista" id="historicoLista"></div>
+  </div>
+
+</div>
+
+<script src="/app.js"></script>
+
+<script>
+  iniciarMenu("index");
+
+  const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbz2iyQyAPrLLxFuiPXiB9Ji9gUt6NurloDepFeZNJymIaQOdyoJah4D5JxSvhPg1InH-Q/exec";
+
+  const destinoBtns = document.querySelectorAll(".destino-btn");
+  const inputDestino = document.getElementById("destino");
+  const inputChave = document.getElementById("chave");
+
+  const statusBox = document.getElementById("status");
+  const btnLimpar = document.getElementById("btnLimpar");
+  const btnAdicionarFila = document.getElementById("btnAdicionarFila");
+  const btnEnviarFila = document.getElementById("btnEnviarFila");
+  const btnLimparFila = document.getElementById("btnLimparFila");
+  const filaLista = document.getElementById("filaLista");
+  const contadorFila = document.getElementById("contadorFila");
+  const infoDestino = document.getElementById("infoDestino");
+  const infoUltima = document.getElementById("infoUltima");
+  const statDestino = document.getElementById("statDestino");
+
+  let enviando = false;
+  let filaChaves = [];
+
+  let aguardandoDestinoCapa = false;
+
+destinoBtns.forEach(btn => {
+  btn.addEventListener("click", () => {
+    const destino = btn.dataset.destino;
+
+    // Primeiro clique no botão CAPAS
+    if (destino === "CAPAS" && !aguardandoDestinoCapa) {
+      aguardandoDestinoCapa = true;
+
+      destinoBtns.forEach(b => b.classList.remove("ativo"));
+      btn.classList.add("ativo");
+
+      inputDestino.value = "CAPAS";
+      infoDestino.textContent =
+        "Destino: CAPAS (agora selecione outro destino)";
+
+      if (statDestino) {
+        statDestino.textContent = "CAPAS";
+      }
+
+      mostrarStatus("aviso", "Selecione o destino complementar");
+      return;
+    }
+
+    // Segundo clique depois de CAPAS
+    if (aguardandoDestinoCapa && destino !== "CAPAS") {
+      inputDestino.value = `CAPAS_${destino}`;
+      infoDestino.textContent = "Destino: " + inputDestino.value;
+
+      destinoBtns.forEach(b => {
+        if (b.dataset.destino !== "CAPAS") {
+          b.classList.remove("ativo");
+        }
+      });
+
+      btn.classList.add("ativo");
+
+      aguardandoDestinoCapa = false;
+
+      if (statDestino) {
+        statDestino.textContent = inputDestino.value;
+      }
+
+      mostrarStatus("ok", "Destino complementar selecionado");
+      return;
+    }
+
+    // Fluxo normal
+    aguardandoDestinoCapa = false;
+
+    destinoBtns.forEach(b => b.classList.remove("ativo"));
+    btn.classList.add("ativo");
+
+    inputDestino.value = destino;
+    infoDestino.textContent = "Destino: " + destino;
+
+    if (statDestino) {
+      statDestino.textContent = destino;
+    }
+  });
+});
+
+  btnLimpar.addEventListener("click", () => {
+    inputChave.value = "";
+    inputChave.focus();
+  });
+
+  function mostrarStatus(tipo, msg) {
+    statusBox.className = "status " + tipo;
+    statusBox.textContent = msg;
+  }
+
+  function atualizarFilaNaTela() {
+    contadorFila.textContent = filaChaves.length + " chave(s)";
+
+    if (!filaChaves.length) {
+      filaLista.innerHTML = `<div class="fila-vazia">Nenhuma chave adicionada.</div>`;
+      return;
+    }
+
+    filaLista.innerHTML = filaChaves.map((chave, index) => `
+      <div class="fila-item">
+        <div class="fila-chave">${chave}</div>
+        <button type="button" class="btn-mini btn-remover" onclick="removerDaFila(${index})">
+          Remover
+        </button>
+      </div>
+    `).join("");
+  }
+
+  window.removerDaFila = function(index) {
+    filaChaves.splice(index, 1);
+    atualizarFilaNaTela();
+    mostrarStatus("ok", "Chave removida da fila");
+  };
+
+  function adicionarChaveNaFila() {
+    const chave = inputChave.value.replace(/\D/g, "");
+
+    if (!chave.length) {
+      mostrarStatus("erro", "Digite o CTE ou Bipe a Chave");
+      return;
+    }
+
+    if (filaChaves.includes(chave)) {
+      mostrarStatus("erro", "Essa chave já está na fila");
+      inputChave.value = "";
+      inputChave.focus();
+      return;
+    }
+
+    filaChaves.push(chave);
+    atualizarFilaNaTela();
+
+    mostrarStatus("ok", "Chave adicionada à fila");
+    infoUltima.textContent = "Última leitura: " + new Date().toLocaleString("pt-BR");
+
+    inputChave.value = "";
+    inputChave.focus();
+  }
+
+  btnAdicionarFila.addEventListener("click", adicionarChaveNaFila);
+
+  inputChave.addEventListener("input", function() {
+    this.value = this.value.replace(/\D/g, "");
+
+    
+  });
+
+  inputChave.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+
+      const chave = this.value.replace(/\D/g, "");
+
+      if (!chave.length) return;
+      
+
+      adicionarChaveNaFila();
+    }
+  });
+
+  btnLimparFila.addEventListener("click", () => {
+    filaChaves = [];
+    atualizarFilaNaTela();
+    mostrarStatus("ok", "Fila limpa");
+    inputChave.focus();
+  });
+
+  async function enviarUmaChave(chave, destino) {
+    const resposta = await fetch(WEBAPP_URL, {
+      method: "POST",
+      body: new URLSearchParams({
+        chave: chave,
+        destino: destino
+      })
+    });
+
+    return await resposta.json();
+  }
+
+  async function enviarFila() {
+    if (enviando) return;
+
+    if (!filaChaves.length) {
+      mostrarStatus("erro", "Nenhuma chave na fila");
+      return;
+    }
+    if (inputDestino.value === "CAPAS") {
+       mostrarStatus("erro", "Selecione o destino complementar");
+       return;
+    }
+
+    enviando = true;
+    const destino = inputDestino.value;
+
+    let sucesso = 0;
+    let erro = 0;
+
+    mostrarStatus("aviso", "Enviando fila...");
+
+    for (let i = 0; i < filaChaves.length; i++) {
+      const chave = filaChaves[i];
+
+      mostrarStatus("aviso", `Enviando ${i + 1} de ${filaChaves.length}...`);
+
+      try {
+        const data = await enviarUmaChave(chave, destino);
+
+        if (data.ok) {
+          sucesso++;
+          infoUltima.textContent = "Última leitura: " + chave;
+        } else {
+          erro++;
+        }
+      } catch (e) {
+        erro++;
+      }
+    }
+
+    filaChaves = [];
+    atualizarFilaNaTela();
+
+    if (erro === 0) {
+      mostrarStatus("ok", `Fila enviada com sucesso (${sucesso} chave(s))`);
+    } else {
+      mostrarStatus("erro", `Envio finalizado: ${sucesso} sucesso(s) e ${erro} erro(s)`);
+    }
+
+    enviando = false;
+    inputChave.focus();
+  }
+
+  btnEnviarFila.addEventListener("click", enviarFila);
+
+  document.getElementById("btnPdfCapa").addEventListener("click", async () => {
+    const destino = inputDestino.value;
+
+    if (!destino) {
+      mostrarStatus("erro", "Selecione um destino");
+      return;
+    }
+
+    mostrarStatus("aviso", "Gerando PDF...");
+
+    try {
+      const resposta = await fetch(
+        WEBAPP_URL + "?acao=pdfCapa&destino=" + encodeURIComponent(destino)
+      );
+
+      const data = await resposta.json();
+
+      if (!data.ok) {
+        mostrarStatus("erro", data.mensagem);
+        return;
+      }
+
+      const bytes = atob(data.base64);
+      const array = new Uint8Array(bytes.length);
+
+      for (let i = 0; i < bytes.length; i++) {
+        array[i] = bytes.charCodeAt(i);
+      }
+
+      const blob = new Blob([array], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+
+      window.open(url, "_blank");
+      mostrarStatus("ok", "PDF gerado com sucesso");
+    } catch (e) {
+      mostrarStatus("erro", "Erro ao gerar PDF");
+    }
+  });
+
+  atualizarFilaNaTela();
+</script>
+
+</body>
+</html>

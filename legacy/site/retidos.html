@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retidos - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+  <!-- ===== Topbar ===== -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+      <div class="logo-pequena-area">
+        <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== App ===== -->
+  <div class="app">
+
+    <!-- ===== Painel Form ===== -->
+    <div class="painel">
+      <h1>Retidos</h1>
+      <div class="sub">
+        Lançamento, regularização e painel de retidos aguardando
+      </div>
+
+      <div class="tipo-retido">
+        <button type="button" id="btnModoLancar" class="ativo">Lançar Retidos</button>
+        <button type="button" id="btnModoRegularizar">Retidos Regularizados</button>
+      </div>
+
+      <!-- ===== BLOCO LANÇAR ===== -->
+      <div id="blocoLancar" class="bloco-form ativo">
+
+        <label class="label">N° do Romaneio</label>
+        <input type="text" id="romaneioRetido" class="input-padrao" autocomplete="off" placeholder="Ex.: 33720">
+
+        <label class="label">Números das minutas</label>
+        <textarea
+          id="minutasRetidas"
+          class="input-padrao"
+          style="min-height:110px; resize:vertical;"
+          placeholder="Digite várias minutas separadas por espaço, vírgula, Enter, /, -, * ou qualquer separador"
+        ></textarea>
+
+        <div class="acoes">
+          <button type="button" class="btn primario" id="btnLancarRetidos">
+            Lançar retidos
+          </button>
+
+          <button type="button" class="btn secundario" id="btnLimparLancamento">
+            Limpar
+          </button>
+        </div>
+      </div>
+
+      <!-- ===== BLOCO REGULARIZAR ===== -->
+      <div id="blocoRegularizar" class="bloco-form">
+
+        <label class="label">Conhecimento / CTE</label>
+        <input
+          type="text"
+          id="codigoRegularizar"
+          class="input-padrao"
+          autocomplete="off"
+          placeholder="Bipe a chave do CT-e ou digite o número do conhecimento"
+        >
+
+        <div class="acoes">
+          <button type="button" class="btn primario" id="btnRegularizarRetido">
+            Adicionar na fila
+          </button>
+
+          <button type="button" class="btn secundario" id="btnLimparRegularizacao">
+            Limpar
+          </button>
+        </div>
+
+        <div id="painelFilaRegularizacao" class="painel" style="margin-top:12px; padding:12px;">
+          <div style="font-weight:700;">Fila de regularização</div>
+          <div id="filaRegularizacaoResumo" style="margin-top:6px;">0 item(ns) na fila</div>
+          <div id="filaRegularizacaoLista" style="margin-top:8px; font-size:13px; color:#cbd5e1;">
+            Nenhum código pendente.
+          </div>
+        </div>
+      </div>
+
+      <div id="statusRetidos" class="status"></div>
+    </div>
+
+    <!-- ===== Painel Tabela ===== -->
+    <div class="painel">
+
+      <div class="resultado-topo">
+        <h2>Painel de Retidos</h2>
+        <div class="resultado-total" id="resultadoTotalRetidos">0 resultado(s)</div>
+      </div>
+
+      <label class="label">Filtrar por Transportadora</label>
+      <select id="filtroTransportadora" class="input-padrao">
+        <option value="">Todas</option>
+      </select>
+
+      <div class="resultado-tabela-wrap">
+        <table class="resultado-tabela">
+          <thead id="theadRetidos"></thead>
+          <tbody id="tbodyRetidos"></tbody>
+        </table>
+      </div>
+
+      <div class="resultado-vazio" id="resultadoVazioRetidos">
+        Nenhum retido aguardando no momento.
+      </div>
+
+    </div>
+
+    <!-- ===== Painel Ranking ===== -->
+    <div class="painel">
+      <div class="resultado-topo">
+        <h2>Ranking de Motoristas</h2>
+        <div class="resultado-total" id="resultadoTotalRanking">0 motorista(s)</div>
+      </div>
+
+      <div class="resultado-tabela-wrap">
+        <table class="resultado-tabela">
+          <thead id="theadRanking"></thead>
+          <tbody id="tbodyRanking"></tbody>
+        </table>
+      </div>
+
+      <div class="resultado-vazio" id="resultadoVazioRanking">
+        Nenhum motorista com retidos aguardando no momento.
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===== Scripts ===== -->
+  <script src="/app.js"></script>
+
+  <script>
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxAtx7N-bdqh2719R2Iw0gDw-dpo5270285kvHuutEE537oQhqxZm5PEAGln0372XHj/exec";
+
+    // ===== MENU GLOBAL =====
+    iniciarMenu("retidos");
+
+    // ===== ELEMENTOS =====
+    const btnModoLancar = document.getElementById("btnModoLancar");
+    const btnModoRegularizar = document.getElementById("btnModoRegularizar");
+    const blocoLancar = document.getElementById("blocoLancar");
+    const blocoRegularizar = document.getElementById("blocoRegularizar");
+
+    const romaneioRetido = document.getElementById("romaneioRetido");
+    const minutasRetidas = document.getElementById("minutasRetidas");
+
+    const btnLancarRetidos = document.getElementById("btnLancarRetidos");
+    const btnLimparLancamento = document.getElementById("btnLimparLancamento");
+
+    const codigoRegularizar = document.getElementById("codigoRegularizar");
+    const btnRegularizarRetido = document.getElementById("btnRegularizarRetido");
+    const btnLimparRegularizacao = document.getElementById("btnLimparRegularizacao");
+
+    const statusBox = document.getElementById("statusRetidos");
+
+    const resultadoTotalRetidos = document.getElementById("resultadoTotalRetidos");
+    const theadRetidos = document.getElementById("theadRetidos");
+    const tbodyRetidos = document.getElementById("tbodyRetidos");
+    const resultadoVazioRetidos = document.getElementById("resultadoVazioRetidos");
+    const filtroTransportadora = document.getElementById("filtroTransportadora");
+
+    const resultadoTotalRanking = document.getElementById("resultadoTotalRanking");
+    const theadRanking = document.getElementById("theadRanking");
+    const tbodyRanking = document.getElementById("tbodyRanking");
+    const resultadoVazioRanking = document.getElementById("resultadoVazioRanking");
+
+    const filaRegularizacaoResumo = document.getElementById("filaRegularizacaoResumo");
+    const filaRegularizacaoLista = document.getElementById("filaRegularizacaoLista");
+
+    // ===== ESTADO DA FILA =====
+    const filaRegularizacao = [];
+    let processandoFilaRegularizacao = false;
+    let timerAtualizacaoPaineis = null;
+
+    // ===== FUNÇÕES =====
+    function mostrarStatus(tipo, msg) {
+      statusBox.className = "status " + tipo;
+      statusBox.textContent = msg;
+    }
+
+    function selecionarModo(modo) {
+      const isLancar = modo === "lancar";
+
+      btnModoLancar.classList.toggle("ativo", isLancar);
+      btnModoRegularizar.classList.toggle("ativo", !isLancar);
+
+      blocoLancar.classList.toggle("ativo", isLancar);
+      blocoRegularizar.classList.toggle("ativo", !isLancar);
+    }
+
+    btnModoLancar.onclick = () => selecionarModo("lancar");
+    btnModoRegularizar.onclick = () => selecionarModo("regularizar");
+
+    function normalizarMinutas(texto) {
+      return String(texto || "")
+        .split(/\D+/)
+        .map(i => i.trim())
+        .filter(Boolean);
+    }
+
+    function extrairConhecimentoDoCte(valor) {
+      const texto = String(valor || "").trim();
+      const digitos = texto.replace(/\D/g, "");
+
+      let conhecimento = "";
+
+      if (digitos.length === 44) {
+        conhecimento = digitos.substring(25, 34);
+      } else if (digitos) {
+        conhecimento = digitos;
+      } else {
+        return texto;
+      }
+
+      return conhecimento.replace(/^0+/, "") || "0";
+    }
+
+    function escapeHtml(texto) {
+      return String(texto ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;")
+        .replace(/'/g,"&#039;");
+    }
+
+    function limparTabelaRetidos() {
+      theadRetidos.innerHTML = "";
+      tbodyRetidos.innerHTML = "";
+      resultadoTotalRetidos.textContent = "0 resultado(s)";
+      resultadoVazioRetidos.style.display = "block";
+      filtroTransportadora.innerHTML = '<option value="">Todas</option>';
+    }
+
+    function renderizarRetidos(headers, rows) {
+      limparTabelaRetidos();
+
+      if (!rows.length) return;
+
+      resultadoVazioRetidos.style.display = "none";
+      resultadoTotalRetidos.textContent = rows.length + " resultado(s)";
+
+      const trHead = document.createElement("tr");
+
+      headers.forEach(h => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        trHead.appendChild(th);
+      });
+
+      theadRetidos.appendChild(trHead);
+
+      const transportadoras = new Set();
+
+      rows.forEach(row => {
+        const tr = document.createElement("tr");
+
+        row.forEach(val => {
+          const td = document.createElement("td");
+          td.innerHTML = escapeHtml(val);
+          tr.appendChild(td);
+        });
+
+        tbodyRetidos.appendChild(tr);
+        transportadoras.add(row[4]);
+      });
+
+      transportadoras.forEach(t => {
+        const opt = document.createElement("option");
+        opt.value = t;
+        opt.textContent = t;
+        filtroTransportadora.appendChild(opt);
+      });
+    }
+
+    filtroTransportadora.onchange = () => {
+      const filtro = filtroTransportadora.value;
+
+      Array.from(tbodyRetidos.children).forEach(tr => {
+        const t = tr.children[4]?.textContent || "";
+        tr.style.display = (!filtro || filtro === t) ? "" : "none";
+      });
+    };
+
+    async function carregarPainelRetidos() {
+      try {
+        const res = await fetch(WEBAPP_URL + "?acao=listarRetidosAguardando&t=" + Date.now());
+        const data = await res.json();
+
+        if (!data.ok) {
+          limparTabelaRetidos();
+          return;
+        }
+
+        renderizarRetidos(data.headers || [], data.rows || []);
+      } catch {
+        limparTabelaRetidos();
+      }
+    }
+
+    function limparTabelaRanking() {
+      theadRanking.innerHTML = "";
+      tbodyRanking.innerHTML = "";
+      resultadoTotalRanking.textContent = "0 motorista(s)";
+      resultadoVazioRanking.style.display = "block";
+    }
+
+    function renderizarRanking(headers, rows) {
+      limparTabelaRanking();
+
+      if (!rows || !rows.length) return;
+
+      resultadoVazioRanking.style.display = "none";
+      resultadoTotalRanking.textContent = rows.length + " motorista(s)";
+
+      const trHead = document.createElement("tr");
+
+      headers.forEach(h => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        trHead.appendChild(th);
+      });
+
+      theadRanking.appendChild(trHead);
+
+      rows.forEach(row => {
+        const tr = document.createElement("tr");
+
+        row.forEach(val => {
+          const td = document.createElement("td");
+          td.textContent = val;
+          tr.appendChild(td);
+        });
+
+        tbodyRanking.appendChild(tr);
+      });
+    }
+
+    async function carregarRankingMotoristas() {
+      try {
+        const res = await fetch(WEBAPP_URL + "?acao=listarRankingMotoristasAguardando&t=" + Date.now());
+        const data = await res.json();
+
+        if (!data.ok) {
+          limparTabelaRanking();
+          return;
+        }
+
+        renderizarRanking(data.headers || [], data.rows || []);
+      } catch {
+        limparTabelaRanking();
+      }
+    }
+
+    function atualizarFilaRegularizacaoUI() {
+      const total = filaRegularizacao.length;
+      filaRegularizacaoResumo.textContent = total + " item(ns) na fila";
+
+      if (!total) {
+        filaRegularizacaoLista.innerHTML = "Nenhum código pendente.";
+        return;
+      }
+
+      filaRegularizacaoLista.innerHTML = filaRegularizacao
+        .slice(0, 10)
+        .map((item, idx) => {
+          const prefixo = idx === 0 && processandoFilaRegularizacao ? "⏳" : "•";
+          return `${prefixo} ${escapeHtml(item.codigo)}`;
+        })
+        .join("<br>");
+    }
+
+    function agendarAtualizacaoPaineis() {
+      clearTimeout(timerAtualizacaoPaineis);
+
+      timerAtualizacaoPaineis = setTimeout(() => {
+        carregarPainelRetidos();
+        carregarRankingMotoristas();
+      }, 800);
+    }
+
+    function codigoJaNaFila(codigo) {
+      return filaRegularizacao.some(item => item.codigo === codigo);
+    }
+
+    function adicionarCodigoNaFila() {
+      const codigoOriginal = codigoRegularizar.value.trim();
+      const codigo = extrairConhecimentoDoCte(codigoOriginal);
+
+      if (!codigo) {
+        mostrarStatus("erro", "Informe o código");
+        codigoRegularizar.value = "";
+        codigoRegularizar.focus();
+        return;
+      }
+
+      if (codigoJaNaFila(codigo)) {
+        mostrarStatus("aviso", "Esse CT-e já está na fila");
+        codigoRegularizar.value = "";
+        codigoRegularizar.focus();
+        return;
+      }
+
+      filaRegularizacao.push({
+        codigo,
+        codigoOriginal
+      });
+
+      codigoRegularizar.value = "";
+      codigoRegularizar.focus();
+
+      atualizarFilaRegularizacaoUI();
+      mostrarStatus("aviso", `${codigo} adicionado à fila`);
+
+      processarFilaRegularizacao();
+    }
+
+    async function processarFilaRegularizacao() {
+      if (processandoFilaRegularizacao) return;
+      if (!filaRegularizacao.length) return;
+
+      processandoFilaRegularizacao = true;
+      atualizarFilaRegularizacaoUI();
+
+      while (filaRegularizacao.length) {
+        const item = filaRegularizacao[0];
+
+        mostrarStatus(
+          "aviso",
+          `Processando ${item.codigo}... (${filaRegularizacao.length} na fila)`
+        );
+
+        try {
+          const res = await fetch(WEBAPP_URL, {
+            method: "POST",
+            body: new URLSearchParams({
+              acao: "regularizarRetido",
+              codigo: item.codigo,
+              codigoOriginal: item.codigoOriginal
+            })
+          });
+
+          const data = await res.json();
+
+          if (data.ok) {
+            mostrarStatus(
+              "ok",
+              `${item.codigo} regularizado. Restam ${filaRegularizacao.length - 1} na fila`
+            );
+          } else {
+            mostrarStatus(
+              "erro",
+              `${item.codigo}: ${data.mensagem || "Nenhum retido encontrado"}`
+            );
+          }
+
+        } catch {
+          mostrarStatus("erro", `${item.codigo}: erro de conexão`);
+        }
+
+        filaRegularizacao.shift();
+        atualizarFilaRegularizacaoUI();
+        agendarAtualizacaoPaineis();
+      }
+
+      processandoFilaRegularizacao = false;
+      atualizarFilaRegularizacaoUI();
+      carregarPainelRetidos();
+      carregarRankingMotoristas();
+      codigoRegularizar.focus();
+    }
+
+    // ===== AÇÕES =====
+    btnLancarRetidos.onclick = async () => {
+      const romaneio = romaneioRetido.value.trim();
+      const minutas = normalizarMinutas(minutasRetidas.value);
+
+      if (!romaneio) {
+        mostrarStatus("erro", "Informe o romaneio");
+        romaneioRetido.focus();
+        return;
+      }
+
+      if (!minutas.length) {
+        mostrarStatus("erro", "Informe as minutas");
+        minutasRetidas.focus();
+        return;
+      }
+
+      mostrarStatus("aviso", "Lançando...");
+
+      try {
+        const res = await fetch(WEBAPP_URL, {
+          method: "POST",
+          body: new URLSearchParams({
+            acao: "lancarRetidos",
+            romaneio,
+            minutas: JSON.stringify(minutas)
+          })
+        });
+
+        const data = await res.json();
+
+        if (!data.ok) {
+          mostrarStatus("erro", data.mensagem || "Erro ao lançar");
+          return;
+        }
+
+        const autoTxt = data.autoRegularizadas
+          ? ` (${data.autoRegularizadas} auto-regularizada(s))`
+          : "";
+
+        mostrarStatus("ok", "Lançado com sucesso" + autoTxt);
+
+        romaneioRetido.value = "";
+        minutasRetidas.value = "";
+        romaneioRetido.focus();
+
+        carregarPainelRetidos();
+        carregarRankingMotoristas();
+
+      } catch {
+        mostrarStatus("erro", "Erro de conexão");
+      }
+    };
+
+    btnRegularizarRetido.onclick = () => {
+      adicionarCodigoNaFila();
+    };
+
+    btnLimparLancamento.onclick = () => {
+      romaneioRetido.value = "";
+      minutasRetidas.value = "";
+      romaneioRetido.focus();
+    };
+
+    btnLimparRegularizacao.onclick = () => {
+      codigoRegularizar.value = "";
+      codigoRegularizar.focus();
+    };
+
+    codigoRegularizar.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        btnRegularizarRetido.click();
+      }
+    });
+
+    codigoRegularizar.addEventListener("change", () => {
+      codigoRegularizar.value = extrairConhecimentoDoCte(codigoRegularizar.value);
+    });
+
+    // ===== INIT =====
+    carregarPainelRetidos();
+    carregarRankingMotoristas();
+    atualizarFilaRegularizacaoUI();
+  </script>
+
+</body>
+</html>

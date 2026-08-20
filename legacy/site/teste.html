@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Capas PDF - M V F</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="menu-overlay" id="menuOverlay"></div>
+
+  <aside class="side-menu" id="sideMenu">
+    <div class="side-menu-topo">
+      <h3>Menu</h3>
+      <button class="fechar-menu" id="btnFecharMenu" type="button">&times;</button>
+    </div>
+    <nav class="menu-links">
+  <a href="index.html" data-page="index">Início</a>
+  <a href="relatorios.html" data-page="relatorios">Relatórios</a>
+  <a href="banco_dados.html" data-page="banco">Banco de Dados</a>
+  <a href="capas.html" data-page="capas">Capas</a>
+  <a href="devolucao.html" data-page="devolucao">Devolução</a>
+  <a href="configuracoes.html" data-page="configuracoes">Configurações</a>
+</nav>
+  </aside>
+
+  <div class="app">
+    <div class="topbar">
+
+  <div class="topbar-left">
+
+    <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+    <div class="logo-pequena-area">
+      <img src="img/logo.png" alt="Logo MVF" class="logo-pequena">
+    </div>
+
+  </div>
+
+</div>
+      
+      <div class="page-badge">Capas PDF</div>
+    </div>
+
+    <div class="painel">
+      <h1>Gerar capas em PDF</h1>
+      <div class="sub">Selecione o destino e gere a capa correspondente</div>
+
+      <label class="label">Destino</label>
+      <select id="destinoPdf">
+        <option value="TRD">TRD</option>
+        <option value="ARGIUS">ARGIUS</option>
+        <option value="DISPLAN">DISPLAN</option>
+        <option value="NOVO">NOVO</option>
+      </select>
+
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn primario" type="button" id="btnGerarPdf">Gerar PDF</button>
+      </div>
+
+      <div id="statusPdf" class="status"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    iniciarMenu("capas");
+
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbz2iyQyAPrLLxFuiPXiB9Ji9gUt6NurloDepFeZNJymIaQOdyoJah4D5JxSvhPg1InH-Q/exec";
+    const btnGerarPdf = document.getElementById("btnGerarPdf");
+    const destinoPdf = document.getElementById("destinoPdf");
+    const statusPdf = document.getElementById("statusPdf");
+
+    function mostrarStatus(tipo, mensagem) {
+      statusPdf.className = "status " + tipo;
+      statusPdf.textContent = mensagem;
+    }
+
+    btnGerarPdf.addEventListener("click", async () => {
+      try {
+        const destino = destinoPdf.value;
+        mostrarStatus("aviso", "Gerando PDF da capa " + destino + "...");
+
+        const resposta = await fetch(
+          WEBAPP_URL + "?acao=pdfCapa&destino=" + encodeURIComponent(destino)
+        );
+
+        const data = await resposta.json();
+
+        if (!data.ok) {
+          mostrarStatus("erro", data.mensagem || "Não foi possível gerar o PDF.");
+          return;
+        }
+
+        const bytes = atob(data.base64);
+        const array = new Uint8Array(bytes.length);
+
+        for (let i = 0; i < bytes.length; i++) {
+          array[i] = bytes.charCodeAt(i);
+        }
+
+        const blob = new Blob([array], {
+          type: data.mimeType || "application/pdf"
+        });
+
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank");
+
+        mostrarStatus("ok", "PDF gerado com sucesso: " + (data.nome || ""));
+      } catch (e) {
+        mostrarStatus("erro", "Erro ao gerar o PDF.");
+      }
+    });
+  </script>
+</body>
+</html>

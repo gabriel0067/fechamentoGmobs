@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Relatórios - M V F</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="menu-overlay" id="menuOverlay"></div>
+
+  <aside class="side-menu" id="sideMenu">
+    <div class="side-menu-topo">
+      <h3>Menu</h3>
+      <button class="fechar-menu" id="btnFecharMenu" type="button">&times;</button>
+    </div>
+    <nav class="menu-links">
+      <a href="index.html" data-page="index">Início</a>
+      <a href="relatorios.html" data-page="relatorios">Relatórios</a>
+      <a href="capas.html" data-page="capas">Capas PDF</a>
+      <a href="historico.html" data-page="historico">Histórico</a>
+      <a href="configuracoes.html" data-page="configuracoes">Configurações</a>
+    </nav>
+  </aside>
+
+  <div class="app">
+    <div class="topbar">
+  <div class="topbar-left">
+    <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+    <div class="logo-pequena-area">
+      <img src="img/logo.png" alt="Logo MVF" class="logo-pequena" />
+    </div>
+  </div>
+</div>
+      <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+      <div class="topbar-title">M V F</div>
+      <div class="page-badge">Relatórios</div>
+    </div>
+
+    <div class="painel">
+      <h1>Relatórios</h1>
+      <div class="sub">Área para seus relatórios futuros</div>
+
+      <div class="grid-2">
+        <div>
+          <label class="label">Tipo de relatório</label>
+          <select>
+            <option>Relatório diário</option>
+            <option>Relatório por destino</option>
+            <option>Relatório mensal</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="label">Destino</label>
+          <select>
+            <option>TRD</option>
+            <option>ARGIUS</option>
+            <option>DISPLAN</option>
+            <option>NOVO</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="acoes" style="margin-top:14px;">
+        <button class="btn primario" type="button">Gerar relatório</button>
+        <button class="btn secundario" type="button">Exportar Excel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    iniciarMenu("relatorios");
+  </script>
+</body>
+</html>

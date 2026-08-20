@@ -1,0 +1,431 @@
+.pagina-faturas {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+  color: #f8fafc;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.pagina-faturas * {
+  box-sizing: border-box;
+}
+
+.pagina-faturas .app {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.pagina-faturas .topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 18px;
+}
+
+.pagina-faturas .topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pagina-faturas .menu-btn {
+  border: 1px solid #334155;
+  background: rgba(17, 24, 39, 0.95);
+  color: #f8fafc;
+  font-size: 24px;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  cursor: pointer;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+}
+
+.pagina-faturas .menu-btn:hover {
+  background: #1e293b;
+}
+
+.pagina-faturas .logo-pequena-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: 200px;
+  overflow: hidden;
+}
+
+.pagina-faturas .logo-pequena {
+  max-height: 160px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+.pagina-faturas .painel {
+  background: rgba(17, 24, 39, 0.95);
+  border: 1px solid #334155;
+  border-radius: 18px;
+  padding: 18px;
+  margin-bottom: 18px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+}
+
+.pagina-faturas h1 {
+  margin: 0 0 8px 0;
+  font-size: 28px;
+  text-align: center;
+}
+
+.pagina-faturas h2 {
+  margin: 0 0 12px 0;
+  font-size: 20px;
+  text-align: center;
+}
+
+.pagina-faturas .sub {
+  color: #94a3b8;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.pagina-faturas .grupoParceiros {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.pagina-faturas .btnParceiro {
+  width: 100%;
+  min-height: 62px;
+  border: 2px solid #334155;
+  background: #1f2937;
+  color: #f8fafc;
+  padding: 14px 10px;
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  transition: 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  outline: none;
+  user-select: none;
+}
+
+.pagina-faturas .btnParceiro:hover {
+  transform: translateY(-1px);
+  border-color: #60a5fa;
+}
+
+.pagina-faturas .btnParceiro:focus {
+  outline: none;
+}
+
+.pagina-faturas .btnParceiro.ativo {
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  border-color: #93c5fd;
+  color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.35);
+  transform: scale(1.04);
+}
+
+.pagina-faturas label {
+  display: block;
+  margin-top: 18px;
+  margin-bottom: 8px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.pagina-faturas #valorFatura,
+.pagina-faturas #quinzena,
+.pagina-faturas #filtroParceiro,
+.pagina-faturas #filtroQuinzena,
+.pagina-faturas #pesquisa {
+  width: 100%;
+  padding: 16px;
+  font-size: 18px;
+  border-radius: 16px;
+  border: 2px solid #334155;
+  background: #020617;
+  color: white;
+  outline: none;
+}
+
+.pagina-faturas #valorFatura {
+  text-align: center;
+  letter-spacing: 1px;
+  font-size: 22px;
+}
+
+.pagina-faturas #valorFatura:focus,
+.pagina-faturas #quinzena:focus,
+.pagina-faturas #filtroParceiro:focus,
+.pagina-faturas #filtroQuinzena:focus,
+.pagina-faturas #pesquisa:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.2);
+}
+
+.pagina-faturas .btn {
+  border: none;
+  padding: 14px 18px;
+  border-radius: 14px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 15px;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.pagina-faturas .primario {
+  background: #2563eb;
+  color: white;
+}
+
+.pagina-faturas .secundario {
+  background: #374151;
+  color: white;
+}
+
+.pagina-faturas #mensagem.status {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 14px;
+  font-weight: bold;
+  display: none;
+}
+
+.pagina-faturas #mensagem.status.ok {
+  display: block;
+  background: rgba(22, 163, 74, 0.18);
+  border: 1px solid rgba(34, 197, 94, 0.5);
+  color: #86efac;
+}
+
+.pagina-faturas #mensagem.status.erro {
+  display: block;
+  background: rgba(220, 38, 38, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  color: #fca5a5;
+}
+
+.pagina-faturas #mensagem.status.aviso {
+  display: block;
+  background: rgba(245, 158, 11, 0.18);
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  color: #fde68a;
+}
+
+.pagina-faturas .filtros {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.pagina-faturas .cardsResumo {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  margin-bottom: 18px;
+}
+
+.pagina-faturas .cardResumo {
+  background: #1f2937;
+  border: 1px solid #334155;
+  border-radius: 14px;
+  padding: 14px;
+  text-align: center;
+}
+
+.pagina-faturas .cardResumo h3 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pagina-faturas .cardResumo span {
+  font-size: 24px;
+  font-weight: bold;
+  color: #e2e8f0;
+}
+
+.pagina-faturas .resumo-periodo {
+  margin-top: 18px;
+  background: #0b1220;
+  border: 1px solid #334155;
+  border-radius: 16px;
+  padding: 18px;
+}
+
+.pagina-faturas .resumo-cabecalho {
+  text-align: center;
+  margin-bottom: 18px;
+}
+
+.pagina-faturas .resumo-titulo {
+  font-size: 14px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.pagina-faturas .resumo-periodo-nome {
+  font-size: 22px;
+  font-weight: bold;
+  color: #38bdf8;
+}
+
+.pagina-faturas .resumo-tabela {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.pagina-faturas .resumo-tabela th,
+.pagina-faturas .resumo-tabela td {
+  padding: 12px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+  text-align: left;
+}
+
+.pagina-faturas .resumo-tabela th {
+  color: #94a3b8;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pagina-faturas .resumo-tabela td:last-child,
+.pagina-faturas .resumo-tabela th:last-child {
+  text-align: right;
+}
+
+.pagina-faturas .resumo-linha:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.pagina-faturas .menu-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.25s;
+  z-index: 998;
+}
+
+.pagina-faturas .menu-overlay.aberto {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pagina-faturas .side-menu {
+  position: fixed;
+  top: 0;
+  left: -290px;
+  width: 270px;
+  height: 100vh;
+  background: #0b1220;
+  border-right: 1px solid #334155;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.35);
+  transition: left 0.25s ease;
+  z-index: 999;
+  padding: 18px;
+}
+
+.pagina-faturas .side-menu.aberto {
+  left: 0;
+}
+
+.pagina-faturas .side-menu-topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.pagina-faturas .side-menu h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.pagina-faturas .fechar-menu {
+  background: transparent;
+  border: none;
+  color: #f8fafc;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.pagina-faturas .menu-user {
+  background: #020617;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 15px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.pagina-faturas .menu-links {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pagina-faturas .menu-links a {
+  text-decoration: none;
+  color: #f8fafc;
+  background: #1f2937;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 14px;
+  font-weight: bold;
+  transition: 0.2s;
+}
+
+.pagina-faturas .menu-links a:hover,
+.pagina-faturas .menu-links a.ativo {
+  background: #2563eb;
+  border-color: #60a5fa;
+}
+
+.pagina-faturas .badge-menu {
+  background: #dc2626;
+  color: white;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+@media (max-width: 700px) {
+  .pagina-faturas .cardsResumo {
+    grid-template-columns: 1fr;
+  }
+
+  .pagina-faturas .filtros {
+    grid-template-columns: 1fr;
+  }
+
+  .pagina-faturas .grupoParceiros {
+    grid-template-columns: 1fr;
+  }
+
+  .pagina-faturas h1 {
+    font-size: 22px;
+  }
+
+  .pagina-faturas #valorFatura {
+    font-size: 18px;
+  }
+}

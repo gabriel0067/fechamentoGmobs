@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Devolução - M V F</title>
+<link rel="stylesheet" href="/style.css">
+<script type="text/javascript" src="https://gc.kis.v2.scr.kaspersky-labs.com/FD126C42-EBFA-4E12-B309-BB3FDD723AC1/main.js?attr=Ac9VDrjYTiMeYOlBafhuyXgI25h4CdQPaPyGMUp1I2L1dyrqAgM9M0hmn8WWNdaU-O7dYvPYXc9kRKQQ-zm2C-ys4kx1N7uPb7iI9VCVLwrSIk0r5UUifumqXtXneVDiqmWyxRHmBRyBIxzC72Dk0XScD-OaMO2ETCEMZ8OtN9_PnqBfUjtlWGOHLhCZC11QdE6vwu9AaX6tRZjB-x8ZLYRLXkfc6Ih8odwIcUeVA9CQ3t-deQrfCQ_EUQKNzncobC9t2QxUZJ7sZYBCoEp0kw" charset="UTF-8"></script><style>
+.tipo-operacao { display: flex; gap: 10px; margin-top: 15px; }
+.tipo-operacao button { flex: 1; padding: 14px; border-radius: 12px; border: 2px solid #334155; background: #1f2937; color: white; font-weight: bold; cursor: pointer; }
+.tipo-operacao button.ativo { background: #2563eb; border-color: #60a5fa; }
+.usuario-box { margin-top: 14px; padding: 12px 14px; border: 1px solid #334155; border-radius: 12px; background: rgba(15, 23, 42, 0.6); color: #e2e8f0; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.usuario-box strong { color: #fff; }
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="topbar">
+  <div class="topbar-left">
+    <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+    <div class="logo-pequena-area">
+      <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+    </div>
+  </div>
+</div>
+
+<div class="painel">
+  <h1>Registro de Operações</h1>
+  <div class="sub">Escolha o tipo de registro</div>
+
+  <div class="usuario-box">
+    <div>Usuário atual: <strong id="usuarioAtualInfo">não definido</strong></div>
+    <a href="/configuracoes.html" class="btn suave">Definir usuário</a>
+  </div>
+
+  <div class="tipo-operacao">
+    <button id="btnDevolucao" class="ativo" type="button">DEVOLUÇÃO</button>
+    <button id="btnColeta" type="button">COLETAS</button>
+  </div>
+</div>
+
+<div class="painel">
+  <div class="label">Selecione o destino</div>
+  <div class="destinos">
+    <button class="destino-btn ativo" data-destino="TRD" type="button">TRD</button>
+    <button class="destino-btn" data-destino="ARGIUS" type="button">ARGIUS</button>
+    <button class="destino-btn" data-destino="DISPLAN" type="button">DISPLAN</button>
+    <button class="destino-btn" data-destino="RIO VERMELHO" type="button">RIO VERMELHO</button>
+    <button class="destino-btn" data-destino="D&Y" type="button">D&Y</button>
+    <button class="destino-btn" data-destino="PAJU" type="button">PAJU</button>
+  </div>
+
+  <form id="formEnvio">
+    <input type="hidden" id="destino" value="TRD">
+    <input type="hidden" id="tipo" value="DEVOLUCAO">
+
+    <label class="label">Chave do CTe</label>
+    <input class="input-chave" type="text" id="chave" maxlength="44" inputmode="numeric" autocomplete="off" placeholder="Bipe ou digite até 44 dígitos">
+
+    <div class="grid-2">
+      <div>
+        <label class="label">Número da NF</label>
+        <input class="input-padrao" id="nf">
+      </div>
+      <div>
+        <label class="label">Volumes</label>
+        <input class="input-padrao" id="volumes">
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div>
+        <label class="label">Remetente</label>
+        <input class="input-padrao" id="remetente">
+      </div>
+      <div>
+        <label class="label">Destinatário</label>
+        <input class="input-padrao" id="destinatario">
+      </div>
+    </div>
+
+    <label class="label">Valor</label>
+    <input class="input-padrao" id="valor">
+
+    <div class="acoes">
+      <button type="submit" class="btn primario">Enviar</button>
+      <button type="button" class="btn secundario" id="btnLimpar">Limpar</button>
+      <button type="button" class="btn suave" id="btnPdf">Gerar PDF</button>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <div class="linha-info">
+      <span id="infoDestino">Destino: TRD</span>
+      <span id="infoUltima">Última leitura: nenhuma</span>
+    </div>
+  </form>
+</div>
+
+<div class="painel">
+  <h2>Últimos envios</h2>
+  <div id="historicoLista"></div>
+</div>
+
+</div>
+
+<script src="/app.js"></script>
+<script>
+iniciarMenu("devolucao");
+
+const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbyZbBULHn6gpT6acaricvU1cRMk8WSChD3DmxpKDa6sZQaCzwqY4u3UQLE70p68ZeFEvA/exec";
+
+const form = document.getElementById("formEnvio");
+const inputChave = document.getElementById("chave");
+const inputDestino = document.getElementById("destino");
+const inputTipo = document.getElementById("tipo");
+const inputNf = document.getElementById("nf");
+const inputVolumes = document.getElementById("volumes");
+const inputRemetente = document.getElementById("remetente");
+const inputDestinatario = document.getElementById("destinatario");
+const inputValor = document.getElementById("valor");
+
+const btnDevolucao = document.getElementById("btnDevolucao");
+const btnColeta = document.getElementById("btnColeta");
+const btnLimpar = document.getElementById("btnLimpar");
+const btnPdf = document.getElementById("btnPdf");
+
+const statusBox = document.getElementById("status");
+const infoDestino = document.getElementById("infoDestino");
+const infoUltima = document.getElementById("infoUltima");
+const usuarioAtualInfo = document.getElementById("usuarioAtualInfo");
+
+let enviando = false;
+let buscandoDados = false;
+let ultimaChaveConsultada = "";
+let timerBusca = null;
+
+const STORAGE_DESTINO = "mvf_devolucao_destino";
+const STORAGE_TIPO = "mvf_devolucao_tipo";
+const STORAGE_USUARIO = "mvf_usuario_nome";
+const STORAGE_MAQUINA = "mvf_maquina_id";
+
+function gerarIdMaquina() {
+  return "maq_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function obterMaquinaId() {
+  let maquinaId = localStorage.getItem(STORAGE_MAQUINA);
+  if (!maquinaId) {
+    maquinaId = gerarIdMaquina();
+    localStorage.setItem(STORAGE_MAQUINA, maquinaId);
+  }
+  return maquinaId;
+}
+
+function obterUsuario() {
+  return (localStorage.getItem(STORAGE_USUARIO) || "").trim();
+}
+
+function atualizarUsuarioNaTela() {
+  const usuario = obterUsuario();
+  usuarioAtualInfo.textContent = usuario || "não definido";
+}
+
+function salvarDestino(destino) {
+  inputDestino.value = destino;
+  localStorage.setItem(STORAGE_DESTINO, destino);
+  infoDestino.textContent = "Destino: " + destino;
+
+  document.querySelectorAll(".destino-btn").forEach(btn => {
+    btn.classList.toggle("ativo", btn.dataset.destino === destino);
+  });
+}
+
+function salvarTipo(tipo) {
+  inputTipo.value = tipo;
+  localStorage.setItem(STORAGE_TIPO, tipo);
+  btnDevolucao.classList.toggle("ativo", tipo === "DEVOLUCAO");
+  btnColeta.classList.toggle("ativo", tipo === "COLETA");
+}
+
+function restaurarPreferencias() {
+  const destinoSalvo = localStorage.getItem(STORAGE_DESTINO) || "TRD";
+  const tipoSalvo = localStorage.getItem(STORAGE_TIPO) || "DEVOLUCAO";
+  salvarDestino(destinoSalvo);
+  salvarTipo(tipoSalvo);
+  atualizarUsuarioNaTela();
+  obterMaquinaId();
+}
+
+function mostrarStatus(tipo, msg) {
+  statusBox.className = "status " + (tipo || "");
+  statusBox.textContent = msg || "";
+}
+
+function limparCamposDados() {
+  inputNf.value = "";
+  inputVolumes.value = "";
+  inputRemetente.value = "";
+  inputDestinatario.value = "";
+  inputValor.value = "";
+}
+
+function limparCamposFormulario() {
+  inputChave.value = "";
+  limparCamposDados();
+  ultimaChaveConsultada = "";
+}
+
+function chamarWebAppJsonp(params) {
+  return new Promise((resolve, reject) => {
+    const callbackName = "mvfJsonp_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+    const script = document.createElement("script");
+    const url = new URL(WEBAPP_URL);
+
+    Object.entries(params || {}).forEach(([chave, valor]) => {
+      url.searchParams.set(chave, valor == null ? "" : String(valor));
+    });
+    url.searchParams.set("callback", callbackName);
+
+    const timeout = setTimeout(() => {
+      limpar();
+      reject(new Error("Tempo esgotado ao consultar o servidor."));
+    }, 20000);
+
+    function limpar() {
+      clearTimeout(timeout);
+      if (script.parentNode) script.parentNode.removeChild(script);
+      try { delete window[callbackName]; } catch (e) { window[callbackName] = undefined; }
+    }
+
+    window[callbackName] = function(resposta) {
+      limpar();
+      resolve(resposta);
+    };
+
+    script.onerror = function() {
+      limpar();
+      reject(new Error("Falha na comunicação com o Web App."));
+    };
+
+    script.src = url.toString();
+    document.body.appendChild(script);
+  });
+}
+
+async function buscarDadosCte(chave) {
+  return chamarWebAppJsonp({
+    acao: "buscarDadosCte",
+    chave
+  });
+}
+
+async function preencherDadosPorChave(chave) {
+  const chaveLimpa = String(chave || "").replace(/\D/g, "");
+
+  if (chaveLimpa.length !== 44) {
+    return;
+  }
+
+  if (buscandoDados || ultimaChaveConsultada === chaveLimpa) {
+    return;
+  }
+
+  buscandoDados = true;
+  limparCamposDados();
+  mostrarStatus("", "Buscando dados do CT-e...");
+
+  try {
+    const resposta = await buscarDadosCte(chaveLimpa);
+
+    if (!resposta || !resposta.ok) {
+      ultimaChaveConsultada = chaveLimpa;
+      mostrarStatus("aviso", (resposta && resposta.mensagem) || "CT-e não encontrado na base.");
+      return;
+    }
+
+    const dados = resposta.dados || {};
+    inputNf.value = dados.nf || "";
+    inputRemetente.value = dados.remetente || "";
+    inputDestinatario.value = dados.destinatario || "";
+    inputVolumes.value = dados.volumes || "";
+    inputValor.value = dados.valor || "";
+
+    ultimaChaveConsultada = chaveLimpa;
+    mostrarStatus("ok", "Dados carregados do BANCO_DE_DADOS. Você pode alterar qualquer campo antes de enviar.");
+  } catch (erro) {
+    console.error(erro);
+    mostrarStatus("erro", "Erro ao buscar dados do CT-e.");
+  } finally {
+    buscandoDados = false;
+  }
+}
+
+btnDevolucao.onclick = () => salvarTipo("DEVOLUCAO");
+btnColeta.onclick = () => salvarTipo("COLETA");
+
+document.querySelectorAll(".destino-btn").forEach(btn => {
+  btn.onclick = () => salvarDestino(btn.dataset.destino);
+});
+
+btnLimpar.onclick = () => {
+  limparCamposFormulario();
+  inputChave.focus();
+  mostrarStatus("", "");
+};
+
+inputChave.addEventListener("input", function() {
+  this.value = this.value.replace(/\D/g, "");
+
+  if (this.value !== ultimaChaveConsultada) {
+    ultimaChaveConsultada = "";
+  }
+
+  if (timerBusca) {
+    clearTimeout(timerBusca);
+  }
+
+  if (this.value.length === 44) {
+    timerBusca = setTimeout(() => {
+      preencherDadosPorChave(this.value);
+    }, 180);
+  }
+});
+
+inputChave.addEventListener("blur", function() {
+  const chaveLimpa = this.value.replace(/\D/g, "");
+  if (chaveLimpa.length === 44) {
+    preencherDadosPorChave(chaveLimpa);
+  }
+});
+
+const ordemCampos = [inputChave, inputNf, inputVolumes, inputRemetente, inputDestinatario, inputValor];
+ordemCampos.forEach((campo, indice) => {
+  campo.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const ultimoCampo = indice === ordemCampos.length - 1;
+    if (!ultimoCampo) {
+      ordemCampos[indice + 1].focus();
+      ordemCampos[indice + 1].select?.();
+      return;
+    }
+    enviarFormulario();
+  });
+});
+
+async function enviarFormulario() {
+  if (enviando) return;
+
+  const usuario = obterUsuario();
+  const maquinaId = obterMaquinaId();
+
+  if (!usuario) {
+    mostrarStatus("erro", "Defina o usuário na página Configurações antes de enviar");
+    return;
+  }
+
+  if (!inputChave.value.trim()) {
+    mostrarStatus("erro", "Informe a chave antes de enviar.");
+    inputChave.focus();
+    return;
+  }
+
+  enviando = true;
+  mostrarStatus("", "Enviando...");
+
+  try {
+    const data = await chamarWebAppJsonp({
+      acao: "salvarLogDevolucao",
+      tipo: inputTipo.value,
+      destino: inputDestino.value,
+      chave: inputChave.value,
+      nf: inputNf.value,
+      remetente: inputRemetente.value,
+      destinatario: inputDestinatario.value,
+      volumes: inputVolumes.value,
+      valor: inputValor.value,
+      usuario,
+      maquinaId
+    });
+
+    if (data && data.ok) {
+      mostrarStatus("ok", "Salvo com sucesso");
+      infoUltima.textContent = "Última leitura: " + new Date().toLocaleString("pt-BR");
+      limparCamposFormulario();
+      inputChave.focus();
+    } else {
+      mostrarStatus("erro", (data && data.mensagem) || "Erro ao salvar");
+    }
+  } catch (e) {
+    console.error(e);
+    mostrarStatus("erro", "Erro de conexão");
+  } finally {
+    enviando = false;
+  }
+}
+
+form.addEventListener("submit", e => {
+  e.preventDefault();
+  enviarFormulario();
+});
+
+btnPdf.onclick = async () => {
+  const destino = inputDestino.value;
+  const tipo = inputTipo.value;
+
+  try {
+    mostrarStatus("", "Gerando PDF...");
+
+    const data = await chamarWebAppJsonp({
+      acao: "gerarPdfFinal",
+      tipo,
+      destino
+    });
+
+    if (!data || !data.ok) {
+      mostrarStatus("erro", (data && data.mensagem) || "Erro ao gerar PDF.");
+      return;
+    }
+
+    const bytes = atob(data.base64);
+    const array = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) {
+      array[i] = bytes.charCodeAt(i);
+    }
+
+    const blob = new Blob([array], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    mostrarStatus("ok", "PDF gerado com sucesso.");
+  } catch (err) {
+    console.error(err);
+    mostrarStatus("erro", "Falha ao gerar PDF: " + err.message);
+  }
+};
+
+restaurarPreferencias();
+</script>
+</body>
+</html>

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDFs - M V F</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <div class="app">
+
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="menu-btn" id="btnAbrirMenu" type="button">☰</button>
+
+        <div class="logo-pequena-area">
+          <img src="/img/logo.png" alt="Logo MVF" class="logo-pequena">
+        </div>
+      </div>
+    </div>
+
+    <div class="painel">
+      <h1>Gerar PDF - Recibos</h1>
+
+      <div class="sub">
+        Selecione o motorista e o período para preencher a aba Recibos e gerar o PDF
+      </div>
+
+      <label class="label">Motorista</label>
+      <select id="motorista" class="input-padrao">
+        <option value="">Carregando motoristas...</option>
+      </select>
+
+      <div class="grid-2">
+        <div>
+          <label class="label">Data inicial</label>
+          <input type="date" id="dataInicial" class="input-padrao">
+        </div>
+
+        <div>
+          <label class="label">Data final</label>
+          <input type="date" id="dataFinal" class="input-padrao">
+        </div>
+      </div>
+
+      <div class="acoes" style="margin-top:15px;">
+        <button class="btn primario" id="btnGerarPdf" type="button">
+          Gerar PDF
+        </button>
+
+        <a href="/calculos.html" class="btn secundario">
+          Voltar para cálculos
+        </a>
+      </div>
+
+      <div id="statusPdf" class="status"></div>
+    </div>
+
+  </div>
+
+  <script src="/app.js"></script>
+
+  <script>
+    iniciarMenu("pdfs");
+
+    const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxN_rSiNwXi09fWqno65zSW_w8TSDjyx9tWdJd4SYz1DeynKW3r-T_7smjmt2Zhr5_D/exec";
+
+    const selectMotorista = document.getElementById("motorista");
+    const inputDataInicial = document.getElementById("dataInicial");
+    const inputDataFinal = document.getElementById("dataFinal");
+    const btnGerarPdf = document.getElementById("btnGerarPdf");
+    const statusBox = document.getElementById("statusPdf");
+
+    function mostrarStatus(tipo, msg) {
+      statusBox.className = "status " + tipo;
+      statusBox.textContent = msg;
+    }
+
+    function formatarDataParaPlanilha(dataIso) {
+      if (!dataIso) return "";
+      const [ano, mes, dia] = dataIso.split("-");
+      return `${dia}/${mes}/${ano}`;
+    }
+
+    async function carregarMotoristas() {
+      try {
+        mostrarStatus("aviso", "Carregando motoristas...");
+
+        const resposta = await fetch(
+          WEBAPP_URL + "?acao=listarMotoristasCalculos&t=" + Date.now()
+        );
+
+        const data = await resposta.json();
+
+        if (!data.ok) {
+          selectMotorista.innerHTML = `<option value="">Erro ao carregar</option>`;
+          mostrarStatus("erro", data.mensagem || "Erro ao carregar motoristas");
+          return;
+        }
+
+        const motoristas = data.motoristas || [];
+
+        if (!motoristas.length) {
+          selectMotorista.innerHTML = `<option value="">Nenhum motorista encontrado</option>`;
+          mostrarStatus("erro", "Nenhum motorista encontrado na aba Calculos");
+          return;
+        }
+
+        selectMotorista.innerHTML =
+          `<option value="">Selecione um motorista</option>` +
+          motoristas.map(nome => `<option value="${nome}">${nome}</option>`).join("");
+
+        mostrarStatus("", "");
+      } catch (e) {
+        selectMotorista.innerHTML = `<option value="">Erro ao carregar</option>`;
+        mostrarStatus("erro", "Erro de conexão ao carregar motoristas");
+      }
+    }
+
+    btnGerarPdf.addEventListener("click", async () => {
+      const motorista = selectMotorista.value.trim();
+      const dataInicial = inputDataInicial.value;
+      const dataFinal = inputDataFinal.value;
+
+      if (!motorista) {
+        mostrarStatus("erro", "Selecione um motorista");
+        return;
+      }
+
+      if (!dataInicial) {
+        mostrarStatus("erro", "Selecione a data inicial");
+        return;
+      }
+
+      if (!dataFinal) {
+        mostrarStatus("erro", "Selecione a data final");
+        return;
+      }
+
+      mostrarStatus("aviso", "Gerando PDF...");
+
+      try {
+        const resposta = await fetch(
+          WEBAPP_URL +
+            "?acao=gerarPdfRecibos" +
+            "&motorista=" + encodeURIComponent(motorista) +
+            "&dataInicial=" + encodeURIComponent(formatarDataParaPlanilha(dataInicial)) +
+            "&dataFinal=" + encodeURIComponent(formatarDataParaPlanilha(dataFinal))
+        );
+
+        const data = await resposta.json();
+
+        if (!data.ok) {
+          mostrarStatus("erro", data.mensagem || "Erro ao gerar PDF");
+          return;
+        }
+
+        const bytes = atob(data.base64);
+        const array = new Uint8Array(bytes.length);
+
+        for (let i = 0; i < bytes.length; i++) {
+          array[i] = bytes.charCodeAt(i);
+        }
+
+        const blob = new Blob([array], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+
+        window.open(url, "_blank");
+        mostrarStatus("ok", "PDF gerado com sucesso");
+      } catch (e) {
+        mostrarStatus("erro", "Erro de conexão");
+      }
+    });
+
+    carregarMotoristas();
+  </script>
+
+</body>
+</html>
