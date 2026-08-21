@@ -2,18 +2,25 @@ import XLSX from "xlsx-js-style";
 
 export type ImportedRow = {
   partner: string;
+  partnerCnpj: string;
   occurrence: string;
   status: string;
   statusDescription: string;
   eligible: boolean;
   isRedelivery: boolean;
   date: string;
+  deliveryDate: string;
   cte: string;
+  cteKey: string;
   invoice: string;
   sender: string;
+  senderCnpj: string;
   recipient: string;
+  recipientCnpj: string;
   city: string;
+  observation: string;
   freight: number;
+  partnerFreight: number;
   tde: number;
   tda: number;
   trt: number;
@@ -33,6 +40,7 @@ const aliases: Record<keyof ImportedRow, string[]> = {
     "agregado",
     "nome redespacho",
   ],
+  partnerCnpj: [],
   occurrence: [
     "tipo",
     "ocorrencia",
@@ -58,6 +66,7 @@ const aliases: Record<keyof ImportedRow, string[]> = {
     "data emissao",
     "data emissão",
   ],
+  deliveryDate: ["data entrega", "dt entrega"],
   cte: [
     "cte",
     "ct e",
@@ -68,6 +77,7 @@ const aliases: Record<keyof ImportedRow, string[]> = {
     "numero cte",
     "n cte",
   ],
+  cteKey: ["chave ct e parceiro", "chave cte parceiro"],
   invoice: [
     "nf",
     "nota fiscal",
@@ -78,8 +88,11 @@ const aliases: Record<keyof ImportedRow, string[]> = {
     "n nota",
   ],
   sender: ["remetente", "origem", "cliente origem"],
+  senderCnpj: [],
   recipient: ["destinatario", "destinatário", "recebedor", "cliente destino"],
+  recipientCnpj: [],
   city: ["cidade", "destino", "municipio", "município", "rota"],
+  observation: ["observacao", "observação"],
   freight: [
     "frete",
     "frete parceiro",
@@ -89,6 +102,7 @@ const aliases: Record<keyof ImportedRow, string[]> = {
     "frete base",
     "frete valor",
   ],
+  partnerFreight: ["valor frete parceiro", "frete parceiro"],
   tde: ["tde", "tds", "t d e", "t d s", "taxa dificuldade entrega"],
   tda: ["tda", "t d a", "taxa adicional"],
   trt: ["trt", "t r t"],
@@ -96,6 +110,7 @@ const aliases: Record<keyof ImportedRow, string[]> = {
   dedicated: ["dedicado", "dedicada", "valor dedicado"],
   adjustment: ["ajuste", "acrescimo", "acréscimo", "desconto"],
   reportedTotal: [
+    "valor do frete",
     "total comissao",
     "total comissão",
     "comissao",
@@ -174,13 +189,18 @@ export async function readClosingFile(file: File) {
       const destinatario = headerAt("CNPJ Destinatario");
       const redespacho = headerAt("CNPJ Redespacho");
       const cteParceiro = headerAt("CT-e Parceiro");
+      const chaveCteParceiro = headerAt("Chave CT-e Parceiro");
       if (remetente >= 0) map.sender = remetente + 1;
+      if (remetente >= 0) map.senderCnpj = remetente;
       if (destinatario >= 0) {
+        map.recipientCnpj = destinatario;
         map.recipient = destinatario + 1;
         map.city = destinatario + 2;
       }
       if (redespacho >= 0) map.partner = redespacho + 1;
+      if (redespacho >= 0) map.partnerCnpj = redespacho;
       if (cteParceiro >= 0) map.cte = cteParceiro;
+      if (chaveCteParceiro >= 0) map.cteKey = chaveCteParceiro;
       const score =
         Object.keys(map).length +
         (map.cte !== undefined ? 3 : 0) +
@@ -205,18 +225,25 @@ export async function readClosingFile(file: File) {
     .map((row) => {
       const result: ImportedRow = {
         partner: String(value(row, "partner") ?? "").trim(),
+        partnerCnpj: String(value(row, "partnerCnpj") ?? "").trim(),
         occurrence: String(value(row, "occurrence") ?? "").trim(),
         status: String(value(row, "status") ?? "").trim(),
         statusDescription: String(value(row, "statusDescription") ?? "").trim(),
         eligible: true,
         isRedelivery: false,
         date: excelDate(value(row, "date")),
+        deliveryDate: excelDate(value(row, "deliveryDate")),
         cte: String(value(row, "cte") ?? "").trim(),
+        cteKey: String(value(row, "cteKey") ?? "").trim(),
         invoice: String(value(row, "invoice") ?? "").trim(),
         sender: String(value(row, "sender") ?? "").trim(),
+        senderCnpj: String(value(row, "senderCnpj") ?? "").trim(),
         recipient: String(value(row, "recipient") ?? "").trim(),
+        recipientCnpj: String(value(row, "recipientCnpj") ?? "").trim(),
         city: String(value(row, "city") ?? "").trim(),
+        observation: String(value(row, "observation") ?? "").trim(),
         freight: toNumber(value(row, "freight")),
+        partnerFreight: toNumber(value(row, "partnerFreight")),
         tde: toNumber(value(row, "tde")),
         tda: toNumber(value(row, "tda")),
         trt: toNumber(value(row, "trt")),
@@ -233,8 +260,10 @@ export async function readClosingFile(file: File) {
         (!statusCode && !statusText) ||
         statusCode === "et" ||
         statusCode === "re" ||
+        statusCode === "cf" ||
         statusText === "entregue" ||
-        statusText === "reentrega";
+        statusText === "reentrega" ||
+        statusText === "complemento de frete";
       if (
         best!.map.reportedTotal !== undefined &&
         value(row, "reportedTotal") !== ""
@@ -276,6 +305,7 @@ function buildClosingSheet(
     "REMETENTE",
     "DESTINATARIO",
     "CIDADE",
+    "DATA DE ENTREGA",
     "T.D.E",
     "T.D.A",
     "DEDICADO",
@@ -292,21 +322,32 @@ function buildClosingSheet(
     ],
     [period],
     header,
-    ...rows.map((row) => [
-      row.date ? new Date(`${row.date}T12:00:00`) : "",
-      `${row.cte}${row.isRedelivery ? " RE" : ""}`.trim(),
-      row.invoice,
-      row.sender,
-      row.recipient,
-      row.city,
-      row.tde || "",
-      row.tda || "",
-      row.dedicated || "",
-      row.trt || "",
-      row.freight || "",
-      row.total,
-    ]),
+    ...rows.map((row) => {
+      const isFreightComplement = normalize(row.status) === "cf";
+      return [
+        row.date ? new Date(`${row.date}T12:00:00`) : "",
+        `${row.cte}${row.isRedelivery ? " RE" : ""}`.trim(),
+        row.invoice,
+        row.sender,
+        row.recipient,
+        row.city,
+        isFreightComplement
+          ? "OUTROS"
+          : row.isRedelivery
+            ? "REENTREGA"
+          : row.deliveryDate
+            ? new Date(`${row.deliveryDate}T12:00:00`)
+            : "",
+        row.tde || "",
+        row.tda || "",
+        (isFreightComplement ? row.total : row.dedicated) || "",
+        row.trt || "",
+        isFreightComplement ? "" : row.partnerFreight || "",
+        row.total,
+      ];
+    }),
     [
+      "",
       "",
       "",
       "",
@@ -319,17 +360,21 @@ function buildClosingSheet(
       "",
       "TOTAL:",
       {
-        f: `SUM(L7:L${rows.length + 6})`,
+        f: `SUM(M7:M${rows.length + 6})`,
         v: rows.reduce((sum, row) => sum + row.total, 0),
         t: "n",
       },
     ],
   ];
   const sheet = XLSX.utils.aoa_to_sheet(data);
+  sheet["!merges"] = Array.from({ length: 5 }, (_, r) => ({
+    s: { r, c: 0 },
+    e: { r, c: 12 },
+  }));
   const last = rows.length + 7;
-  sheet["!cols"] = [12, 12, 19, 34, 38, 24, 12, 12, 12, 12, 16, 18].map(
-    (wch) => ({ wch }),
-  );
+  sheet["!cols"] = [
+    12, 12, 19, 34, 38, 24, 18, 12, 12, 12, 12, 16, 18,
+  ].map((wch) => ({ wch }));
   sheet["!rows"] = [
     { hpt: 21 },
     { hpt: 20 },
@@ -338,10 +383,10 @@ function buildClosingSheet(
     { hpt: 22 },
     { hpt: 24 },
   ];
-  sheet["!autofilter"] = { ref: `A6:L${last - 1}` };
+  sheet["!autofilter"] = { ref: `A6:M${last - 1}` };
   sheet["!freeze"] = { xSplit: 0, ySplit: 6 };
   for (let r = 0; r < last; r++)
-    for (let c = 0; c < 12; c++) {
+    for (let c = 0; c < 13; c++) {
       const address = XLSX.utils.encode_cell({ r, c });
       const cell = sheet[address] || (sheet[address] = { t: "s", v: "" });
       cell.s = {
@@ -358,7 +403,7 @@ function buildClosingSheet(
   ["A1", "A2", "A3", "A4", "A5"].forEach((a) => {
     if (sheet[a]) sheet[a].s = titleStyle;
   });
-  for (let c = 0; c < 12; c++) {
+  for (let c = 0; c < 13; c++) {
     const cell = sheet[XLSX.utils.encode_cell({ r: 5, c })];
     cell.s = {
       fill: { patternType: "solid", fgColor: { rgb: "000000" } },
@@ -374,7 +419,13 @@ function buildClosingSheet(
       dateCell.z = "dd/mm/yy";
       dateCell.s.numFmt = "dd/mm/yy";
     }
-    for (let c = 6; c < 12; c++) {
+    const deliveryDateCell = sheet[XLSX.utils.encode_cell({ r, c: 6 })];
+    if (deliveryDateCell?.v instanceof Date) {
+      deliveryDateCell.t = "d";
+      deliveryDateCell.z = "dd/mm/yy";
+      deliveryDateCell.s.numFmt = "dd/mm/yy";
+    }
+    for (let c = 7; c < 13; c++) {
       const cell = sheet[XLSX.utils.encode_cell({ r, c })];
       if (cell && typeof cell.v === "number") {
         cell.z = "R$ #,##0.00";
@@ -382,16 +433,157 @@ function buildClosingSheet(
       }
     }
   }
-  ["K", "L"].forEach((col) => {
+  ["L", "M"].forEach((col) => {
     const cell = sheet[`${col}${last}`];
     cell.s = {
       fill: { patternType: "solid", fgColor: { rgb: "FFF200" } },
       font: { color: { rgb: "111111" }, bold: true, sz: 14 },
-      alignment: { horizontal: col === "K" ? "left" : "right" },
-      ...(col === "L" ? { numFmt: "R$ #,##0.00" } : {}),
+      alignment: { horizontal: col === "L" ? "left" : "right" },
+      ...(col === "M" ? { numFmt: "R$ #,##0.00" } : {}),
     };
-    cell.z = col === "L" ? "R$ #,##0.00" : undefined;
+    cell.z = col === "M" ? "R$ #,##0.00" : undefined;
   });
+  return sheet;
+}
+
+function buildFreightComplementsSheet(rows: ExportRow[]) {
+  const header = [
+    "TRANSPORTADORA",
+    "ENTRADA",
+    "CTE",
+    "NF",
+    "REMETENTE",
+    "DESTINATARIO",
+    "CIDADE",
+    "OBSERVACAO",
+    "VALOR DO FRETE",
+  ];
+  const data = [
+    ["COMPLEMENTOS DE FRETE - CF"],
+    header,
+    ...rows.map((row) => [
+      row.partner,
+      row.date ? new Date(`${row.date}T12:00:00`) : "",
+      row.cte,
+      row.invoice,
+      row.sender,
+      row.recipient,
+      row.city,
+      row.observation,
+      row.total,
+    ]),
+  ];
+  const sheet = XLSX.utils.aoa_to_sheet(data);
+  sheet["!cols"] = [22, 12, 14, 20, 32, 36, 24, 70, 18].map((wch) => ({
+    wch,
+  }));
+  sheet["!autofilter"] = { ref: `A2:I${rows.length + 2}` };
+  sheet["!freeze"] = { xSplit: 0, ySplit: 2 };
+  for (let c = 0; c < header.length; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r: 1, c })];
+    cell.s = {
+      fill: { patternType: "solid", fgColor: { rgb: "000000" } },
+      font: { color: { rgb: "FFFFFF" }, bold: true },
+      alignment: { horizontal: "center", vertical: "center" },
+    };
+  }
+  if (sheet.A1) {
+    sheet.A1.s = {
+      font: { color: { rgb: "111111" }, bold: true, sz: 14 },
+      alignment: { vertical: "center" },
+    };
+  }
+  for (let r = 2; r < rows.length + 2; r++) {
+    const dateCell = sheet[XLSX.utils.encode_cell({ r, c: 1 })];
+    if (dateCell?.v instanceof Date) {
+      dateCell.t = "d";
+      dateCell.z = "dd/mm/yy";
+      dateCell.s = { numFmt: "dd/mm/yy" };
+    }
+    const valueCell = sheet[XLSX.utils.encode_cell({ r, c: 8 })];
+    if (valueCell) {
+      valueCell.z = "R$ #,##0.00";
+      valueCell.s = { numFmt: "R$ #,##0.00" };
+    }
+  }
+  return sheet;
+}
+
+function buildArgiusSheet(rows: ExportRow[]) {
+  const header = [
+    "ENTRADA",
+    "CTE",
+    "NF",
+    "REMETENTE",
+    "CNPJ",
+    "DESTINATARIO",
+    "CNPJ",
+    "CIDADE",
+    "T.D.E",
+    "T.D.A",
+    "DEDICADO",
+    "TOTAL COMISSAO",
+  ];
+  const data = [
+    header,
+    ...rows.map((row) => [
+      row.date ? new Date(`${row.date}T12:00:00`) : "",
+      row.cte,
+      row.invoice,
+      row.sender,
+      row.senderCnpj,
+      row.recipient,
+      row.recipientCnpj,
+      row.city,
+      row.tde || "",
+      row.tda || "",
+      (normalize(row.status) === "cf" ? row.total : row.dedicated) || "",
+      row.total,
+    ]),
+  ];
+  const sheet = XLSX.utils.aoa_to_sheet(data);
+  sheet["!cols"] = [
+    12, 12, 25, 34, 20, 38, 20, 25, 12, 12, 12, 18,
+  ].map((wch) => ({ wch }));
+  sheet["!autofilter"] = { ref: `A1:L${rows.length + 1}` };
+  sheet["!freeze"] = { xSplit: 0, ySplit: 1 };
+  for (let c = 0; c < header.length; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r: 0, c })];
+    cell.s = {
+      fill: { patternType: "solid", fgColor: { rgb: "000000" } },
+      font: { color: { rgb: "FFFFFF" }, bold: true },
+      alignment: { horizontal: "center", vertical: "center" },
+    };
+  }
+  for (let r = 1; r <= rows.length; r++) {
+    for (let c = 0; c < header.length; c++) {
+      const cell =
+        sheet[XLSX.utils.encode_cell({ r, c })] ||
+        (sheet[XLSX.utils.encode_cell({ r, c })] = { t: "s", v: "" });
+      cell.s = {
+        fill: {
+          patternType: "solid",
+          fgColor: { rgb: r % 2 ? "FFF8E7" : "FFFFFF" },
+        },
+        font: { color: { rgb: "111111" } },
+        alignment: { vertical: "center" },
+        border: { bottom: { style: "thin", color: { rgb: "D8D8D8" } } },
+      };
+    }
+    const dateCell = sheet[XLSX.utils.encode_cell({ r, c: 0 })];
+    if (dateCell?.v instanceof Date) {
+      dateCell.t = "d";
+      dateCell.z = "dd/mm/yyyy";
+      dateCell.s.numFmt = "dd/mm/yyyy";
+    }
+    for (let c = 8; c < 12; c++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+      if (cell && typeof cell.v === "number") {
+        cell.z = "R$ #,##0.00";
+        cell.s.numFmt = "R$ #,##0.00";
+      }
+    }
+  }
   return sheet;
 }
 
@@ -401,11 +593,22 @@ export function exportClosingXlsx(
   period: string,
 ) {
   const workbook = XLSX.utils.book_new();
+  const isArgius = normalize(partnerName) === "argius";
   XLSX.utils.book_append_sheet(
     workbook,
-    buildClosingSheet(rows, partnerName, period),
+    isArgius ? buildArgiusSheet(rows) : buildClosingSheet(rows, partnerName, period),
     "DadosExcel",
   );
+  const freightComplements = rows.filter(
+    (row) => normalize(row.status) === "cf",
+  );
+  if (freightComplements.length && !isArgius) {
+    XLSX.utils.book_append_sheet(
+      workbook,
+      buildFreightComplementsSheet(freightComplements),
+      "OUTROS",
+    );
+  }
   XLSX.writeFile(
     workbook,
     `Fechamento ${partnerName} - ${period.replace(/[^a-zA-Z0-9À-ÿ]+/g, " ").trim()}.xlsx`,
@@ -438,6 +641,16 @@ export function exportMultipleClosingsXlsx(
       name,
     );
   });
+  const freightComplements = groups
+    .flatMap(({ rows }) => rows)
+    .filter((row) => normalize(row.status) === "cf");
+  if (freightComplements.length) {
+    XLSX.utils.book_append_sheet(
+      workbook,
+      buildFreightComplementsSheet(freightComplements),
+      "OUTROS",
+    );
+  }
   XLSX.writeFile(
     workbook,
     `Fechamentos - ${period.replace(/[^a-zA-Z0-9À-ÿ]+/g, " ").trim()}.xlsx`,

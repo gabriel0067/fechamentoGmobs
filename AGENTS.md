@@ -26,25 +26,46 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 
 - Aceitar arquivos `.xls`, `.xlsx` e `.csv`.
 - Manter a interface em português do Brasil e valores em BRL.
-- Incluir no fechamento apenas entregas e reentregas elegíveis.
+- Incluir registros elegíveis `ET`, `RE` e `CF`.
 - Manter registros não identificados visíveis para conferência, mas impedir sua exportação automática.
 - Não perder suporte aos aliases de colunas já existentes.
-- Usar o total/comissão informado quando presente; caso contrário, calcular pelos componentes financeiros.
-- Gerar uma aba por transportadora selecionada no arquivo Excel final.
+- Usar como total somente `Valor do Frete` (coluna BA). Não somar Frete Valor, TDE, TDA, TRT ou outras taxas separadamente.
+- Usar `Valor Frete Parceiro` (coluna BD) na coluna de frete da parceira da exportação.
+- Gerar um arquivo Excel separado para cada transportadora selecionada.
+- Manter `Data de Entrega` depois de `Cidade`; mostrar `REENTREGA` para RE e `OUTROS` para CF.
+- Para CF, deixar o frete da parceira vazio, colocar `Valor do Frete` em `Dedicado` e criar a aba `OUTROS` com `Observação` (BQ), exceto no formato especial da Argius.
+- Preservar o modelo especial da Argius: tabela direta sem as cinco linhas institucionais, com cabeçalho preto e linhas alternadas.
+- No formato padrão, manter as linhas 1 a 5 mescladas individualmente de A até M.
+- Agrupar SIMB, SIMBAX, STX, Tadex, Tadlog e variações de Essessao/Exceção como `Tadex`; agrupar variações contendo TTJB como `TTJB`.
+- Preservar a identificação manual de registros desconhecidos, inclusive cadastro de nova transportadora.
+- Para Argius, TRD e D&Y, considerar na prévia e exportação somente documentos bipados. Chaves com 44 dígitos buscam AK; leituras menores buscam AJ.
+- Manter bipagens não encontradas como `AGUARDANDO` para associação automática em importações futuras.
 - Preservar funcionamento responsivo em telas menores.
+
+## Persistência local
+
+- `gmobs-closing-v3` guarda os registros importados e identificações no `localStorage`.
+- `gmobs-scanned-ctes-v1` guarda bipagens confirmadas ou aguardando no `localStorage`.
+- Uma nova importação substitui os registros, mas não apaga as bipagens.
+- Esses dados sobrevivem a recarregamento e novo login no mesmo navegador, mas não acompanham Git, outro navegador ou outro computador.
+- Não mude as chaves do `localStorage` nem limpe esses dados sem autorização e uma estratégia de migração.
 
 ## Qualidade e validação
 
 - Para mudanças na leitura de planilhas, teste cabeçalhos alternativos, acentos, números brasileiros, datas e linhas de total.
 - Para mudanças financeiras, compare entradas e saídas com exemplos calculados manualmente.
 - Para mudanças na exportação, abra ou inspecione o `.xlsx` gerado e confira abas, colunas, formatos e totais.
+- Para mudanças na bipagem, teste AJ, AK com 44 dígitos, `AGUARDANDO`, reaparecimento após nova importação e remoção manual.
+- Para a Argius, compare visualmente a exportação com o modelo de referência fornecido pelo usuário.
 - Para mudanças visuais, confira desktop e tela estreita.
 - Execute, quando aplicável:
 
 ```powershell
 npm run lint
-npm run build
+npx vite build
 ```
+
+- No Windows, prefira `npx vite --host` para executar localmente; `npm run dev` pode falhar porque o script atual define variáveis no formato Unix.
 
 - Não considere `npm test` confiável até que `tests/rendered-html.test.mjs` seja atualizado, pois ele ainda testa o starter antigo. Se alterar testes, faça-os representar o comportamento real da aplicação.
 
@@ -67,8 +88,8 @@ Ao concluir uma etapa relevante:
 
 ## Prioridades atuais
 
-1. Validar importação e cálculos com relatórios reais anonimizados.
-2. Validar o Excel final com fechamentos manuais conhecidos.
-3. Corrigir e ampliar testes automatizados.
-4. Atualizar o README do starter.
-5. Decidir se haverá persistência em nuvem e acesso por usuário.
+1. Validar bipagem e exportação com uma quinzena real completa.
+2. Validar o Excel da Argius contra o modelo aprovado.
+3. Decidir se bipagens e identificações devem migrar do navegador para a nuvem.
+4. Corrigir e ampliar testes automatizados.
+5. Atualizar o README do starter.

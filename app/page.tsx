@@ -1,20 +1,29 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { exportMultipleClosingsXlsx, readClosingFile } from "./excel";
+import { exportClosingXlsx, readClosingFile } from "./excel";
 
 type Tab = "import" | "preview" | "export";
 type Entry = {
   id: string;
   partnerId: string;
   partnerName: string;
+  partnerRaw: string;
+  partnerCnpj: string;
+  status: string;
   date: string;
+  deliveryDate: string;
   cte: string;
+  cteKey: string;
   invoice: string;
   sender: string;
+  senderCnpj: string;
   recipient: string;
+  recipientCnpj: string;
   city: string;
+  observation: string;
   freight: number;
+  partnerFreight: number;
   tde: number;
   tda: number;
   trt: number;
@@ -50,7 +59,29 @@ const partnerAliases: Array<[string, string, string[]]> = [
   ["dy", "D&Y", ["d e y", "dey", "d y"]],
   ["pajucara", "Pajuçara", ["pajucar", "pajucara"]],
   ["rio-vermelho", "Rio Vermelho", ["rio vermelho"]],
+  [
+    "tadex",
+    "Tadex",
+    [
+      "simbax",
+      "simb",
+      "stx",
+      "tadex",
+      "tadlog",
+      "essessao",
+      "excessao",
+      "excecao",
+    ],
+  ],
+  ["ttjb", "TTJB", ["ttjb"]],
 ];
+const scanPartnerIds = new Set(["trd", "argius", "dy"]);
+const scanKey = (value?: string) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
 function identifyPartner(raw: string) {
   const text = normalized(raw);
   const match = partnerAliases.find(([, , aliases]) =>
@@ -60,18 +91,10 @@ function identifyPartner(raw: string) {
   if (!text) return { id: "unidentified", name: "Não identificado" };
   return { id: `custom-${text.replace(/\s+/g, "-")}`, name: raw.trim() };
 }
+const unidentifiedKey = (entry: Entry) =>
+  normalized(entry.partnerCnpj || entry.partnerRaw || entry.sender || "sem-dados");
 const totalOf = (entry: Entry) =>
-  entry.reportedTotal ??
-  Math.max(
-    0,
-    entry.freight +
-      entry.tde +
-      entry.tda +
-      entry.trt +
-      entry.redelivery +
-      entry.dedicated +
-      entry.adjustment,
-  );
+  Math.max(0, entry.reportedTotal ?? entry.freight);
 const periodName = (date: string) => {
   const value = new Date(
     `${date || new Date().toISOString().slice(0, 10)}T12:00:00`,
@@ -90,6 +113,16 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [importing, setImporting] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [assignmentChoices, setAssignmentChoices] = useState<
+    Record<string, string>
+  >({});
+  const [newPartnerNames, setNewPartnerNames] = useState<
+    Record<string, string>
+  >({});
+  const [scanInput, setScanInput] = useState("");
+  const [scannedCtes, setScannedCtes] = useState<
+    Record<string, Record<string, string>>
+  >({});
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -97,6 +130,8 @@ export default function Home() {
       try {
         const saved = localStorage.getItem("gmobs-closing-v3");
         if (saved) setEntries(JSON.parse(saved));
+        const savedScans = localStorage.getItem("gmobs-scanned-ctes-v1");
+        if (savedScans) setScannedCtes(JSON.parse(savedScans));
       } catch {
         /* começa vazio se o armazenamento estiver inválido */
       }
@@ -108,6 +143,13 @@ export default function Home() {
     if (hydrated)
       localStorage.setItem("gmobs-closing-v3", JSON.stringify(entries));
   }, [entries, hydrated]);
+  useEffect(() => {
+    if (hydrated)
+      localStorage.setItem(
+        "gmobs-scanned-ctes-v1",
+        JSON.stringify(scannedCtes),
+      );
+  }, [scannedCtes, hydrated]);
 
   const filtered = useMemo(
     () =>
@@ -135,6 +177,112 @@ export default function Home() {
   }, [filtered]);
   const active = partners.find((p) => p.id === selectedPartner) || partners[0];
   const allIds = partners.map((p) => p.id);
+  const assignmentPartners = useMemo(() => {
+    const options = new Map<string, string>();
+    partnerAliases.forEach(([id, name]) => options.set(id, name));
+    partners
+      .filter((partner) => partner.id !== "unidentified")
+      .forEach((partner) => options.set(partner.id, partner.name));
+    return [...options].sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
+  }, [partners]);
+  const unidentifiedGroups = useMemo(() => {
+    const groups = new Map<string, Entry[]>();
+    filtered
+      .filter((entry) => entry.partnerId === "unidentified")
+      .forEach((entry) => {
+        const key = unidentifiedKey(entry);
+        groups.set(key, [...(groups.get(key) || []), entry]);
+      });
+    return [...groups].map(([key, rows]) => ({ key, rows }));
+  }, [filtered]);
+
+  function assignUnidentified(key: string) {
+    const choice = assignmentChoices[key];
+    const newName = (newPartnerNames[key] || "").trim();
+    const partnerId =
+      choice === "__new__"
+        ? `custom-${normalized(newName).replace(/\s+/g, "-")}`
+        : choice;
+    const partnerName =
+      choice === "__new__"
+        ? newName
+        : assignmentPartners.find(([id]) => id === partnerId)?.[1];
+    if (!partnerId || !partnerName) return;
+    setEntries((current) =>
+      current.map((entry) =>
+        entry.partnerId === "unidentified" && unidentifiedKey(entry) === key
+          ? { ...entry, partnerId, partnerName }
+          : entry,
+      ),
+    );
+    const quantity = entries.filter(
+      (entry) =>
+        entry.partnerId === "unidentified" && unidentifiedKey(entry) === key,
+    ).length;
+    setImportInfo((current) =>
+      current
+        ? { ...current, unidentified: Math.max(0, current.unidentified - quantity) }
+        : current,
+    );
+    setMessage(`${quantity} registro(s) identificado(s) como ${partnerName}.`);
+  }
+
+  function registerScan(partnerId: string) {
+    const key = scanKey(scanInput);
+    if (!key) return;
+    const partner = partners.find((item) => item.id === partnerId);
+    const isAccessKey = /^\d{44}$/.test(key);
+    const matching =
+      partner?.rows.filter((entry) =>
+        isAccessKey
+          ? scanKey(entry.cteKey) === key
+          : scanKey(entry.cte) === key,
+      ) || [];
+    setScannedCtes((current) => ({
+      ...current,
+      [partnerId]: {
+        ...(current[partnerId] || {}),
+        [key]: new Date().toISOString(),
+      },
+    }));
+    setScanInput("");
+    if (matching.length) {
+      setMessage(
+        `${matching.length} registro(s) do CTE ${matching[0].cte} marcado(s) com OK.`,
+      );
+    } else {
+      setMessage(
+        `CTE ${scanInput.trim()} guardado. Ele entrará automaticamente quando aparecer em ${partner?.name || "esta transportadora"}.`,
+      );
+    }
+  }
+
+  function removeScan(partnerId: string, cte: string) {
+    const key = scanKey(cte);
+    setScannedCtes((current) => {
+      const partnerScans = { ...(current[partnerId] || {}) };
+      delete partnerScans[key];
+      return { ...current, [partnerId]: partnerScans };
+    });
+  }
+
+  const matchedScanKey = (entry: Entry) => {
+    const partnerScans = scannedCtes[entry.partnerId] || {};
+    return [scanKey(entry.cteKey), scanKey(entry.cte)].find(
+      (key) => key && partnerScans[key],
+    );
+  };
+  const isScanned = (entry: Entry) => Boolean(matchedScanKey(entry));
+  const rowsForClosing = (partner: { id: string; rows: Entry[] }) =>
+    scanPartnerIds.has(partner.id) ? partner.rows.filter(isScanned) : partner.rows;
+  const pendingScanKeys = (partner: { id: string; rows: Entry[] }) =>
+    Object.keys(scannedCtes[partner.id] || {}).filter(
+      (key) =>
+        !partner.rows.some(
+          (entry) =>
+            scanKey(entry.cteKey) === key || scanKey(entry.cte) === key,
+        ),
+    );
 
   async function importExcel(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -159,13 +307,22 @@ export default function Home() {
           id: crypto.randomUUID(),
           partnerId: partner.id,
           partnerName: partner.name,
+          partnerRaw: row.partner,
+          partnerCnpj: row.partnerCnpj,
+          status: row.status,
           date: row.date,
+          deliveryDate: row.deliveryDate,
           cte: row.cte,
+          cteKey: row.cteKey,
           invoice: row.invoice,
           sender: row.sender,
+          senderCnpj: row.senderCnpj,
           recipient: row.recipient,
+          recipientCnpj: row.recipientCnpj,
           city: row.city,
+          observation: row.observation,
           freight: row.freight,
+          partnerFreight: row.partnerFreight,
           tde: row.tde,
           tda: row.tda,
           trt: row.trt,
@@ -186,7 +343,7 @@ export default function Home() {
       });
       setSelectedExports([]);
       setMessage(
-        `${additions.length} entregas e reentregas importadas com sucesso.`,
+        `${additions.length} entregas, reentregas e complementos importados com sucesso.`,
       );
     } catch (error) {
       setMessage(
@@ -213,23 +370,42 @@ export default function Home() {
         .sort()
         .at(-1) ||
       "";
-    exportMultipleClosingsXlsx(
-      chosen.map((partner) => ({
-        partnerName: partner.name,
-        rows: partner.rows.map((entry) => ({
+    const period = periodName(lastDate);
+    let generated = 0;
+    const skipped: string[] = [];
+    chosen.forEach((partner) => {
+      const exportRows = rowsForClosing(partner);
+      if (!exportRows.length) {
+        skipped.push(partner.name);
+        return;
+      }
+      exportClosingXlsx(
+        exportRows.map((entry) => ({
           partner: partner.name,
-          occurrence: entry.isRedelivery ? "RE" : "",
-          status: entry.isRedelivery ? "RE" : "ET",
-          statusDescription: entry.isRedelivery ? "REENTREGA" : "ENTREGUE",
+          partnerCnpj: entry.partnerCnpj,
+          occurrence: entry.status || (entry.isRedelivery ? "RE" : ""),
+          status: entry.status || (entry.isRedelivery ? "RE" : "ET"),
+          statusDescription:
+            normalized(entry.status || "") === "cf"
+              ? "COMPLEMENTO DE FRETE"
+              : entry.isRedelivery
+                ? "REENTREGA"
+                : "ENTREGUE",
           eligible: true,
           isRedelivery: entry.isRedelivery,
           date: entry.date,
+          deliveryDate: entry.deliveryDate,
           cte: entry.cte,
+          cteKey: entry.cteKey,
           invoice: entry.invoice,
           sender: entry.sender,
+          senderCnpj: entry.senderCnpj,
           recipient: entry.recipient,
+          recipientCnpj: entry.recipientCnpj,
           city: entry.city,
+          observation: entry.observation,
           freight: entry.freight,
+          partnerFreight: entry.partnerFreight,
           tde: entry.tde,
           tda: entry.tda,
           trt: entry.trt,
@@ -239,10 +415,18 @@ export default function Home() {
           reportedTotal: entry.reportedTotal,
           total: totalOf(entry),
         })),
-      })),
-      periodName(lastDate),
+        partner.name,
+        period,
+      );
+      generated++;
+    });
+    setMessage(
+      `${generated} arquivo(s) gerado(s).${
+        skipped.length
+          ? ` Sem documentos bipados: ${skipped.join(", ")}.`
+          : ""
+      }`,
     );
-    setMessage(`Arquivo gerado para ${chosen.length} transportadora(s).`);
   }
 
   return (
@@ -395,13 +579,196 @@ export default function Home() {
                         <h3>{active.name}</h3>
                       </div>
                     </div>
+                    {scanPartnerIds.has(active.id) && (
+                      <div className="scan-panel">
+                        <div className="scan-heading">
+                          <div>
+                            <small>CONFERÊNCIA POR BIPAGEM</small>
+                            <strong>Bipe o CTE da transportadora</strong>
+                            <p>
+                              Somente os documentos com OK entrarão no fechamento.
+                            </p>
+                          </div>
+                          <b>
+                            {active.rows.filter(isScanned).length} de{" "}
+                            {active.rows.length} com OK
+                            {pendingScanKeys(active).length
+                              ? ` · ${pendingScanKeys(active).length} aguardando`
+                              : ""}
+                          </b>
+                        </div>
+                        <form
+                          className="scan-form"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            registerScan(active.id);
+                          }}
+                        >
+                          <input
+                            autoFocus
+                            type="text"
+                            inputMode="numeric"
+                            value={scanInput}
+                            placeholder="Bipe ou digite o CTE"
+                            onChange={(event) => setScanInput(event.target.value)}
+                          />
+                          <button className="primary" disabled={!scanInput.trim()}>
+                            Marcar OK
+                          </button>
+                        </form>
+                        <div className="scan-list">
+                          {active.rows.filter(isScanned).length ? (
+                            active.rows.filter(isScanned).map((entry) => (
+                              <div key={entry.id}>
+                                <span className="scan-ok">OK</span>
+                                <strong>CTE {entry.cte}</strong>
+                                <small>NF {entry.invoice || "não informada"}</small>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    removeScan(
+                                      active.id,
+                                      matchedScanKey(entry) || entry.cte,
+                                    )
+                                  }
+                                >
+                                  Desmarcar
+                                </button>
+                              </div>
+                            ))
+                          ) : !pendingScanKeys(active).length ? (
+                            <p>Nenhum documento bipado neste período.</p>
+                          ) : null}
+                          {pendingScanKeys(active).map((key) => (
+                            <div className="scan-pending" key={`pending-${key}`}>
+                              <span>AGUARDANDO</span>
+                              <strong>CTE {key}</strong>
+                              <small>Ainda não apareceu no relatório</small>
+                              <button
+                                type="button"
+                                onClick={() => removeScan(active.id, key)}
+                              >
+                                Remover
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {active.id === "unidentified" && (
+                      <div className="unidentified-panel">
+                        <div className="unidentified-intro">
+                          <strong>Identificar transportadora</strong>
+                          <p>
+                            Confira os dados do relatório e atribua cada grupo à
+                            transportadora correta.
+                          </p>
+                        </div>
+                        {unidentifiedGroups.map(({ key, rows }) => {
+                          const first = rows[0];
+                          const senders = [
+                            ...new Set(rows.map((row) => row.sender).filter(Boolean)),
+                          ].slice(0, 3);
+                          const cities = [
+                            ...new Set(rows.map((row) => row.city).filter(Boolean)),
+                          ].slice(0, 4);
+                          const documents = rows
+                            .slice(0, 3)
+                            .map((row) => row.cte || row.invoice)
+                            .filter(Boolean);
+                          return (
+                            <article className="unidentified-card" key={key}>
+                              <div className="identity-details">
+                                <div>
+                                  <small>RAZÃO SOCIAL / NOME RECEBIDO</small>
+                                  <strong>
+                                    {first.partnerRaw || "Não informado"}
+                                  </strong>
+                                </div>
+                                <div>
+                                  <small>CNPJ DO REDESPACHO</small>
+                                  <strong>
+                                    {first.partnerCnpj || "Não informado"}
+                                  </strong>
+                                </div>
+                                <p>
+                                  <b>{rows.length} registro(s)</b>
+                                  {senders.length
+                                    ? ` · Remetentes: ${senders.join(", ")}`
+                                    : ""}
+                                </p>
+                                <p>
+                                  {cities.length
+                                    ? `Cidades: ${cities.join(", ")}`
+                                    : "Cidade não informada"}
+                                  {documents.length
+                                    ? ` · CTE/NF: ${documents.join(", ")}`
+                                    : ""}
+                                </p>
+                              </div>
+                              <div className="identity-action">
+                                <label htmlFor={`identify-${key}`}>
+                                  Esta transportadora é
+                                </label>
+                                <select
+                                  id={`identify-${key}`}
+                                  value={assignmentChoices[key] || ""}
+                                  onChange={(event) =>
+                                    setAssignmentChoices((current) => ({
+                                      ...current,
+                                      [key]: event.target.value,
+                                    }))
+                                  }
+                                >
+                                  <option value="">Selecione...</option>
+                                  {assignmentPartners.map(([id, name]) => (
+                                    <option key={id} value={id}>
+                                      {name}
+                                    </option>
+                                  ))}
+                                  <option value="__new__">
+                                    + Cadastrar nova transportadora
+                                  </option>
+                                </select>
+                                {assignmentChoices[key] === "__new__" && (
+                                  <input
+                                    type="text"
+                                    value={newPartnerNames[key] || ""}
+                                    placeholder="Nome da transportadora"
+                                    onChange={(event) =>
+                                      setNewPartnerNames((current) => ({
+                                        ...current,
+                                        [key]: event.target.value,
+                                      }))
+                                    }
+                                  />
+                                )}
+                                <button
+                                  className="primary"
+                                  disabled={
+                                    !assignmentChoices[key] ||
+                                    (assignmentChoices[key] === "__new__" &&
+                                      !newPartnerNames[key]?.trim())
+                                  }
+                                  onClick={() => assignUnidentified(key)}
+                                >
+                                  Confirmar identificação
+                                </button>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
                     <div className="metrics">
                       <article>
                         <small>Notas</small>
                         <strong>
                           {
                             new Set(
-                              active.rows.map((r) => r.invoice).filter(Boolean),
+                              rowsForClosing(active)
+                                .map((r) => r.invoice)
+                                .filter(Boolean),
                             ).size
                           }
                         </strong>
@@ -411,7 +778,9 @@ export default function Home() {
                         <strong>
                           {
                             new Set(
-                              active.rows.map((r) => r.cte).filter(Boolean),
+                              rowsForClosing(active)
+                                .map((r) => r.cte)
+                                .filter(Boolean),
                             ).size
                           }
                         </strong>
@@ -419,7 +788,7 @@ export default function Home() {
                       <article>
                         <small>Reentregas</small>
                         <strong>
-                          {active.rows.filter((r) => r.isRedelivery).length}
+                          {rowsForClosing(active).filter((r) => r.isRedelivery).length}
                         </strong>
                       </article>
                     </div>
@@ -427,13 +796,13 @@ export default function Home() {
                       <small>VALOR DO FECHAMENTO</small>
                       <strong>
                         {money(
-                          active.rows.reduce(
+                          rowsForClosing(active).reduce(
                             (sum, row) => sum + totalOf(row),
                             0,
                           ),
                         )}
                       </strong>
-                      <p>Frete Valor + TDE + TDA + TRT e demais acréscimos</p>
+                      <p>Soma da coluna Valor do Frete do relatório</p>
                     </div>
                   </div>
                 )}
@@ -485,9 +854,9 @@ export default function Home() {
                       <div>
                         <strong>{partner.name}</strong>
                         <small>
-                          {partner.rows.length} registros ·{" "}
+                          {rowsForClosing(partner).length} registros ·{" "}
                           {money(
-                            partner.rows.reduce(
+                            rowsForClosing(partner).reduce(
                               (sum, row) => sum + totalOf(row),
                               0,
                             ),
@@ -504,7 +873,7 @@ export default function Home() {
                       {money(
                         partners
                           .filter((p) => selectedExports.includes(p.id))
-                          .flatMap((p) => p.rows)
+                          .flatMap(rowsForClosing)
                           .reduce((sum, row) => sum + totalOf(row), 0),
                       )}
                     </strong>

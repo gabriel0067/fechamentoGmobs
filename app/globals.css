@@ -315,6 +315,156 @@ button {
   color: #bcd1c5;
   font-size: 12px;
 }
+.unidentified-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+}
+.scan-panel {
+  margin-top: 22px;
+  padding: 18px;
+  border: 1px solid #bfd8ca;
+  border-radius: 13px;
+  background: #f3f8f5;
+}
+.scan-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+}
+.scan-heading small,
+.scan-heading strong {
+  display: block;
+}
+.scan-heading small {
+  color: #357255;
+  font-weight: 800;
+}
+.scan-heading strong {
+  font-size: 18px;
+  margin-top: 3px;
+}
+.scan-heading p,
+.scan-list > p {
+  color: #64736a;
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+.scan-heading > b {
+  color: #146c43;
+  white-space: nowrap;
+}
+.scan-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  margin: 15px 0;
+}
+.scan-form input {
+  min-width: 0;
+  border: 2px solid #7cab91;
+  border-radius: 9px;
+  padding: 12px 13px;
+  font-size: 16px;
+  background: white;
+}
+.scan-list {
+  display: grid;
+  gap: 6px;
+  max-height: 230px;
+  overflow: auto;
+}
+.scan-list > div {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  background: white;
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+.scan-list small {
+  color: #6d7871;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-list button {
+  border: 0;
+  background: transparent;
+  color: #9c3b36;
+  font-weight: 700;
+}
+.scan-ok {
+  border-radius: 999px;
+  background: #167647;
+  color: white;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 850;
+}
+.scan-pending > span {
+  border-radius: 999px;
+  background: #fff0c7;
+  color: #8a5b00;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 850;
+}
+.unidentified-intro p {
+  color: #66717b;
+  margin: 4px 0 0;
+}
+.unidentified-card {
+  border: 1px solid #dce3df;
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 18px;
+  background: #f8faf9;
+}
+.identity-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+}
+.identity-details small,
+.identity-action label {
+  display: block;
+  color: #748078;
+  font-size: 11px;
+  font-weight: 750;
+}
+.identity-details strong {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+.identity-details p {
+  color: #58645d;
+  font-size: 12px;
+  margin: 0;
+}
+.identity-action {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.identity-action select,
+.identity-action input {
+  width: 100%;
+  border: 1px solid #cfd8d3;
+  border-radius: 8px;
+  padding: 10px;
+  background: white;
+  color: #17221c;
+}
+.identity-action .primary {
+  width: 100%;
+  padding: 10px;
+}
 .empty {
   text-align: center;
   padding: 110px 20px;
@@ -460,6 +610,22 @@ button {
   }
   .metrics {
     grid-template-columns: 1fr;
+  }
+  .unidentified-card,
+  .identity-details {
+    grid-template-columns: 1fr;
+  }
+  .scan-heading {
+    flex-direction: column;
+  }
+  .scan-form {
+    grid-template-columns: 1fr;
+  }
+  .scan-list > div {
+    grid-template-columns: auto 1fr auto;
+  }
+  .scan-list small {
+    display: none;
   }
   .check-list {
     grid-template-columns: 1fr;
