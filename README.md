@@ -66,3 +66,6 @@ O lint completo ainda encontra dois avisos herdados em `legacy/site/app.js`; ess
 - `db/schema.ts` e `drizzle/`: esquema e migração do banco.
 - `.openai/hosting.json`: configuração lógica do site e do D1.
 - `CONTEXTO_DO_PROJETO.md`: regras e histórico detalhados do produto.
+
+
+alo teste 
