@@ -10,8 +10,9 @@ import {
   useState,
 } from "react";
 import {
+  getCloudStateVersion,
   isHostedSite,
-  loadCloudState,
+  loadCloudStateRecord,
   saveCloudState,
   type CloudStateKey,
 } from "./cloud-storage";
@@ -39,12 +40,13 @@ import {
 
 type Tab = "import" | "preview" | "export";
 type CloudStatus = "local" | "loading" | "ready" | "saving" | "error";
+type AuthStatus = "checking" | "signedIn" | "signedOut";
 const cloudStatusText: Record<CloudStatus, string> = {
   local: "Dados salvos neste computador",
-  loading: "Conectando ao banco...",
+  loading: "Carregando dados do banco...",
   ready: "Dados salvos no banco",
-  saving: "Salvando no banco...",
-  error: "Banco indisponível · cópia local mantida",
+  saving: "Gravando no banco...",
+  error: "Banco indisponível · trabalho bloqueado",
 };
 type Entry = {
   id: string;
@@ -343,8 +345,14 @@ function useCloudStateSync<T>(
   stateKey: CloudStateKey,
   value: T,
   enabled: boolean,
+  skipSaveRef: { current: Set<CloudStateKey> },
   onStart: () => void,
-  onFinish: (succeeded: boolean) => void,
+  onCancel: () => void,
+  onFinish: (
+    stateKey: CloudStateKey,
+    succeeded: boolean,
+    version?: string,
+  ) => void,
 ) {
   const enabledOnce = useRef(false);
   useEffect(() => {
@@ -356,15 +364,29 @@ function useCloudStateSync<T>(
       enabledOnce.current = true;
       return;
     }
+    if (skipSaveRef.current.delete(stateKey)) return;
 
+    onStart();
+    let requested = false;
     const timer = window.setTimeout(() => {
-      onStart();
+      requested = true;
       void saveCloudState(stateKey, value)
-        .then(() => onFinish(true))
-        .catch(() => onFinish(false));
-    }, 1200);
-    return () => window.clearTimeout(timer);
-  }, [enabled, onFinish, onStart, stateKey, value]);
+        .then((version) => onFinish(stateKey, true, version))
+        .catch(() => onFinish(stateKey, false));
+    }, 600);
+    return () => {
+      window.clearTimeout(timer);
+      if (!requested) onCancel();
+    };
+  }, [
+    enabled,
+    onCancel,
+    onFinish,
+    onStart,
+    skipSaveRef,
+    stateKey,
+    value,
+  ]);
 }
 
 export default function Home() {
@@ -386,6 +408,12 @@ export default function Home() {
   const [cloudReady, setCloudReady] = useState(false);
   const [cloudHosted, setCloudHosted] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>("local");
+  const [cloudRetry, setCloudRetry] = useState(0);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
   const [importingBackup, setImportingBackup] = useState(false);
   const [assignmentChoices, setAssignmentChoices] = useState<
     Record<string, string>
@@ -421,11 +449,21 @@ export default function Home() {
   const backupInputRef = useRef<HTMLInputElement>(null);
   const cloudWritesRef = useRef(0);
   const cloudSaveFailedRef = useRef(false);
+  const cloudVersionsRef = useRef<Partial<Record<CloudStateKey, string>>>({});
+  const skipCloudSaveRef = useRef(new Set<CloudStateKey>());
 
   useEffect(() => {
     let cancelled = false;
     const restoreSavedData = async () => {
       try {
+        if (isHostedSite()) {
+          if (!cancelled) {
+            setCloudHosted(true);
+            setCloudStatus("loading");
+          }
+          return;
+        }
+        setAuthStatus("signedIn");
         let savedEntries: Entry[] | null = null;
         let savedBilledDocuments: Record<string, BilledDocumentRecord> | null =
           null;
@@ -544,61 +582,102 @@ export default function Home() {
       try {
         await Promise.resolve();
         if (cancelled) return;
-        setCloudHosted(true);
+        setCloudReady(false);
         setCloudStatus("loading");
-        const [closing, scans, tde, maex, billed] = await Promise.all([
-          loadCloudState<{ entries: Entry[]; importInfo: ImportInfo | null }>(
-            "closing",
-          ),
-          loadCloudState<Record<string, Record<string, string>>>("scans"),
-          loadCloudState<{
+        const session = await fetch("/api/auth/session", { cache: "no-store" });
+        if (session.status === 401) {
+          if (!cancelled) {
+            setAuthStatus("signedOut");
+            setCloudStatus("loading");
+          }
+          return;
+        }
+        if (!session.ok) throw new Error("Não foi possível validar a sessão.");
+        setAuthStatus("signedIn");
+
+        const [closingRecord, scansRecord, tdeRecord, maexRecord, billedRecord] =
+          await Promise.all([
+            loadCloudStateRecord<{
+              entries: Entry[];
+              importInfo: ImportInfo | null;
+            }>("closing"),
+            loadCloudStateRecord<Record<string, Record<string, string>>>(
+              "scans",
+            ),
+            loadCloudStateRecord<{
             rates: TdeRateRecord[];
             importInfo: TdeImportInfo | null;
-          }>("tde"),
-          loadCloudState<Record<string, MaexAdditionalSender>>("maex"),
-          loadCloudState<Record<string, BilledDocumentRecord>>("billed"),
-        ]);
+            }>("tde"),
+            loadCloudStateRecord<Record<string, MaexAdditionalSender>>("maex"),
+            loadCloudStateRecord<Record<string, BilledDocumentRecord>>("billed"),
+          ]);
         if (cancelled) return;
 
+        const closing = closingRecord?.value;
         if (closing?.entries && Array.isArray(closing.entries)) {
           setEntries(normalizeSavedEntries(closing.entries));
           setImportInfo(closing.importInfo || null);
+          cloudVersionsRef.current.closing = closingRecord.version;
         } else {
-          await saveCloudState("closing", { entries, importInfo });
-        }
-        if (scans && typeof scans === "object") setScannedCtes(scans);
-        else await saveCloudState("scans", scannedCtes);
-        if (tde?.rates && Array.isArray(tde.rates)) {
-          setTdeRates(tde.rates);
-          setTdeImportInfo(tde.importInfo || null);
-        } else {
-          await saveCloudState("tde", {
-            rates: tdeRates,
-            importInfo: tdeImportInfo,
+          cloudVersionsRef.current.closing = await saveCloudState("closing", {
+            entries: [],
+            importInfo: null,
           });
         }
+        const scans = scansRecord?.value;
+        if (scans && typeof scans === "object") setScannedCtes(scans);
+        else setScannedCtes({});
+        cloudVersionsRef.current.scans =
+          scansRecord?.version || (await saveCloudState("scans", {}));
+
+        const tde = tdeRecord?.value;
+        if (tde?.rates && Array.isArray(tde.rates)) {
+          setTdeRates(
+            tde.rates.map((rate) => ({
+              ...rate,
+              partnerName: canonicalPartnerName(rate.partnerId, rate.partnerName),
+            })),
+          );
+          setTdeImportInfo(tde.importInfo || null);
+        } else {
+          setTdeRates([]);
+          setTdeImportInfo(null);
+        }
+        cloudVersionsRef.current.tde =
+          tdeRecord?.version ||
+          (await saveCloudState("tde", { rates: [], importInfo: null }));
+
+        const maex = maexRecord?.value;
         if (maex && typeof maex === "object") setMaexAdditionalSenders(maex);
-        else await saveCloudState("maex", maexAdditionalSenders);
+        else setMaexAdditionalSenders({});
+        cloudVersionsRef.current.maex =
+          maexRecord?.version || (await saveCloudState("maex", {}));
+
+        const billed = billedRecord?.value;
         if (billed && typeof billed === "object") setBilledDocuments(billed);
-        else await saveCloudState("billed", billedDocuments);
+        else setBilledDocuments({});
+        cloudVersionsRef.current.billed =
+          billedRecord?.version || (await saveCloudState("billed", {}));
 
         if (!cancelled) {
+          cloudSaveFailedRef.current = false;
           setCloudReady(true);
           setCloudStatus("ready");
         }
       } catch {
-        if (!cancelled) setCloudStatus("error");
+        if (!cancelled) {
+          setCloudReady(false);
+          setCloudStatus("error");
+        }
       }
     };
     void restoreCloudData();
     return () => {
       cancelled = true;
     };
-    // O primeiro carregamento usa o estado local já restaurado como migração.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated]);
+  }, [cloudRetry, hydrated]);
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || isHostedSite()) return;
     let cancelled = false;
     void writeClosingStorage(entries)
       .then(() => {
@@ -619,7 +698,7 @@ export default function Home() {
     };
   }, [entries, hydrated]);
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || isHostedSite()) return;
     let cancelled = false;
     void writeBilledStorage(billedDocuments)
       .then(() => {
@@ -643,7 +722,11 @@ export default function Home() {
     };
   }, [billedDocuments, hydrated]);
   useEffect(() => {
-    if (!hydrated || writeLocalStorage("gmobs-scanned-ctes-v1", scannedCtes))
+    if (
+      !hydrated ||
+      isHostedSite() ||
+      writeLocalStorage("gmobs-scanned-ctes-v1", scannedCtes)
+    )
       return;
     const timer = window.setTimeout(
       () =>
@@ -655,7 +738,7 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [scannedCtes, hydrated]);
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || isHostedSite()) return;
     if (
       writeLocalStorage("gmobs-tde-rates-v1", {
         rates: tdeRates,
@@ -671,7 +754,7 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [tdeRates, tdeImportInfo, hydrated]);
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || isHostedSite()) return;
     if (
       writeLocalStorage(
         "gmobs-maex-additional-senders-v1",
@@ -701,47 +784,168 @@ export default function Home() {
     cloudWritesRef.current += 1;
     setCloudStatus("saving");
   }, []);
-  const markCloudSaveFinish = useCallback((succeeded: boolean) => {
-    if (!succeeded) cloudSaveFailedRef.current = true;
+  const markCloudSaveCancel = useCallback(() => {
     cloudWritesRef.current = Math.max(0, cloudWritesRef.current - 1);
     if (cloudWritesRef.current === 0)
       setCloudStatus(cloudSaveFailedRef.current ? "error" : "ready");
   }, []);
+  const markCloudSaveFinish = useCallback(
+    (stateKey: CloudStateKey, succeeded: boolean, version?: string) => {
+      if (!succeeded) cloudSaveFailedRef.current = true;
+      if (succeeded && version) cloudVersionsRef.current[stateKey] = version;
+      cloudWritesRef.current = Math.max(0, cloudWritesRef.current - 1);
+      if (cloudWritesRef.current === 0)
+        setCloudStatus(cloudSaveFailedRef.current ? "error" : "ready");
+    },
+    [],
+  );
   useCloudStateSync(
     "closing",
     closingCloudState,
     cloudReady,
+    skipCloudSaveRef,
     markCloudSaveStart,
+    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
     "scans",
     scannedCtes,
     cloudReady,
+    skipCloudSaveRef,
     markCloudSaveStart,
+    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
     "tde",
     tdeCloudState,
     cloudReady,
+    skipCloudSaveRef,
     markCloudSaveStart,
+    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
     "maex",
     maexAdditionalSenders,
     cloudReady,
+    skipCloudSaveRef,
     markCloudSaveStart,
+    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
     "billed",
     billedDocuments,
     cloudReady,
+    skipCloudSaveRef,
     markCloudSaveStart,
+    markCloudSaveCancel,
     markCloudSaveFinish,
   );
+  const refreshCloudData = useCallback(async () => {
+    if (
+      !cloudReady ||
+      cloudWritesRef.current > 0 ||
+      cloudSaveFailedRef.current ||
+      document.visibilityState !== "visible"
+    )
+      return;
+    const keys: CloudStateKey[] = [
+      "closing",
+      "scans",
+      "tde",
+      "maex",
+      "billed",
+    ];
+    try {
+      const versions = await Promise.all(
+        keys.map(async (key) => [key, await getCloudStateVersion(key)] as const),
+      );
+      if (cloudWritesRef.current > 0) return;
+      const changedKeys = versions
+        .filter(
+          ([key, version]) =>
+            version !== undefined && version !== cloudVersionsRef.current[key],
+        )
+        .map(([key]) => key);
+      if (!changedKeys.length) return;
+
+      setCloudStatus("loading");
+      for (const key of changedKeys) {
+        if (key === "closing") {
+          const record = await loadCloudStateRecord<{
+            entries: Entry[];
+            importInfo: ImportInfo | null;
+          }>(key);
+          if (!record) continue;
+          skipCloudSaveRef.current.add(key);
+          cloudVersionsRef.current[key] = record.version;
+          setEntries(normalizeSavedEntries(record.value.entries || []));
+          setImportInfo(record.value.importInfo || null);
+        } else if (key === "scans") {
+          const record = await loadCloudStateRecord<
+            Record<string, Record<string, string>>
+          >(key);
+          if (!record) continue;
+          skipCloudSaveRef.current.add(key);
+          cloudVersionsRef.current[key] = record.version;
+          setScannedCtes(record.value || {});
+        } else if (key === "tde") {
+          const record = await loadCloudStateRecord<{
+            rates: TdeRateRecord[];
+            importInfo: TdeImportInfo | null;
+          }>(key);
+          if (!record) continue;
+          skipCloudSaveRef.current.add(key);
+          cloudVersionsRef.current[key] = record.version;
+          setTdeRates(
+            (record.value.rates || []).map((rate) => ({
+              ...rate,
+              partnerName: canonicalPartnerName(rate.partnerId, rate.partnerName),
+            })),
+          );
+          setTdeImportInfo(record.value.importInfo || null);
+        } else if (key === "maex") {
+          const record = await loadCloudStateRecord<
+            Record<string, MaexAdditionalSender>
+          >(key);
+          if (!record) continue;
+          skipCloudSaveRef.current.add(key);
+          cloudVersionsRef.current[key] = record.version;
+          setMaexAdditionalSenders(record.value || {});
+        } else {
+          const record = await loadCloudStateRecord<
+            Record<string, BilledDocumentRecord>
+          >(key);
+          if (!record) continue;
+          skipCloudSaveRef.current.add(key);
+          cloudVersionsRef.current[key] = record.version;
+          setBilledDocuments(record.value || {});
+        }
+      }
+      setCloudStatus("ready");
+    } catch {
+      cloudSaveFailedRef.current = false;
+      setCloudReady(false);
+      setCloudStatus("error");
+    }
+  }, [cloudReady]);
+  useEffect(() => {
+    if (!cloudHosted || !cloudReady || authStatus !== "signedIn") return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshCloudData();
+    };
+    const interval = window.setInterval(refreshWhenVisible, 60_000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [authStatus, cloudHosted, cloudReady, refreshCloudData]);
   const entriesWithTde = useMemo(
     () => applyTdeRates(entries, tdeRates),
     [entries, tdeRates],
@@ -1686,6 +1890,156 @@ export default function Home() {
     );
   }
 
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoggingIn(true);
+    setLoginError("");
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: loginUsername.trim(),
+          password: loginPassword,
+        }),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok)
+        throw new Error(result.error || "Usuário ou senha incorretos.");
+      setLoginPassword("");
+      setAuthStatus("checking");
+      setCloudReady(false);
+      setCloudStatus("loading");
+      setCloudRetry((current) => current + 1);
+    } catch (error) {
+      setLoginError(
+        error instanceof Error ? error.message : "Não foi possível entrar.",
+      );
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      setAuthStatus("signedOut");
+      setCloudReady(false);
+      setEntries([]);
+      setImportInfo(null);
+      setScannedCtes({});
+      setTdeRates([]);
+      setTdeImportInfo(null);
+      setMaexAdditionalSenders({});
+      setBilledDocuments({});
+      cloudVersionsRef.current = {};
+    }
+  }
+
+  async function retryCloudAccess() {
+    if (!cloudReady || !cloudSaveFailedRef.current) {
+      setCloudStatus("loading");
+      setCloudRetry((current) => current + 1);
+      return;
+    }
+
+    setCloudStatus("loading");
+    try {
+      const versions = await Promise.all([
+        saveCloudState("closing", closingCloudState),
+        saveCloudState("scans", scannedCtes),
+        saveCloudState("tde", tdeCloudState),
+        saveCloudState("maex", maexAdditionalSenders),
+        saveCloudState("billed", billedDocuments),
+      ]);
+      (["closing", "scans", "tde", "maex", "billed"] as CloudStateKey[])
+        .forEach((key, index) => {
+          cloudVersionsRef.current[key] = versions[index];
+        });
+      cloudSaveFailedRef.current = false;
+      setCloudStatus("ready");
+    } catch {
+      setCloudStatus("error");
+    }
+  }
+
+  if (!hydrated)
+    return (
+      <main className="access-shell">
+        <section className="access-card loading">
+          <div className="access-mark">GM</div>
+          <small>FECHAMENTOS GMOBS</small>
+          <h1>Preparando o sistema...</h1>
+        </section>
+      </main>
+    );
+
+  if (cloudHosted && authStatus === "signedOut")
+    return (
+      <main className="access-shell">
+        <section className="access-card login-card">
+          <div className="access-mark">GM</div>
+          <small>ACESSO RESTRITO</small>
+          <h1>Fechamentos GMOBS</h1>
+          <p>Entre para acessar os relatórios e o histórico compartilhado.</p>
+          <form onSubmit={login}>
+            <label htmlFor="login-username">Usuário</label>
+            <input
+              id="login-username"
+              value={loginUsername}
+              autoComplete="username"
+              onChange={(event) => setLoginUsername(event.target.value)}
+            />
+            <label htmlFor="login-password">Senha</label>
+            <input
+              id="login-password"
+              type="password"
+              value={loginPassword}
+              autoComplete="current-password"
+              onChange={(event) => setLoginPassword(event.target.value)}
+            />
+            {loginError && <div className="login-error">{loginError}</div>}
+            <button
+              type="submit"
+              className="primary"
+              disabled={loggingIn || !loginUsername.trim() || !loginPassword}
+            >
+              {loggingIn ? "Entrando..." : "Entrar"}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+
+  if (
+    cloudHosted &&
+    (!cloudReady || cloudStatus === "loading" || cloudStatus === "error")
+  )
+    return (
+      <main className="access-shell">
+        <section className={`access-card ${cloudStatus}`}>
+          <div className="access-mark">GM</div>
+          <small>BANCO CENTRAL</small>
+          <h1>
+            {cloudStatus === "error"
+              ? "Não foi possível acessar o banco"
+              : "Carregando os dados compartilhados..."}
+          </h1>
+          <p>
+            {cloudStatus === "error"
+              ? "Para evitar informações diferentes entre computadores, o sistema fica bloqueado até a conexão voltar."
+              : "Aguarde. Nenhum dado local será usado no lugar do banco."}
+          </p>
+          {cloudStatus === "error" && (
+            <button type="button" className="primary" onClick={retryCloudAccess}>
+              Tentar novamente
+            </button>
+          )}
+        </section>
+      </main>
+    );
+
   return (
     <main className="shell">
       <header className="header">
@@ -1693,10 +2047,17 @@ export default function Home() {
           <span>GMOBS</span>
           <h1>Fechamentos</h1>
         </div>
-        <p className={`storage-status ${cloudStatus}`}>
-          <span aria-hidden="true" />
-          {cloudStatusText[cloudStatus]}
-        </p>
+        <div className="header-actions">
+          <p className={`storage-status ${cloudStatus}`}>
+            <span aria-hidden="true" />
+            {cloudStatusText[cloudStatus]}
+          </p>
+          {cloudHosted && (
+            <button type="button" onClick={logout}>
+              Sair
+            </button>
+          )}
+        </div>
       </header>
       <nav className="tabs" aria-label="Etapas do fechamento">
         {(

@@ -18,8 +18,8 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 
 - Trabalhe principalmente em `app/page.tsx`, `app/excel.ts` e `app/globals.css`.
 - Use `app/layout.tsx` para metadados globais.
-- O banco em `db/` está preparado, mas não ativo.
-- A autenticação em `app/chatgpt-auth.ts` está disponível, mas não integra o fluxo atual.
+- O banco Cloudflare D1 em `db/` está ativo no site publicado pela ligação lógica `DB`.
+- O site publicado é público na internet, mas o aplicativo exige login próprio antes de carregar qualquer dado.
 - Não copie código da pasta `legacy/site/` sem revisar segurança, compatibilidade e regra de negócio.
 
 ## Regras que devem ser preservadas
@@ -65,7 +65,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - Preservar o layout específico do `MAEX ADICIONAL`: sete linhas iniciais mescladas de A até K, aviso vermelho na linha 6, parceiro na linha 7, cabeçalho preto na linha 8, colunas `CHEGADA`, `Mde`, `CTE`, `NF`, `REMETENTE`, `DESTINATARIO`, `CIDADE`, `PESO`, `VOL`, `ENTREGA` e `TAXA DE MOVEIS`, além do total amarelo ao final.
 - Preservar funcionamento responsivo em telas menores.
 
-## Persistência local e na nuvem
+## Persistência local e no banco central
 
 - `gmobs-closing-v3` é a chave lógica dos registros importados e identificações. O conteúdo principal fica no IndexedDB `gmobs-closing-storage`, que comporta relatórios maiores.
 - A versão antiga em `localStorage` é lida como fallback e migrada automaticamente para o IndexedDB; só depois de uma gravação bem-sucedida a cópia antiga é removida para liberar espaço.
@@ -75,11 +75,14 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - `gmobs-billed-documents-v1` guarda no IndexedDB o histórico de CTEs já enviados ao faturamento, suas transportadoras e arquivos de origem.
 - Uma nova importação substitui os registros, mas não apaga as bipagens.
 - Uma nova lista de TDE substitui as taxas vindas de arquivo, mas preserva os cadastros manuais.
-- A aplicação publicada usa Cloudflare D1 por meio da ligação lógica `DB`. O banco é a fonte durável; IndexedDB e `localStorage` continuam como cópia rápida e contingência do navegador.
+- A aplicação publicada usa Cloudflare D1 por meio da ligação lógica `DB`. O D1 é a única fonte de dados operacionais no endereço publicado; não carregar nem salvar esses dados no IndexedDB ou `localStorage` do navegador hospedado.
 - `app/cloud-storage.ts` compacta o estado no navegador com gzip e sincroniza cinco conjuntos: `closing`, `scans`, `tde`, `maex` e `billed`.
-- `app/api/cloud-state/route.ts` exige o cabeçalho autenticado `oai-authenticated-user-id`, separa os dados por usuário e grava blocos de até 1,5 MB em `cloud_state_chunks`.
-- A chave primária `(owner_id, state_key, chunk_index)` deve ser preservada: ela garante isolamento por usuário e leitura indexada sem varrer o banco inteiro.
+- `app/auth.ts` valida as credenciais configuradas nas variáveis `GMOBS_LOGIN_USER` e `GMOBS_LOGIN_PASSWORD` e cria uma sessão assinada por `GMOBS_SESSION_SECRET` em cookie HttpOnly. Nunca gravar as credenciais no código, Git ou documentação.
+- `app/api/cloud-state/route.ts` exige uma sessão válida e usa o proprietário lógico compartilhado `shared:fechamentos-gmobs`, para que todos os computadores autorizados vejam o mesmo conteúdo. A API grava blocos de até 1,5 MB em `cloud_state_chunks`.
+- A chave primária `(owner_id, state_key, chunk_index)` deve ser preservada: ela garante leitura indexada sem varrer o banco inteiro.
 - No endereço local (`localhost`/`127.0.0.1`) a sincronização automática com a nuvem fica desligada; o D1 local existe apenas para testes da API.
+- Se a sessão expirar, a tela volta ao login. Se o D1 não responder, o trabalho fica bloqueado e a interface oferece nova tentativa; não usar cache local silenciosamente como substituto no site publicado.
+- O site verifica alterações no banco a cada 60 segundos e ao receber foco, permitindo que diferentes computadores acompanhem o mesmo estado compartilhado.
 - A primeira abertura do endereço publicado começa com o banco vazio porque o armazenamento do endereço local pertence a outro domínio. Use `Baixar backup completo` no site local e `Restaurar backup` no site publicado para levar os dados existentes. Depois disso, a sincronização é automática.
 - O backup JSON contém dados operacionais reais e não deve ser colocado no Git, enviado por mensagem ou compartilhado sem necessidade.
 - Não mude as chaves, o banco IndexedDB nem limpe esses dados sem autorização e uma estratégia de migração.

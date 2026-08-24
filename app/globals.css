@@ -79,6 +79,110 @@ button {
 .header .storage-status.error > span {
   background: #c14444;
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.header-actions > button {
+  border: 1px solid #dce2de;
+  border-radius: 999px;
+  background: #fff;
+  color: #5e6a63;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.access-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 15% 15%, #dcefe5 0, transparent 34%),
+    radial-gradient(circle at 90% 85%, #e7ece9 0, transparent 32%),
+    #f5f7f6;
+}
+.access-card {
+  width: min(440px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 34px;
+  border: 1px solid #dfe6e2;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 24px 70px #19322518;
+}
+.access-mark {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 5px;
+  border-radius: 15px;
+  background: #146c43;
+  color: #fff;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+}
+.access-card > small {
+  color: #3d785b;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+.access-card h1 {
+  margin: 0;
+  color: #17231c;
+  font-size: 27px;
+  letter-spacing: -0.04em;
+}
+.access-card > p {
+  margin: 0;
+  color: #66736b;
+  line-height: 1.55;
+}
+.access-card form {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.access-card form label {
+  margin-top: 5px;
+  color: #455249;
+  font-size: 12px;
+  font-weight: 800;
+}
+.access-card form input {
+  width: 100%;
+  border: 1px solid #cfd8d2;
+  border-radius: 10px;
+  padding: 12px 13px;
+  outline: none;
+}
+.access-card form input:focus {
+  border-color: #146c43;
+  box-shadow: 0 0 0 3px #146c4316;
+}
+.access-card form button,
+.access-card > button {
+  margin-top: 10px;
+}
+.access-card button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.login-error {
+  border-radius: 9px;
+  background: #fff0f0;
+  color: #a43939;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.access-card.error .access-mark {
+  background: #a83d3d;
+}
 .tabs {
   display: flex;
   gap: 6px;
@@ -1354,6 +1458,10 @@ button {
   .header {
     align-items: flex-start;
     gap: 12px;
+  }
+  .header-actions {
+    align-items: flex-end;
+    flex-direction: column;
   }
   .header .storage-status {
     max-width: 180px;

@@ -1,4 +1,5 @@
 export type CloudStateKey = "closing" | "scans" | "tde" | "maex" | "billed";
+export type CloudStateRecord<T> = { value: T; version: string };
 
 type CloudEncoding = "gzip-base64" | "json";
 
@@ -64,10 +65,10 @@ async function decodeState<T>(encoding: CloudEncoding, payload: string) {
 function cloudError(response: Response) {
   if (response.status === 401)
     return new Error("Entre no site para acessar os dados salvos no banco.");
-  return new Error("O banco não respondeu. A cópia deste navegador foi mantida.");
+  return new Error("O banco não respondeu. Tente novamente antes de continuar.");
 }
 
-export async function loadCloudState<T>(stateKey: CloudStateKey) {
+export async function loadCloudStateRecord<T>(stateKey: CloudStateKey) {
   const response = await fetch(
     `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
     { cache: "no-store" },
@@ -77,7 +78,24 @@ export async function loadCloudState<T>(stateKey: CloudStateKey) {
   const encoding = response.headers.get("x-gmobs-encoding") as CloudEncoding;
   if (encoding !== "gzip-base64" && encoding !== "json")
     throw new Error("O banco retornou um formato de dados desconhecido.");
-  return decodeState<T>(encoding, await response.text());
+  return {
+    value: await decodeState<T>(encoding, await response.text()),
+    version: response.headers.get("x-gmobs-version") || "",
+  } satisfies CloudStateRecord<T>;
+}
+
+export async function loadCloudState<T>(stateKey: CloudStateKey) {
+  return (await loadCloudStateRecord<T>(stateKey))?.value;
+}
+
+export async function getCloudStateVersion(stateKey: CloudStateKey) {
+  const response = await fetch(
+    `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
+    { method: "HEAD", cache: "no-store" },
+  );
+  if (response.status === 204) return undefined;
+  if (!response.ok) throw cloudError(response);
+  return response.headers.get("x-gmobs-version") || "";
 }
 
 export async function saveCloudState(
@@ -97,4 +115,6 @@ export async function saveCloudState(
     },
   );
   if (!response.ok) throw cloudError(response);
+  const result = (await response.json()) as { updatedAt?: string };
+  return result.updatedAt || "";
 }

@@ -15,8 +15,9 @@ Este documento existe para permitir a continuidade do trabalho em outra máquina
 - O fluxo Importar → Prévia → Exportar já está programado.
 - O projeto antigo foi preservado em `legacy/site/` somente como referência.
 - A persistência em nuvem foi implementada com Cloudflare D1. `.openai/hosting.json` declara a ligação lógica `DB`, `db/schema.ts` define `cloud_state_chunks` e a migração correspondente fica em `drizzle/`.
-- Os dados importados continuam sendo guardados no IndexedDB do navegador, no banco `gmobs-closing-storage`, usando a chave lógica `gmobs-closing-v3`. Essa cópia local permite abrir a interface rapidamente e trabalhar mesmo durante uma falha temporária de conexão. No site publicado, os mesmos dados também são sincronizados com o D1 e passam a acompanhar o usuário em outro navegador ou computador.
-- As bipagens, a tabela de TDE, os cadastros manuais, os remetentes do `MAEX ADICIONAL` e o histórico de faturamento mantêm suas cópias locais existentes e também são sincronizados com o D1 no endereço publicado.
+- No endereço local, os dados importados continuam sendo guardados no IndexedDB do navegador, no banco `gmobs-closing-storage`, usando a chave lógica `gmobs-closing-v3`. No site publicado, o Cloudflare D1 é a única fonte operacional: nenhum relatório ou histórico é restaurado do armazenamento do navegador.
+- As bipagens, a tabela de TDE, os cadastros manuais, os remetentes do `MAEX ADICIONAL` e o histórico de faturamento também ficam no D1 compartilhado no endereço publicado.
+- O endereço publicado é acessível pela internet, mas a interface e a API exigem login próprio. A sessão é assinada no servidor e mantida em cookie HttpOnly.
 
 ## O que foi construído
 
@@ -125,7 +126,7 @@ Na prévia são exibidos:
 
 Antes de montar a lista de parceiras, o sistema retira os registros cujo par `transportadora + CTE` já consta no histórico de faturamento. Uma faixa informa quantos registros do período foram ocultados. Esses registros não participam das quantidades, valores, bipagem pendente nem exportação. Se todos os documentos do período já tiverem sido enviados, a tela informa isso em vez de apresentar um fechamento vazio.
 
-Argius, TRD e D&Y usam conferência por bipagem do CTE da parceira. Leituras com exatamente 44 dígitos são procuradas na coluna `Chave CT-e Parceiro` (AK); leituras menores são procuradas na coluna `CT-e Parceiro` (AJ). A marcação `OK` é feita na prévia, fica salva no navegador em `gmobs-scanned-ctes-v1` e permanece entre acessos, novo login no mesmo navegador e novas importações. Se um CTE bipado ainda não existir no relatório, ele fica como `AGUARDANDO` e recebe `OK` automaticamente quando aparecer em uma importação futura da mesma parceira. Para essas três parceiras, quantidades, valores e exportação consideram somente documentos bipados que já apareceram no relatório. Uma bipagem pode ser removida em caso de erro.
+Argius, TRD e D&Y usam conferência por bipagem do CTE da parceira. Leituras com exatamente 44 dígitos são procuradas na coluna `Chave CT-e Parceiro` (AK); leituras menores são procuradas na coluna `CT-e Parceiro` (AJ). A marcação `OK` é feita na prévia e, no site publicado, fica salva no conjunto `scans` do banco central, permanecendo entre acessos, computadores e novas importações. Se um CTE bipado ainda não existir no relatório, ele fica como `AGUARDANDO` e recebe `OK` automaticamente quando aparecer em uma importação futura da mesma parceira. Para essas três parceiras, quantidades, valores e exportação consideram somente documentos bipados que já apareceram no relatório. Uma bipagem pode ser removida em caso de erro.
 
 Além da leitura individual, a prévia dessas três parceiras permite importar um arquivo `.txt` com um CTE por linha ou valores separados por vírgula. O sistema adiciona todas as leituras válidas ao histórico existente, sem apagar bipagens anteriores. CTEs encontrados recebem `OK`; os que ainda não apareceram no relatório ficam como `AGUARDANDO`, obedecendo à mesma regra de AJ/AK.
 
@@ -151,7 +152,7 @@ Na prévia da Maex existe uma lista dos documentos do período com caixas de sel
 - em uma importação futura, novos documentos desse remetente são marcados automaticamente;
 - ao desmarcar, o remetente é removido da lista adicional e todos os seus documentos deixam de entrar nela.
 
-A marcação fica em `gmobs-maex-additional-senders-v1` na cópia local e no conjunto `maex` do D1. No endereço publicado, ela acompanha o usuário em outro navegador ou computador.
+A marcação fica em `gmobs-maex-additional-senders-v1` no desenvolvimento local e no conjunto `maex` do D1 publicado. No endereço publicado, ela é compartilhada entre todos os computadores autorizados.
 
 Em todas as transportadoras, o total de cada registro e do fechamento é `Valor do Frete + TDE`. O frete base vem da coluna `Valor do Frete` (BA); para relatórios alternativos sem BA, usa a coluna de frete reconhecida. O sistema não adiciona separadamente Frete Valor, TDA, TRT ou outras taxas, e nunca exibe total abaixo de zero. A exportação da Argius divide esse total em dois arquivos conforme a exceção descrita abaixo.
 
@@ -205,9 +206,12 @@ Em `ENTREGA`, usa a data de entrega quando disponível. Sem data, usa `RE` para 
 - `gmobs-maex-additional-senders-v1`: remetentes marcados para o adicional da Maex, identificados por CNPJ ou nome normalizado.
 - `gmobs-billed-documents-v1`: histórico no IndexedDB dos documentos já enviados ao faturamento, identificado por transportadora + CTE e acompanhado dos arquivos de origem.
 - O D1 guarda os cinco conjuntos duráveis `closing`, `scans`, `tde`, `maex` e `billed`. O cliente compacta cada conjunto com gzip antes do envio e a API divide a carga em blocos de até 1,5 MB, abaixo do limite de 2 MB por linha do D1.
-- A tabela `cloud_state_chunks` usa a chave primária composta `(owner_id, state_key, chunk_index)`. As consultas sempre filtram por usuário e conjunto, aproveitando esse índice e evitando varreduras completas.
-- A API aceita somente os cinco conjuntos conhecidos, limita o tamanho recebido, usa comandos preparados e exige `oai-authenticated-user-id` fora do ambiente local. Cada usuário vê somente os próprios dados.
-- A sincronização acontece cerca de 1,2 segundo depois de uma alteração. Várias mudanças rápidas são agrupadas pelo atraso, e o processamento pesado de compactação ocorre no navegador para não consumir o limite reduzido de CPU do servidor gratuito.
+- A tabela `cloud_state_chunks` usa a chave primária composta `(owner_id, state_key, chunk_index)`. No site publicado, todos os logins autorizados usam o proprietário lógico `shared:fechamentos-gmobs`, formando um banco operacional único para a equipe.
+- `app/auth.ts` valida as credenciais recebidas contra `GMOBS_LOGIN_USER` e `GMOBS_LOGIN_PASSWORD`, configuradas na hospedagem. A sessão dura oito horas, é assinada com `GMOBS_SESSION_SECRET` e fica em cookie HttpOnly, Secure e SameSite Strict. Senha e segredo não pertencem ao código nem ao Git.
+- A API aceita somente os cinco conjuntos conhecidos, limita o tamanho recebido, usa comandos preparados e exige sessão válida fora do ambiente local.
+- A sincronização acontece cerca de 600 milissegundos depois de uma alteração. Várias mudanças rápidas são agrupadas pelo atraso, e o processamento pesado de compactação ocorre no navegador para não consumir o limite reduzido de CPU do servidor gratuito.
+- O site consulta as versões dos cinco conjuntos a cada 60 segundos, ao voltar para a aba e ao receber foco. Quando detecta alteração feita por outro computador, recarrega apenas os conjuntos modificados.
+- Se o banco não responder, a interface publicada bloqueia a operação e oferece nova tentativa. Ela não usa uma cópia local silenciosa, evitando que dois computadores trabalhem com estados divergentes.
 - Ao abrir uma versão atualizada, um relatório que ainda esteja no antigo `localStorage` é migrado automaticamente para o IndexedDB. A cópia antiga só é removida após o novo salvamento ser concluído.
 - Se o IndexedDB não estiver disponível, o sistema tenta o `localStorage` como alternativa. Se ambos recusarem a gravação, a tela não cai: o relatório permanece aberto na sessão e aparece um aviso para não recarregar antes de exportar.
 - A correção foi validada com um relatório real de 7,8 MB contendo 18.116 registros elegíveis; somente os registros importados resultavam em aproximadamente 14,5 MB de dados serializados, acima da capacidade comum do `localStorage`.
@@ -216,10 +220,10 @@ Em `ENTREGA`, usa a data de entrega quando disponível. Sem data, usa `RE` para 
 - Importar outra planilha substitui `gmobs-closing-v3`, mas não apaga `gmobs-scanned-ctes-v1`.
 - Importar outra lista TDE substitui as taxas com origem no arquivo e preserva os registros manuais.
 - A taxa manual prevalece sobre a taxa importada para o mesmo CNPJ + transportadora.
-- Git guarda apenas o código. Nenhum dado do IndexedDB ou do `localStorage` é levado para outra máquina.
-- Limpar os dados do navegador remove apenas a cópia local. No site publicado e autenticado, o sistema recupera novamente o conteúdo do D1.
+- Git guarda apenas o código. Nenhum dado operacional, credencial ou segredo é levado para outra máquina pelo repositório.
+- Limpar os dados do navegador publicado encerra a sessão, mas não apaga o conteúdo central do D1.
 - A tela Importar possui `Baixar backup completo` e `Restaurar backup`. O arquivo JSON inclui relatório, bipagens, TDE, remetentes adicionais da Maex e histórico de faturamento.
-- Como `127.0.0.1` e o endereço publicado são domínios diferentes, os dados antigos não atravessam automaticamente na primeira publicação. É necessário baixar o backup no site local e restaurá-lo uma vez no site publicado; depois a sincronização é automática.
+- Como `127.0.0.1` e o endereço publicado são domínios diferentes, os dados antigos não atravessam automaticamente na primeira publicação. É necessário baixar o backup no site local e restaurá-lo uma vez no site publicado; depois todos os computadores autorizados passam a usar o mesmo banco.
 
 ## Estrutura importante
 
@@ -227,10 +231,11 @@ Em `ENTREGA`, usa a data de entrega quando disponível. Sem data, usa `RE` para 
 - `app/excel.ts`: leitura das planilhas, reconhecimento de colunas, normalização e criação do Excel final.
 - `app/storage.ts`: armazenamento de maior capacidade dos registros importados e migração segura do antigo `localStorage` para IndexedDB.
 - `app/cloud-storage.ts`: compactação, leitura e gravação dos cinco conjuntos persistentes na API do D1.
-- `app/api/cloud-state/route.ts`: API autenticada de leitura e gravação do estado em blocos.
+- `app/auth.ts` e `app/api/auth/`: validação do login, criação e encerramento da sessão assinada.
+- `app/api/cloud-state/route.ts`: API protegida de leitura e gravação do estado compartilhado em blocos.
 - `app/globals.css`: aparência responsiva da interface.
 - `app/layout.tsx`: título e descrição da aplicação.
-- `app/chatgpt-auth.ts`: funções prontas para fluxos visuais de autenticação. A API usa diretamente os cabeçalhos de identidade fornecidos pelo site privado.
+- `app/chatgpt-auth.ts`: arquivo legado de funções do starter; o fluxo ativo usa `app/auth.ts` e as rotas em `app/api/auth/`.
 - `db/schema.ts`: tabela ativa `cloud_state_chunks` do Cloudflare D1; as migrações geradas ficam em `drizzle/`.
 - `worker/index.ts`: entrada do Cloudflare Worker/vinext.
 - `legacy/site/`: versão antiga do sistema, mantida para consulta; não deve ser alterada sem necessidade.
@@ -282,10 +287,10 @@ git push
 2. Ler `AGENTS.md` e este documento integralmente.
 3. Executar `git status` e não apagar alterações existentes.
 4. Abrir `app/page.tsx`, `app/excel.ts` e `app/globals.css` antes de mudar regras.
-5. Lembrar que a planilha real e as bipagens não vêm no clone; importar o relatório novamente e, se necessário, rebipar documentos no novo computador.
+5. Lembrar que a planilha real e as bipagens não vêm no clone do Git. No site publicado, basta entrar com as credenciais da equipe para acessar os dados compartilhados; o backup é necessário apenas para a migração inicial do antigo endereço local.
 6. Para qualquer mudança financeira, confirmar que o total de todas as transportadoras continua sendo BA + TDE, sem somar TDA, TRT ou outras taxas, e validar separadamente a divisão especial dos valores nos dois arquivos da Argius.
 7. Para qualquer mudança em TDE, validar a lista, CNPJ com zero à esquerda, taxa da transportadora correta, cadastro manual e persistência em `gmobs-tde-rates-v1`.
-8. Para qualquer mudança de bipagem, validar leitor/digitação, TXT, caixas de seleção, AJ, AK, `AGUARDANDO`, `OK`, nova importação e persistência local.
+8. Para qualquer mudança de bipagem, validar leitor/digitação, TXT, caixas de seleção, AJ, AK, `AGUARDANDO`, `OK`, nova importação e persistência no D1 compartilhado.
 9. Para qualquer mudança de exportação, validar separadamente formato padrão, CF/aba `OUTROS`, os dois arquivos da Argius, a exceção da Fitlog sem Dedicado e a lista de faltantes da Pajussara.
 10. Para qualquer mudança na Maex, validar o fechamento normal e o adicional separadamente, incluindo marcação por remetente, nova importação, taxa fixa de R$ 15 e layout A:K.
 11. Executar `npx vite build` antes de concluir.
@@ -297,8 +302,8 @@ git push
 - O repositório contém `package-lock.json` e `pnpm-lock.yaml`. É melhor escolher apenas um gerenciador de pacotes futuramente; por enquanto, os comandos documentados usam npm.
 - O commit inicial incluiu arquivos internos de `.pnpm-store` e `tsconfig.tsbuildinfo`; convém removê-los do controle de versão e adicioná-los ao `.gitignore` em uma limpeza futura.
 - O sistema substitui os dados anteriores quando uma nova planilha é importada; ele não acumula importações.
-- A substituição da planilha não apaga as bipagens, que ficam em outra chave do `localStorage`.
-- No endereço local, IndexedDB e `localStorage` continuam específicos daquele navegador. No endereço publicado, o D1 repõe os dados depois do login; para a primeira migração do endereço local, use o backup completo.
+- A substituição da planilha não apaga as bipagens, que ficam em outro conjunto persistente (`scans`).
+- No endereço local, IndexedDB e `localStorage` continuam específicos daquele navegador. No endereço publicado, não são usados como fonte operacional: o D1 compartilhado carrega os dados depois do login. Para a primeira migração do endereço local, use o backup completo.
 - O modelo PDF da Argius contém dados operacionais e não foi copiado para o repositório. A estrutura visual necessária está descrita neste documento e implementada em `buildArgiusSheet`.
 - As regras financeiras e o formato final precisam ser validados com planilhas reais antes do uso definitivo.
 
