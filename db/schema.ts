@@ -1,4 +1,18 @@
-// Intentionally empty by default.
-// Add Drizzle tables here when the site actually needs a database.
-// See examples/d1/db/schema.ts for an opt-in example.
-export {};
+import { primaryKey, sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+
+export const cloudStateChunks = sqliteTable(
+  "cloud_state_chunks",
+  {
+    ownerId: text("owner_id").notNull(),
+    stateKey: text("state_key").notNull(),
+    chunkIndex: integer("chunk_index").notNull(),
+    encoding: text("encoding").notNull(),
+    payload: text("payload").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.ownerId, table.stateKey, table.chunkIndex],
+    }),
+  ],
+);

@@ -6,7 +6,7 @@ Este projeto transforma o processo de fechamento de transportadoras/parceiras em
 
 Este documento existe para permitir a continuidade do trabalho em outra máquina ou em uma nova conversa com o Codex sem precisar reexplicar o projeto desde o início.
 
-## Estado atual em 21/08/2026
+## Estado atual em 24/08/2026
 
 - O projeto foi colocado no Git e enviado ao GitHub.
 - A branch de trabalho é `main`.
@@ -14,9 +14,9 @@ Este documento existe para permitir a continuidade do trabalho em outra máquina
 - A interface principal já está implementada em React/TypeScript.
 - O fluxo Importar → Prévia → Exportar já está programado.
 - O projeto antigo foi preservado em `legacy/site/` somente como referência.
-- Ainda não há banco de dados ativo: `db/schema.ts` está vazio e `.openai/hosting.json` mantém D1 e R2 como `null`.
-- Os dados importados são guardados no `localStorage` do navegador, usando a chave `gmobs-closing-v3`. Portanto, esses dados não acompanham o Git e não aparecem automaticamente em outra máquina. A planilha original deve ser importada novamente na outra máquina.
-- As bipagens são guardadas separadamente em `gmobs-scanned-ctes-v1`, também no `localStorage`. Elas sobrevivem a novas importações e novo login no mesmo navegador, mas não migram para outro computador.
+- A persistência em nuvem foi implementada com Cloudflare D1. `.openai/hosting.json` declara a ligação lógica `DB`, `db/schema.ts` define `cloud_state_chunks` e a migração correspondente fica em `drizzle/`.
+- Os dados importados continuam sendo guardados no IndexedDB do navegador, no banco `gmobs-closing-storage`, usando a chave lógica `gmobs-closing-v3`. Essa cópia local permite abrir a interface rapidamente e trabalhar mesmo durante uma falha temporária de conexão. No site publicado, os mesmos dados também são sincronizados com o D1 e passam a acompanhar o usuário em outro navegador ou computador.
+- As bipagens, a tabela de TDE, os cadastros manuais, os remetentes do `MAEX ADICIONAL` e o histórico de faturamento mantêm suas cópias locais existentes e também são sincronizados com o D1 no endereço publicado.
 
 ## O que foi construído
 
@@ -34,16 +34,48 @@ Em `app/excel.ts`, o sistema:
 - inclui registros entregues, reentregas e complementos de frete quando há status reconhecido (`ET`, `RE`, `CF`, `ENTREGUE`, `REENTREGA` ou `COMPLEMENTO DE FRETE`);
 - informa quantos registros ficaram fora do fechamento.
 
-Os campos reconhecidos incluem parceira e CNPJ do redespacho, ocorrência, status, data de emissão, data de entrega, CTE, chave do CTE, nota fiscal/minuta, remetente e CNPJ, destinatário e CNPJ, cidade, observação, fretes, TDE, TDA, TRT, reentrega, dedicado, ajuste e total informado.
+Os campos reconhecidos incluem parceira e CNPJ do redespacho, ocorrência, status, data de emissão, data de entrega, MDe/documento, CTE, chave do CTE, nota fiscal/minuta, remetente e CNPJ, destinatário e CNPJ, cidade, peso, volumes, observação, fretes, TDE, TDA, TRT, reentrega, dedicado, ajuste e total informado.
+
+#### Lista de taxas TDE
+
+A primeira página possui uma segunda importação específica para a lista de TDE. O formato aprovado contém:
+
+- `NOME`: nome ou razão social do cliente;
+- `CNPJ`: identificador usado no cruzamento;
+- uma coluna monetária para cada transportadora, como `ARGIUS`, `FITLOG`, `MAEX`, `TADEX`, `LOVATO` e `TRD`.
+
+O sistema lê todas as abas e procura, nas primeiras 20 linhas, uma linha que contenha `NOME`, `CNPJ` e ao menos uma coluna de taxa. Cada linha é transformada em combinações CNPJ + transportadora + valor. No relatório GMOBS, o cruzamento é feito contra o campo `CNPJ Destinatário`; quando CNPJ e transportadora coincidem, o valor da lista substitui o TDE original do registro para a prévia e exportação.
+
+O CNPJ é comparado somente pelos dígitos. Como o Excel pode transformar CNPJs iniciados por zero em números de 12 ou 13 dígitos, o sistema completa zeros à esquerda até chegar a 14 dígitos. Exemplo: `6127582000905` é tratado como `06.127.582/0009-05`.
+
+A ordem de importação não importa: se a lista TDE vier primeiro, ela será usada na próxima importação do relatório; se o relatório já estiver aberto, a taxa é aplicada imediatamente. Quando não há correspondência para CNPJ + transportadora, permanece o TDE que veio no relatório original.
+
+Na mesma página existe um cadastro manual com Nome/Razão social, CNPJ, Transportadora e Valor TDE. O cadastro manual tem prioridade sobre a lista importada para a mesma combinação CNPJ + transportadora. Ele pode ser removido; ao remover, a taxa do arquivo volta a valer, se existir. Importar uma lista TDE nova substitui apenas os dados vindos do arquivo e preserva os cadastros manuais.
+
+Enquanto o nome é digitado no cadastro manual, o sistema procura sugestões tanto na lista TDE importada quanto nos destinatários do relatório atual. Clientes com o mesmo nome normalizado são agrupados na sugestão, que informa quantos CNPJs foram encontrados. Ao escolher o cliente, Nome/Razão social e todos esses CNPJs são preenchidos automaticamente; a transportadora e o valor continuam sendo escolhidos manualmente.
+
+O campo `CNPJ(s)` também aceita vários números colados manualmente, separados por vírgula ou um por linha. Ao salvar, o sistema cria internamente uma combinação manual para cada CNPJ com o mesmo nome, transportadora e valor TDE, mantendo a prioridade sobre a lista importada. Na interface esses registros aparecem agrupados em um único cadastro com a quantidade de CNPJs; remover o grupo remove todas as combinações manuais dele e restaura as taxas do arquivo quando existirem.
 
 #### Colunas importantes do relatório GMOBS
 
 - `AJ - CT-e Parceiro`: número curto usado na bipagem quando a leitura possui menos de 44 dígitos.
 - `AK - Chave CT-e Parceiro`: chave de acesso usada quando a bipagem possui exatamente 44 dígitos.
+- `C - Documento`: número MDe usado no arquivo `MAEX ADICIONAL`.
+- `AL - Volumes` e `AN - Peso`: quantidade e peso usados no arquivo `MAEX ADICIONAL`.
 - `BA - Valor do Frete`: única fonte do total do registro e do fechamento.
 - `BD - Valor Frete Parceiro`: fonte da coluna `Frete da Parceira` na exportação padrão.
 - `BQ - Observação`: texto levado para a aba `OUTROS` nos registros CF.
 - Os CNPJs e nomes de remetente, destinatário e redespacho são localizados pelo par de cabeçalhos `CNPJ ...` seguido de `Nome`, evitando ambiguidade entre as várias colunas chamadas `Nome`.
+
+#### Histórico de documentos enviados ao faturamento
+
+Na primeira página existe uma terceira importação chamada `Já enviados ao faturamento`. Ela aceita vários fechamentos antigos `.xls` ou `.xlsx` de uma vez e procura automaticamente as colunas `CTE`/`CT-E` e `NF`, mesmo quando o cabeçalho aparece depois das linhas institucionais.
+
+A identificação segura usa `transportadora + CTE`. A NF é preservada apenas para conferência; ela não é usada sozinha porque pode se repetir em parceiros diferentes. Fechamentos repetidos e cópias com sufixos como `(1)` ou `(2)` não duplicam os documentos. Cada registro mantém a lista de arquivos em que foi encontrado.
+
+A transportadora é reconhecida pelo nome do arquivo ou por uma indicação explícita no cabeçalho. Os arquivos cujo nome contém `Custos_extras_MVF` são tratados como adicionais da Argius. O importador também reconhece os formatos históricos da Displan, Maex, TRD e Argius analisados nesta etapa.
+
+O histórico mostra a quantidade de CTEs únicos, quantos foram encontrados no relatório atual e a relação dos arquivos importados. O botão `Desfazer` remove aquela origem; se o mesmo CTE também estiver presente em outro fechamento importado, ele continua marcado.
 
 ### 2. Identificação das parceiras
 
@@ -55,12 +87,15 @@ Em `app/page.tsx`, há aliases para:
 - Displan;
 - TRD;
 - D&Y;
-- Pajuçara;
+- ARC, agrupado e exibido como D&Y;
+- PAJUSSARA (também reconhece as grafias antigas Pajuçara/Pajucara);
 - Rio Vermelho.
 
 Uma transportadora desconhecida recebe um identificador próprio baseado no nome recebido. Linhas sem nome de parceira aparecem como **Não identificado** e não podem ser exportadas até que essa situação seja tratada.
 
-Os nomes SIMB, SIMBAX, STX, Tadex, Tadlog e Essessao são agrupados como **Tadex**. Todas as variações contendo TTJB são agrupadas como **TTJB**. Na prévia de registros não identificados, o sistema mostra CNPJ do redespacho, nome/razão social recebido, remetentes, cidades e exemplos de documentos, permitindo atribuir o grupo a uma transportadora conhecida ou cadastrar uma nova antes da exportação. A nova transportadora fica salva com os registros no navegador e passa a aparecer nas opções seguintes.
+Os nomes SIMB, SIMBAX, STX, Tadex, Tadlog e Essessao são agrupados como **Tadex**. Todas as variações contendo TTJB são agrupadas como **TTJB**. Nomes contendo Maex ou Mardonio são agrupados como **Maex**. Na prévia de registros não identificados, o sistema mostra CNPJ do redespacho, nome/razão social recebido, remetentes, cidades e exemplos de documentos, permitindo atribuir o grupo a uma transportadora conhecida ou cadastrar uma nova antes da exportação. A nova transportadora fica salva com os registros no navegador e passa a aparecer nas opções seguintes.
+
+O nome de parceiro **ARC** é tratado como um alias da **D&Y**. Registros novos ou já salvos com ARC usam o identificador interno `dy`, aparecem agrupados como D&Y e obedecem à mesma exigência de bipagem antes de entrar na prévia e na exportação.
 
 A identificação manual altera todos os registros do mesmo grupo, priorizando o CNPJ do redespacho como chave. Se o CNPJ estiver ausente, usa o nome recebido e, por último, o remetente como pista de agrupamento.
 
@@ -88,13 +123,39 @@ Na prévia são exibidos:
 - quantidade de reentregas;
 - valor total do fechamento.
 
+Antes de montar a lista de parceiras, o sistema retira os registros cujo par `transportadora + CTE` já consta no histórico de faturamento. Uma faixa informa quantos registros do período foram ocultados. Esses registros não participam das quantidades, valores, bipagem pendente nem exportação. Se todos os documentos do período já tiverem sido enviados, a tela informa isso em vez de apresentar um fechamento vazio.
+
 Argius, TRD e D&Y usam conferência por bipagem do CTE da parceira. Leituras com exatamente 44 dígitos são procuradas na coluna `Chave CT-e Parceiro` (AK); leituras menores são procuradas na coluna `CT-e Parceiro` (AJ). A marcação `OK` é feita na prévia, fica salva no navegador em `gmobs-scanned-ctes-v1` e permanece entre acessos, novo login no mesmo navegador e novas importações. Se um CTE bipado ainda não existir no relatório, ele fica como `AGUARDANDO` e recebe `OK` automaticamente quando aparecer em uma importação futura da mesma parceira. Para essas três parceiras, quantidades, valores e exportação consideram somente documentos bipados que já apareceram no relatório. Uma bipagem pode ser removida em caso de erro.
+
+Além da leitura individual, a prévia dessas três parceiras permite importar um arquivo `.txt` com um CTE por linha ou valores separados por vírgula. O sistema adiciona todas as leituras válidas ao histórico existente, sem apagar bipagens anteriores. CTEs encontrados recebem `OK`; os que ainda não apareceram no relatório ficam como `AGUARDANDO`, obedecendo à mesma regra de AJ/AK.
+
+Logo abaixo, os documentos do período que continuam sem `OK` aparecem em uma lista de pendências com caixas de seleção. Marcar uma caixa confirma manualmente o CTE e o move para a lista de documentos com `OK`. Essa confirmação manual também é gravada em `gmobs-scanned-ctes-v1`, portanto participa do fechamento e permanece após recarregar ou reimportar no mesmo navegador.
 
 As bipagens são separadas por identificador da parceira. O mesmo número bipado para Argius não libera automaticamente um documento da TRD ou D&Y. O valor salvo é a leitura normalizada e a data/hora ISO da bipagem. Ao reimportar, o sistema cruza novamente as leituras salvas com AJ e AK; por isso não se deve apagar `gmobs-scanned-ctes-v1`.
 
-O total usa exclusivamente o valor da coluna `Valor do Frete` quando ela existe no relatório. O sistema não adiciona separadamente Frete Valor, TDE, TDA, TRT ou outras taxas, pois esses componentes já estão consolidados nessa coluna. Para relatórios alternativos sem `Valor do Frete`, usa somente a coluna de frete reconhecida, nunca exibindo valor abaixo de zero.
+#### Validação do fechamento recebido da Pajussara
 
-Na exportação, a coluna `Data de Entrega` aparece depois de `Cidade`. Reentregas recebem o texto `REENTREGA`. Registros `CF` recebem o texto `OUTROS`; neles, o `Valor do Frete` é exibido em `Dedicado`, a coluna de frete da transportadora fica vazia e o valor entra no total apenas uma vez. Quando existem registros `CF`, o arquivo também ganha uma aba `OUTROS` com seus dados e o conteúdo da coluna `Observação` (BQ) do relatório original. A coluna `Frete da Parceira` usa o valor da coluna `Valor Frete Parceiro` (BD) do relatório. Ao selecionar várias transportadoras, o sistema gera um arquivo Excel separado para cada uma.
+Na prévia da Pajussara existe um campo para importar o fechamento enviado pela própria transportadora. O modelo reconhecido pode conter as abas `Extrato` e `MAPA SJC`; o sistema localiza automaticamente a aba e a linha que possuem as colunas `CTRC/SUBC` e `NF`, ignorando linhas de cabeçalho, separadores, totais e o bloco de estorno posterior ao resumo.
+
+O número `CTRC/SUBC` deles não corresponde ao CTE que vem no relatório GMOBS. Por isso, a comparação usa a NF: remove zeros à esquerda e desconsidera a série que aparece depois do hífen no nosso relatório. Quando a mesma NF aparece mais de uma vez, cada ocorrência do arquivo recebido só pode confirmar uma ocorrência do nosso relatório; remetente é usado como apoio para escolher a correspondência correta.
+
+A tela mostra quantos documentos existem no nosso relatório no período filtrado, quantos foram encontrados, quantos faltaram no fechamento deles e quantos existem somente no arquivo recebido. Os faltantes aparecem com CTE, NF, remetente, destinatário, cidade e valor. O botão `Baixar faltantes` gera um Excel com esses documentos, as datas, o `Total Comissão` e a soma final. O arquivo recebido é temporário e precisa ser importado novamente após recarregar a página.
+
+#### Seleção do MAEX ADICIONAL
+
+Na prévia da Maex existe uma lista dos documentos do período com caixas de seleção para o fechamento adicional de entregas de móveis. A interface mostra MDe, CTE, NF, remetente, destinatário e cidade. Embora a caixa apareça em cada documento, a escolha é salva por remetente para evitar repetir o trabalho em todas as quinzenas:
+
+- usa primeiro o CNPJ normalizado do remetente como identificador permanente;
+- quando não há CNPJ, usa o nome normalizado do remetente;
+- ao marcar um documento, todos os documentos atuais do mesmo remetente ficam marcados;
+- em uma importação futura, novos documentos desse remetente são marcados automaticamente;
+- ao desmarcar, o remetente é removido da lista adicional e todos os seus documentos deixam de entrar nela.
+
+A marcação fica em `gmobs-maex-additional-senders-v1` na cópia local e no conjunto `maex` do D1. No endereço publicado, ela acompanha o usuário em outro navegador ou computador.
+
+Em todas as transportadoras, o total de cada registro e do fechamento é `Valor do Frete + TDE`. O frete base vem da coluna `Valor do Frete` (BA); para relatórios alternativos sem BA, usa a coluna de frete reconhecida. O sistema não adiciona separadamente Frete Valor, TDA, TRT ou outras taxas, e nunca exibe total abaixo de zero. A exportação da Argius divide esse total em dois arquivos conforme a exceção descrita abaixo.
+
+Na exportação, a coluna `Data de Entrega` aparece depois de `Cidade`. Reentregas recebem o texto `REENTREGA`. Registros `CF` recebem o texto `OUTROS`; neles, somente o `Valor do Frete` (BA) é exibido em `Dedicado`, a coluna de frete da transportadora fica vazia e o TDE continua entrando apenas no `Total Comissão`. Quando existem registros `CF`, o arquivo também ganha uma aba `OUTROS` com seus dados, somente o valor BA na coluna `Valor do Frete` e o conteúdo da coluna `Observação` (BQ) do relatório original. A coluna `Frete da Parceira` usa o valor da coluna `Valor Frete Parceiro` (BD) do relatório. Ao selecionar várias transportadoras, o sistema gera um arquivo Excel separado para cada uma.
 
 ### 5. Exportação para Excel
 
@@ -102,33 +163,75 @@ O botão de exportação gera um arquivo chamado aproximadamente:
 
 `Fechamento D&Y - 2ª Quinzena de agosto de 2026.xlsx`
 
+Após gerar os arquivos, todos os CTEs efetivamente exportados são gravados automaticamente no histórico de enviados ao faturamento. Assim, uma nova tentativa de fechamento no mesmo navegador não volta a incluir esses documentos; se necessário, a origem gerada pelo sistema pode ser desfeita na primeira página.
+
 O período é definido como primeira quinzena para datas até o dia 15 e segunda quinzena após o dia 15. Cada parceira selecionada gera um arquivo separado. Em geral, o arquivo possui títulos, cabeçalho escuro, formatação monetária em reais, filtro, congelamento do cabeçalho e linha final de total em destaque amarelo.
 
-No formato padrão, cada uma das cinco linhas iniciais do cabeçalho é mesclada individualmente de `A` até `M` (`A1:M1` até `A5:M5`).
+No formato padrão, cada uma das cinco linhas iniciais do cabeçalho é mesclada individualmente de `A` até a última coluna da tabela.
 
-O cabeçalho da tabela padrão fica na linha 6 e possui 13 colunas: `Entrada`, `CTE`, `NF`, `Remetente`, `Destinatário`, `Cidade`, `Data de Entrega`, `TDE`, `TDA`, `Dedicado`, `TRT`, `Frete da Parceira` e `Total Comissão`. A linha final soma a coluna M.
+O cabeçalho da tabela padrão fica na linha 6 e possui 12 colunas: `Entrada`, `CTE`, `NF`, `Remetente`, `Destinatário`, `Cidade`, `Data de Entrega`, `TDE`, `Dedicado`, `TDA`, `Frete da Parceira` e `Total Comissão`. TDA e TRT representam o mesmo serviço, então a exportação mostra somente `TDA`: usa primeiro o valor de TDA e, quando ele estiver vazio ou zerado, reaproveita o valor de TRT, sem somar os dois. A linha final soma a coluna L. As cinco linhas institucionais são mescladas individualmente de A até L.
 
-A exportação da Argius é uma exceção e segue o modelo fornecido em `fechamento exemplo.pdf`: uma tabela direta com Entrada, CTE, NF, Remetente/CNPJ, Destinatário/CNPJ, Cidade, TDE, TDA, Dedicado e Total Comissão, cabeçalho preto e linhas alternadas claras.
+A Fitlog possui uma exceção apenas de formato. A aba principal `DadosExcel` mantém todos os registros e a coluna `TDE`, mas não possui a coluna `Dedicado`; por isso o cabeçalho vai de A até K e o total fica na coluna K. Não existe aba TDE separada. Em todas as transportadoras, inclusive a Fitlog, cada linha de `Total Comissão` é calculada como `Valor do Frete` (BA) + TDE, e a linha final soma esses totais.
 
-O modelo da Argius não possui as cinco linhas institucionais, aba extra `OUTROS` nem linha final amarela. A primeira linha já é o cabeçalho com 12 colunas: `Entrada`, `CTE`, `NF`, `Remetente`, `CNPJ`, `Destinatário`, `CNPJ`, `Cidade`, `TDE`, `TDA`, `Dedicado` e `Total Comissão`. Preservar essa exceção mesmo que o formato padrão mude.
+A exportação da Argius é uma exceção e gera sempre dois arquivos separados, ambos em tabela direta, sem as cinco linhas institucionais, com cabeçalho preto, linhas alternadas claras e uma linha amarela de soma total no final.
+
+O arquivo normal se chama aproximadamente `Fechamento Argius - 2ª Quinzena de agosto de 2026.xlsx`. Ele mantém `Entrada`, `CTE`, `NF`, `Remetente`, CNPJ do remetente, `Destinatário`, CNPJ do destinatário e `Cidade`, não mostra as colunas TDA, TDE e Dedicado e termina em `Total Comissão`. O valor líquido de cada linha é calculado como `Total Comissão original - TDA - TDE - Dedicado`, limitado a zero para nunca ficar negativo.
+
+O segundo arquivo se chama aproximadamente `Fechamento Adicionais Argius - 2ª Quinzena de agosto de 2026.xlsx`. Ele inclui somente documentos que possuam ao menos um adicional, preserva os mesmos dados do cliente e mostra as colunas na ordem `TDA`, `TDE`, `Dedicado` e `Total Comissão`. Nesse arquivo, o total da linha é `TDA + TDE + Dedicado`. Para CF, o Dedicado continua usando o Valor do Frete (BA). A linha final soma todos os adicionais.
+
+#### Arquivo MAEX ADICIONAL
+
+Quando a Maex é selecionada para exportação, o fechamento normal continua sendo gerado com todos os documentos elegíveis. Se houver documentos marcados para o adicional dentro do período filtrado, o sistema gera um segundo arquivo separado chamado aproximadamente `Fechamento Adicional Maex - 1 Quinzena de agosto de 2026.xlsx`. Se não houver marcações no período, somente o arquivo normal é gerado.
+
+O adicional segue o modelo fornecido pelo usuário:
+
+- aba `TEMP_EXPORT`;
+- linhas 1 a 7 mescladas individualmente de A até K;
+- período no padrão `1° Quinzena de agosto / 26` ou `2° Quinzena ...`;
+- aviso de adicional de móveis em faixa vermelha na linha 6;
+- identificação `Parceiro: MAEX` na linha 7;
+- cabeçalho preto na linha 8 com `CHEGADA`, `Mde`, `CTE`, `NF`, `REMETENTE`, `DESTINATARIO`, `CIDADE`, `PESO`, `VOL`, `ENTREGA` e `TAXA DE MOVEIS`;
+- taxa fixa de R$ 15 por documento;
+- linha final amarela com fórmula de soma da coluna K;
+- datas em `dd/mm/aaaa` e MDe/CTE mantidos como texto para evitar notação científica ou perda de zeros.
+
+Em `ENTREGA`, usa a data de entrega quando disponível. Sem data, usa `RE` para reentrega ou o código de status disponível. O arquivo adicional não substitui nem altera os valores do fechamento normal da Maex.
 
 ### 6. Persistência e limites
 
-- `gmobs-closing-v3`: registros atualmente importados, identificações manuais e transportadoras cadastradas a partir desses registros.
+- `gmobs-closing-v3`: registros atualmente importados, identificações manuais e transportadoras cadastradas a partir desses registros. Fica no IndexedDB `gmobs-closing-storage`, cuja capacidade é adequada para relatórios grandes.
 - `gmobs-scanned-ctes-v1`: bipagens da Argius, TRD e D&Y, encontradas ou aguardando.
+- `gmobs-tde-rates-v1`: taxas TDE importadas, nome/resumo do último arquivo e cadastros manuais.
+- `gmobs-maex-additional-senders-v1`: remetentes marcados para o adicional da Maex, identificados por CNPJ ou nome normalizado.
+- `gmobs-billed-documents-v1`: histórico no IndexedDB dos documentos já enviados ao faturamento, identificado por transportadora + CTE e acompanhado dos arquivos de origem.
+- O D1 guarda os cinco conjuntos duráveis `closing`, `scans`, `tde`, `maex` e `billed`. O cliente compacta cada conjunto com gzip antes do envio e a API divide a carga em blocos de até 1,5 MB, abaixo do limite de 2 MB por linha do D1.
+- A tabela `cloud_state_chunks` usa a chave primária composta `(owner_id, state_key, chunk_index)`. As consultas sempre filtram por usuário e conjunto, aproveitando esse índice e evitando varreduras completas.
+- A API aceita somente os cinco conjuntos conhecidos, limita o tamanho recebido, usa comandos preparados e exige `oai-authenticated-user-id` fora do ambiente local. Cada usuário vê somente os próprios dados.
+- A sincronização acontece cerca de 1,2 segundo depois de uma alteração. Várias mudanças rápidas são agrupadas pelo atraso, e o processamento pesado de compactação ocorre no navegador para não consumir o limite reduzido de CPU do servidor gratuito.
+- Ao abrir uma versão atualizada, um relatório que ainda esteja no antigo `localStorage` é migrado automaticamente para o IndexedDB. A cópia antiga só é removida após o novo salvamento ser concluído.
+- Se o IndexedDB não estiver disponível, o sistema tenta o `localStorage` como alternativa. Se ambos recusarem a gravação, a tela não cai: o relatório permanece aberto na sessão e aparece um aviso para não recarregar antes de exportar.
+- A correção foi validada com um relatório real de 7,8 MB contendo 18.116 registros elegíveis; somente os registros importados resultavam em aproximadamente 14,5 MB de dados serializados, acima da capacidade comum do `localStorage`.
+- O histórico foi validado com 28 fechamentos antigos: todos foram reconhecidos, totalizando 9.525 linhas lidas e 6.114 documentos únicos depois de remover duplicatas. No relatório real de 18.116 registros, 6.183 linhas corresponderam a CTEs já faturados; a diferença para os CTEs únicos decorre de ocorrências repetidas/reentregas do mesmo documento.
+- O fechamento recebido da Pajussara e o resultado da comparação não são gravados no `localStorage`.
 - Importar outra planilha substitui `gmobs-closing-v3`, mas não apaga `gmobs-scanned-ctes-v1`.
-- Git guarda apenas o código. Nenhum dos dois conjuntos do `localStorage` é levado para outra máquina.
-- Limpar dados do site, usar navegação privada, trocar de navegador ou trocar de computador remove o acesso local às informações.
-- Ainda não há recurso de backup/importação das bipagens nem persistência em D1.
+- Importar outra lista TDE substitui as taxas com origem no arquivo e preserva os registros manuais.
+- A taxa manual prevalece sobre a taxa importada para o mesmo CNPJ + transportadora.
+- Git guarda apenas o código. Nenhum dado do IndexedDB ou do `localStorage` é levado para outra máquina.
+- Limpar os dados do navegador remove apenas a cópia local. No site publicado e autenticado, o sistema recupera novamente o conteúdo do D1.
+- A tela Importar possui `Baixar backup completo` e `Restaurar backup`. O arquivo JSON inclui relatório, bipagens, TDE, remetentes adicionais da Maex e histórico de faturamento.
+- Como `127.0.0.1` e o endereço publicado são domínios diferentes, os dados antigos não atravessam automaticamente na primeira publicação. É necessário baixar o backup no site local e restaurá-lo uma vez no site publicado; depois a sincronização é automática.
 
 ## Estrutura importante
 
 - `app/page.tsx`: tela principal, estado da aplicação, identificação de parceiras, filtros, prévia e comando de exportação.
 - `app/excel.ts`: leitura das planilhas, reconhecimento de colunas, normalização e criação do Excel final.
+- `app/storage.ts`: armazenamento de maior capacidade dos registros importados e migração segura do antigo `localStorage` para IndexedDB.
+- `app/cloud-storage.ts`: compactação, leitura e gravação dos cinco conjuntos persistentes na API do D1.
+- `app/api/cloud-state/route.ts`: API autenticada de leitura e gravação do estado em blocos.
 - `app/globals.css`: aparência responsiva da interface.
 - `app/layout.tsx`: título e descrição da aplicação.
-- `app/chatgpt-auth.ts`: funções prontas para autenticação via ChatGPT, ainda não utilizadas pela tela principal.
-- `db/`: estrutura preparada para Cloudflare D1/Drizzle, mas sem tabelas ativas.
+- `app/chatgpt-auth.ts`: funções prontas para fluxos visuais de autenticação. A API usa diretamente os cabeçalhos de identidade fornecidos pelo site privado.
+- `db/schema.ts`: tabela ativa `cloud_state_chunks` do Cloudflare D1; as migrações geradas ficam em `drizzle/`.
 - `worker/index.ts`: entrada do Cloudflare Worker/vinext.
 - `legacy/site/`: versão antiga do sistema, mantida para consulta; não deve ser alterada sem necessidade.
 - `tests/rendered-html.test.mjs`: teste herdado do starter. Ele ainda verifica a tela inicial do template e provavelmente precisa ser substituído por testes do sistema GMOBS.
@@ -142,7 +245,7 @@ O modelo da Argius não possui as cinco linhas institucionais, aba extra `OUTROS
 - vinext/Vite;
 - Cloudflare Workers/Sites;
 - `xlsx-js-style` para importação e exportação;
-- Drizzle ORM preparado para eventual banco D1.
+- Cloudflare D1 com esquema e migração em Drizzle ORM.
 
 ## Como continuar em outra máquina
 
@@ -180,11 +283,13 @@ git push
 3. Executar `git status` e não apagar alterações existentes.
 4. Abrir `app/page.tsx`, `app/excel.ts` e `app/globals.css` antes de mudar regras.
 5. Lembrar que a planilha real e as bipagens não vêm no clone; importar o relatório novamente e, se necessário, rebipar documentos no novo computador.
-6. Para qualquer mudança financeira, confirmar que o total continua vindo somente de BA.
-7. Para qualquer mudança de bipagem, validar AJ, AK, `AGUARDANDO`, `OK`, nova importação e persistência local.
-8. Para qualquer mudança de exportação, validar separadamente formato padrão, CF/aba `OUTROS` e exceção Argius.
-9. Executar `npx vite build` antes de concluir.
-10. Atualizar este documento ao mudar qualquer regra aprovada.
+6. Para qualquer mudança financeira, confirmar que o total de todas as transportadoras continua sendo BA + TDE, sem somar TDA, TRT ou outras taxas, e validar separadamente a divisão especial dos valores nos dois arquivos da Argius.
+7. Para qualquer mudança em TDE, validar a lista, CNPJ com zero à esquerda, taxa da transportadora correta, cadastro manual e persistência em `gmobs-tde-rates-v1`.
+8. Para qualquer mudança de bipagem, validar leitor/digitação, TXT, caixas de seleção, AJ, AK, `AGUARDANDO`, `OK`, nova importação e persistência local.
+9. Para qualquer mudança de exportação, validar separadamente formato padrão, CF/aba `OUTROS`, os dois arquivos da Argius, a exceção da Fitlog sem Dedicado e a lista de faltantes da Pajussara.
+10. Para qualquer mudança na Maex, validar o fechamento normal e o adicional separadamente, incluindo marcação por remetente, nova importação, taxa fixa de R$ 15 e layout A:K.
+11. Executar `npx vite build` antes de concluir.
+12. Atualizar este documento ao mudar qualquer regra aprovada.
 
 ## Pontos de atenção
 
@@ -193,7 +298,7 @@ git push
 - O commit inicial incluiu arquivos internos de `.pnpm-store` e `tsconfig.tsbuildinfo`; convém removê-los do controle de versão e adicioná-los ao `.gitignore` em uma limpeza futura.
 - O sistema substitui os dados anteriores quando uma nova planilha é importada; ele não acumula importações.
 - A substituição da planilha não apaga as bipagens, que ficam em outra chave do `localStorage`.
-- Como o armazenamento atual é local ao navegador, abrir o site em outro navegador ou computador começa sem dados importados.
+- No endereço local, IndexedDB e `localStorage` continuam específicos daquele navegador. No endereço publicado, o D1 repõe os dados depois do login; para a primeira migração do endereço local, use o backup completo.
 - O modelo PDF da Argius contém dados operacionais e não foi copiado para o repositório. A estrutura visual necessária está descrita neste documento e implementada em `buildArgiusSheet`.
 - As regras financeiras e o formato final precisam ser validados com planilhas reais antes do uso definitivo.
 
@@ -202,11 +307,11 @@ git push
 1. Testar a importação com relatórios reais de diferentes formatos.
 2. Conferir os cálculos e a planilha exportada com fechamentos já validados manualmente.
 3. Corrigir aliases de colunas ou parceiras que não forem reconhecidos.
-4. Atualizar `README.md` para refletir o produto GMOBS.
+4. Manter o `README.md` alinhado com o produto GMOBS e com o endereço publicado.
 5. Substituir o teste herdado do starter por testes da importação, cálculos e exportação.
-6. Decidir se os fechamentos precisam ficar salvos na nuvem; se sim, implementar autenticação e banco D1.
+6. Restaurar o primeiro backup no endereço publicado e conferir a recuperação em outro navegador/computador.
 7. Limpar arquivos de cache que entraram no primeiro commit.
-8. Publicar a aplicação quando o fluxo estiver validado.
+8. Acompanhar o consumo do plano gratuito e fazer backups periódicos do histórico operacional.
 
 ## Regra de manutenção deste documento
 

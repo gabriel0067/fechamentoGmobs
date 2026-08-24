@@ -1,100 +1,67 @@
-# vinext-starter
+# Fechamentos GMOBS
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Aplicação web para importar o relatório geral da GMOBS, conferir documentos por transportadora e exportar um fechamento Excel separado para cada parceira.
 
-## Prerequisites
+As regras completas do produto estão em `CONTEXTO_DO_PROJETO.md`. Antes de alterar cálculos, bipagem, identificação ou exportação, leia também `AGENTS.md`.
 
-- Node.js `>=22.13.0`
+## Executar no Windows
 
-## Quick Start
+Requisitos: Node.js 22.13 ou mais recente e dependências instaladas com `npm install`.
 
-```bash
-npm install
-npm run dev
-npm run build
+```powershell
+npx vite --host
 ```
 
-This starter does not use `wrangler.jsonc`.
+Abra o endereço informado pelo terminal. Para validar a versão de produção:
 
-## Included Shape
-
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```powershell
+npx vite build
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+O script `npm run dev` usa uma variável no formato Unix e pode não funcionar diretamente no PowerShell; por isso o comando recomendado é `npx vite --host`.
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+## Dados salvos
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+No endereço publicado, os dados ficam no Cloudflare D1 e são separados pelo usuário autenticado. O banco guarda:
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+- relatório atual e identificações manuais;
+- bipagens da Argius, TRD e D&Y;
+- lista de TDE e cadastros manuais;
+- remetentes marcados para o MAEX ADICIONAL;
+- documentos já enviados ao faturamento.
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+O IndexedDB e o `localStorage` permanecem como cópia rápida no navegador. A interface abre pela cópia local e sincroniza as alterações com o banco em segundo plano.
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+O estado é compactado no navegador e dividido em blocos na tabela `cloud_state_chunks`. O esquema fica em `db/schema.ts`, a migração em `drizzle/` e a API autenticada em `app/api/cloud-state/route.ts`.
 
-## Useful Commands
+## Primeira migração do computador para o site publicado
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+O endereço local e o endereço publicado usam armazenamentos de navegador diferentes. Para levar o conteúdo que já existe no computador:
 
-## Learn More
+1. Abra a aplicação local.
+2. Na aba **Importar**, clique em **Baixar backup completo**.
+3. Abra o endereço publicado e entre com a conta autorizada.
+4. Na aba **Importar**, clique em **Restaurar backup** e escolha o arquivo `.json` baixado.
+5. Aguarde o cabeçalho mostrar **Dados salvos no banco**.
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+Depois dessa restauração única, o banco passa a acompanhar o usuário em outros navegadores e computadores. O backup contém dados operacionais e deve ser guardado em local seguro, nunca no Git.
+
+## Validação
+
+```powershell
+npx eslint app/page.tsx app/excel.ts app/storage.ts app/cloud-storage.ts app/api/cloud-state/route.ts db/schema.ts
+npx vite build
+```
+
+O lint completo ainda encontra dois avisos herdados em `legacy/site/app.js`; essa pasta é apenas referência histórica e não faz parte da aplicação ativa.
+
+## Estrutura principal
+
+- `app/page.tsx`: interface, estados, filtros, prévia, backup e sincronização.
+- `app/excel.ts`: leitura e exportação das planilhas.
+- `app/storage.ts`: cópia local de grande capacidade no IndexedDB.
+- `app/cloud-storage.ts`: compactação e comunicação com o banco.
+- `app/api/cloud-state/route.ts`: API autenticada do D1.
+- `db/schema.ts` e `drizzle/`: esquema e migração do banco.
+- `.openai/hosting.json`: configuração lógica do site e do D1.
+- `CONTEXTO_DO_PROJETO.md`: regras e histórico detalhados do produto.
