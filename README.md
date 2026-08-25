@@ -28,7 +28,7 @@ No endereço publicado, os dados ficam no Cloudflare D1 central. O endereço pod
 - bipagens da Argius, TRD e D&Y;
 - lista de TDE e cadastros manuais;
 - remetentes marcados para o MAEX ADICIONAL;
-- documentos já enviados ao faturamento.
+- documentos já enviados ao faturamento, separando o histórico normal do histórico do MAEX ADICIONAL.
 
 No site publicado, o navegador não usa IndexedDB nem `localStorage` como fonte de dados operacionais: a interface abre diretamente pelo banco e bloqueia o trabalho se ele estiver indisponível. O armazenamento local permanece apenas no endereço de desenvolvimento (`localhost`) e serve para a migração inicial por backup.
 

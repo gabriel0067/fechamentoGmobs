@@ -72,11 +72,11 @@ O campo `CNPJ(s)` também aceita vários números colados manualmente, separados
 
 Na primeira página existe uma terceira importação chamada `Já enviados ao faturamento`. Ela aceita vários fechamentos antigos `.xls` ou `.xlsx` de uma vez e procura automaticamente as colunas `CTE`/`CT-E` e `NF`, mesmo quando o cabeçalho aparece depois das linhas institucionais.
 
-A identificação segura usa `transportadora + CTE`. A NF é preservada apenas para conferência; ela não é usada sozinha porque pode se repetir em parceiros diferentes. Fechamentos repetidos e cópias com sufixos como `(1)` ou `(2)` não duplicam os documentos. Cada registro mantém a lista de arquivos em que foi encontrado.
+A identificação segura usa `tipo de fechamento + transportadora + CTE`. A NF é preservada apenas para conferência; ela não é usada sozinha porque pode se repetir em parceiros diferentes. Fechamentos repetidos e cópias com sufixos como `(1)` ou `(2)` não duplicam os documentos dentro do mesmo tipo. Cada registro mantém a lista de arquivos em que foi encontrado.
 
-A transportadora é reconhecida pelo nome do arquivo ou por uma indicação explícita no cabeçalho. Os arquivos cujo nome contém `Custos_extras_MVF` são tratados como adicionais da Argius. O importador também reconhece os formatos históricos da Displan, Maex, TRD e Argius analisados nesta etapa.
+A transportadora é reconhecida pelo nome do arquivo ou por uma indicação explícita no cabeçalho. Os arquivos cujo nome contém `Custos_extras_MVF` são tratados como adicionais da Argius. Arquivos cujo nome contém `Fechamento Adicional Maex` entram no escopo exclusivo `maex-additional`; eles não ocultam documentos do fechamento normal. O importador também reconhece os formatos históricos da Displan, Maex, TRD e Argius analisados nesta etapa.
 
-O histórico mostra a quantidade de CTEs únicos, quantos foram encontrados no relatório atual e a relação dos arquivos importados. O botão `Desfazer` remove aquela origem; se o mesmo CTE também estiver presente em outro fechamento importado, ele continua marcado.
+O histórico mostra a quantidade de registros, quantos foram encontrados no relatório atual e a relação dos arquivos importados. Fontes do adicional aparecem como `Maex (somente adicional)`. O botão `Desfazer` de um arquivo adicional remove apenas o histórico adicional e nunca altera o normal; se o mesmo CTE também estiver presente em outro arquivo do mesmo tipo, ele continua marcado.
 
 ### 2. Identificação das parceiras
 
@@ -124,7 +124,7 @@ Na prévia são exibidos:
 - quantidade de reentregas;
 - valor total do fechamento.
 
-Antes de montar a lista de parceiras, o sistema retira os registros cujo par `transportadora + CTE` já consta no histórico de faturamento. Uma faixa informa quantos registros do período foram ocultados. Esses registros não participam das quantidades, valores, bipagem pendente nem exportação. Se todos os documentos do período já tiverem sido enviados, a tela informa isso em vez de apresentar um fechamento vazio.
+Antes de montar a lista normal de parceiras, o sistema retira os registros cujo par `transportadora + CTE` já consta no histórico normal de faturamento. Uma faixa informa quantos registros do período foram ocultados. O histórico do `MAEX ADICIONAL` não participa desse filtro: um documento faturado no adicional continua disponível para o fechamento normal quando a entrega ocorrer.
 
 Argius, TRD e D&Y usam conferência por bipagem do CTE da parceira. Leituras com exatamente 44 dígitos são procuradas na coluna `Chave CT-e Parceiro` (AK); leituras menores são procuradas na coluna `CT-e Parceiro` (AJ). A marcação `OK` é feita na prévia e, no site publicado, fica salva no conjunto `scans` do banco central, permanecendo entre acessos, computadores e novas importações. Se um CTE bipado ainda não existir no relatório, ele fica como `AGUARDANDO` e recebe `OK` automaticamente quando aparecer em uma importação futura da mesma parceira. Para essas três parceiras, quantidades, valores e exportação consideram somente documentos bipados que já apareceram no relatório. Uma bipagem pode ser removida em caso de erro.
 
@@ -144,7 +144,7 @@ A tela mostra quantos documentos existem no nosso relatório no período filtrad
 
 #### Seleção do MAEX ADICIONAL
 
-Na prévia da Maex existe uma lista dos documentos do período com caixas de seleção para o fechamento adicional de entregas de móveis. A interface mostra MDe, CTE, NF, remetente, destinatário e cidade. Embora a caixa apareça em cada documento, a escolha é salva por remetente para evitar repetir o trabalho em todas as quinzenas:
+Na prévia da Maex existe uma lista dos documentos adicionais ainda em aberto até a data final escolhida, inclusive documentos sem data de entrega e documentos já faturados no fechamento normal. A interface mostra MDe, CTE, NF, remetente, destinatário e cidade. Embora a caixa apareça em cada documento, a escolha é salva por remetente para evitar repetir o trabalho em todas as quinzenas:
 
 - usa primeiro o CNPJ normalizado do remetente como identificador permanente;
 - quando não há CNPJ, usa o nome normalizado do remetente;
@@ -164,7 +164,7 @@ O botão de exportação gera um arquivo chamado aproximadamente:
 
 `Fechamento D&Y - 2ª Quinzena de agosto de 2026.xlsx`
 
-Após gerar os arquivos, todos os CTEs efetivamente exportados são gravados automaticamente no histórico de enviados ao faturamento. Assim, uma nova tentativa de fechamento no mesmo navegador não volta a incluir esses documentos; se necessário, a origem gerada pelo sistema pode ser desfeita na primeira página.
+Após gerar os arquivos, os CTEs são gravados automaticamente no histórico correspondente. O fechamento principal usa o escopo `normal`; o arquivo MAEX ADICIONAL usa `maex-additional`. Um escopo nunca bloqueia o outro, e a origem gerada pode ser desfeita na primeira página.
 
 O período é definido como primeira quinzena para datas até o dia 15 e segunda quinzena após o dia 15. Cada parceira selecionada gera um arquivo separado. Em geral, o arquivo possui títulos, cabeçalho escuro, formatação monetária em reais, filtro, congelamento do cabeçalho e linha final de total em destaque amarelo.
 
@@ -182,7 +182,7 @@ O segundo arquivo se chama aproximadamente `Fechamento Adicionais Argius - 2ª Q
 
 #### Arquivo MAEX ADICIONAL
 
-Quando a Maex é selecionada para exportação, o fechamento normal continua sendo gerado com todos os documentos elegíveis. Se houver documentos marcados para o adicional dentro do período filtrado, o sistema gera um segundo arquivo separado chamado aproximadamente `Fechamento Adicional Maex - 1 Quinzena de agosto de 2026.xlsx`. Se não houver marcações no período, somente o arquivo normal é gerado.
+Quando a Maex é selecionada para exportação, o fechamento normal usa somente sua própria elegibilidade e seu histórico. Se houver remetentes marcados entre os documentos adicionais ainda em aberto até a data final escolhida, o sistema gera um arquivo separado chamado aproximadamente `Fechamento Adicional Maex - 1 Quinzena de agosto de 2026.xlsx`. O adicional pode ser gerado mesmo quando não há documentos novos no fechamento normal.
 
 O adicional segue o modelo fornecido pelo usuário:
 
@@ -196,7 +196,7 @@ O adicional segue o modelo fornecido pelo usuário:
 - linha final amarela com fórmula de soma da coluna K;
 - datas em `dd/mm/aaaa` e MDe/CTE mantidos como texto para evitar notação científica ou perda de zeros.
 
-Em `ENTREGA`, usa a data de entrega quando disponível. Sem data, usa `RE` para reentrega ou o código de status disponível. O arquivo adicional não substitui nem altera os valores do fechamento normal da Maex.
+Em `ENTREGA`, usa a data de entrega quando disponível. Sem data, usa `RE` para reentrega ou o código de status disponível. O arquivo adicional não substitui nem altera os valores ou o histórico do fechamento normal da Maex. Quando esse documento receber data de entrega em uma importação futura, ele ainda poderá entrar no fechamento normal.
 
 ### 6. Persistência e limites
 
@@ -204,7 +204,7 @@ Em `ENTREGA`, usa a data de entrega quando disponível. Sem data, usa `RE` para 
 - `gmobs-scanned-ctes-v1`: bipagens da Argius, TRD e D&Y, encontradas ou aguardando.
 - `gmobs-tde-rates-v1`: taxas TDE importadas, nome/resumo do último arquivo e cadastros manuais.
 - `gmobs-maex-additional-senders-v1`: remetentes marcados para o adicional da Maex, identificados por CNPJ ou nome normalizado.
-- `gmobs-billed-documents-v1`: histórico no IndexedDB dos documentos já enviados ao faturamento, identificado por transportadora + CTE e acompanhado dos arquivos de origem.
+- `gmobs-billed-documents-v1`: histórico no IndexedDB dos documentos enviados, identificado por escopo (`normal` ou `maex-additional`) + transportadora + CTE e acompanhado dos arquivos de origem. Dados antigos são normalizados ao carregar; fontes chamadas `Fechamento Adicional Maex` migram automaticamente para o escopo adicional.
 - O D1 guarda os cinco conjuntos duráveis `closing`, `scans`, `tde`, `maex` e `billed`. O cliente compacta cada conjunto com gzip antes do envio e a API divide a carga em blocos de até 1,5 MB, abaixo do limite de 2 MB por linha do D1.
 - A tabela `cloud_state_chunks` usa a chave primária composta `(owner_id, state_key, chunk_index)`. No site publicado, todos os logins autorizados usam o proprietário lógico `shared:fechamentos-gmobs`, formando um banco operacional único para a equipe.
 - `app/auth.ts` valida as credenciais recebidas contra `GMOBS_LOGIN_USER` e `GMOBS_LOGIN_PASSWORD`, configuradas na hospedagem. A sessão dura oito horas, é assinada com `GMOBS_SESSION_SECRET` e fica em cookie HttpOnly, Secure e SameSite Strict. Senha e segredo não pertencem ao código nem ao Git.

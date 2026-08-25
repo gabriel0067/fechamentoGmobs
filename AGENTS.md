@@ -38,10 +38,10 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - No cadastro manual de TDE, sugerir clientes enquanto o nome é digitado usando a lista TDE e os destinatários do relatório. Agrupar clientes pelo nome normalizado; ao escolher uma sugestão, preencher todos os CNPJs encontrados para esse nome.
 - Permitir salvar vários CNPJs de uma vez com o mesmo nome, transportadora e valor TDE. Persistir um registro por CNPJ para manter o cruzamento e agrupar esses registros visualmente na lista de cadastros manuais.
 - Na primeira página, permitir importar vários fechamentos antigos `.xls`/`.xlsx` de uma vez para marcar documentos já enviados ao faturamento.
-- Identificar um documento faturado por `transportadora + CTE`. Não usar somente NF, pois ela pode se repetir em parceiras diferentes. Arquivos e linhas duplicados devem apenas acrescentar a origem ao mesmo documento, sem duplicar o histórico.
+- Identificar um documento faturado por `tipo de fechamento + transportadora + CTE`. Não usar somente NF, pois ela pode se repetir em parceiras diferentes. O histórico normal e o histórico do `MAEX ADICIONAL` são independentes; arquivos e linhas duplicados no mesmo tipo apenas acrescentam a origem ao documento.
 - Tratar arquivos com `Custos_extras_MVF` no nome como adicionais da Argius. Nos demais fechamentos históricos, identificar a transportadora pelo nome do arquivo ou por uma indicação explícita no cabeçalho.
-- Excluir os documentos já faturados da prévia, dos totais e da exportação, mostrando quantos registros do período foram ocultados. Permitir desfazer uma origem importada sem remover a marcação quando o mesmo CTE também existir em outro arquivo.
-- Depois de uma exportação bem-sucedida, marcar automaticamente os CTEs exportados como enviados ao faturamento para impedir reenvio posterior.
+- Excluir os documentos já faturados no histórico normal da prévia, dos totais e da exportação normal, mostrando quantos registros do período foram ocultados. Um documento faturado somente no `MAEX ADICIONAL` continua elegível para o fechamento normal quando receber data de entrega. Permitir desfazer uma origem importada sem remover a marcação quando o mesmo CTE também existir em outro arquivo do mesmo tipo.
+- Depois de uma exportação bem-sucedida, marcar automaticamente os CTEs no tipo correspondente: normal para o fechamento principal e `maex-additional` para o arquivo adicional.
 - Alterar TDE afeta o total de todas as transportadoras: cada linha e o fechamento devem usar BA + TDE.
 - Gerar um arquivo Excel separado para cada transportadora selecionada.
 - Manter `Data de Entrega` depois de `Cidade`; mostrar `REENTREGA` para RE e `OUTROS` para CF.
@@ -61,7 +61,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - Na prévia da bipagem, listar documentos que ainda estão sem `OK` e permitir marcá-los manualmente por caixa de seleção. A seleção manual deve usar o mesmo armazenamento persistente das bipagens.
 - Manter bipagens não encontradas como `AGUARDANDO` para associação automática em importações futuras.
 - Na prévia da Maex, permitir marcar documentos para `MAEX ADICIONAL`. A marcação representa o remetente: usar primeiro o CNPJ do remetente e, se estiver ausente, o nome normalizado. Todos os documentos atuais e futuros desse remetente devem herdar a marcação.
-- A exportação da Maex sempre mantém o fechamento normal completo. Quando houver documentos adicionais marcados no período, gerar também um segundo arquivo no modelo `MAEX ADICIONAL`, com taxa fixa de R$ 15 por documento e sem misturá-lo ao fechamento normal.
+- A exportação da Maex mantém o fechamento normal independente. O `MAEX ADICIONAL` considera os remetentes marcados que ainda estejam em aberto no histórico adicional até a data final escolhida, inclusive sem data de entrega e mesmo que o documento já tenha sido faturado no normal. Gerar o arquivo adicional com taxa fixa de R$ 15 por documento.
 - Preservar o layout específico do `MAEX ADICIONAL`: sete linhas iniciais mescladas de A até K, aviso vermelho na linha 6, parceiro na linha 7, cabeçalho preto na linha 8, colunas `CHEGADA`, `Mde`, `CTE`, `NF`, `REMETENTE`, `DESTINATARIO`, `CIDADE`, `PESO`, `VOL`, `ENTREGA` e `TAXA DE MOVEIS`, além do total amarelo ao final.
 - Preservar funcionamento responsivo em telas menores.
 
@@ -72,7 +72,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - `gmobs-scanned-ctes-v1` guarda bipagens confirmadas ou aguardando no `localStorage`.
 - `gmobs-tde-rates-v1` guarda a lista de taxas TDE importada, o nome do arquivo e os cadastros manuais no `localStorage`.
 - `gmobs-maex-additional-senders-v1` guarda os remetentes marcados para o fechamento adicional da Maex no `localStorage`.
-- `gmobs-billed-documents-v1` guarda no IndexedDB o histórico de CTEs já enviados ao faturamento, suas transportadoras e arquivos de origem.
+- `gmobs-billed-documents-v1` guarda no IndexedDB o histórico de CTEs já enviados, com escopo `normal` ou `maex-additional`, transportadora e arquivos de origem. Registros antigos cujo arquivo contenha `Fechamento Adicional Maex` são migrados automaticamente para o escopo adicional.
 - Uma nova importação substitui os registros, mas não apaga as bipagens.
 - Uma nova lista de TDE substitui as taxas vindas de arquivo, mas preserva os cadastros manuais.
 - A aplicação publicada usa Cloudflare D1 por meio da ligação lógica `DB`. O D1 é a única fonte de dados operacionais no endereço publicado; não carregar nem salvar esses dados no IndexedDB ou `localStorage` do navegador hospedado.
@@ -96,7 +96,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - Para mudanças na exportação, abra ou inspecione o `.xlsx` gerado e confira abas, colunas, formatos e totais.
 - Para a validação da Pajussara, teste arquivo com abas `Extrato` e `MAPA`, NF com série no nosso relatório, NF numérica no arquivo deles, zeros à esquerda, NFs duplicadas, período filtrado, lista de faltantes e exportação das pendências.
 - Para mudanças na bipagem, teste digitação/leitor, importação TXT, caixa de seleção, AJ, AK com 44 dígitos, `AGUARDANDO`, reaparecimento após nova importação e remoção manual.
-- Para mudanças no adicional da Maex, teste persistência por CNPJ/nome do remetente, nova importação, desmarcação, arquivo normal independente, taxa fixa de R$ 15 e comparação visual do Excel adicional com o modelo aprovado.
+- Para mudanças no adicional da Maex, teste persistência por CNPJ/nome do remetente, documento sem data de entrega, documento já faturado no normal, histórico adicional independente, desfazer adicional sem afetar o normal, taxa fixa de R$ 15 e comparação visual do Excel adicional com o modelo aprovado.
 - Para mudanças no histórico de faturamento, teste importação múltipla, cabeçalhos em linhas diferentes, duplicatas, `Custos_extras_MVF` como Argius, persistência, desfazer por arquivo, ocultação na prévia e marcação automática após exportar.
 - Para a Argius, valide os dois arquivos: dados dos clientes no normal, ausência das três colunas de adicionais, ordem TDA/TDE/Dedicado no segundo arquivo e totais finais em ambos.
 - Para mudanças visuais, confira desktop e tela estreita.

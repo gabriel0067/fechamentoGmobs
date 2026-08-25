@@ -118,6 +118,7 @@ type PajussaraClosingInfo = {
   period: string;
   documents: PajussaraClosingDocument[];
 };
+type BillingScope = "normal" | "maex-additional";
 type BilledDocumentRecord = {
   key: string;
   partnerId: string;
@@ -126,6 +127,7 @@ type BilledDocumentRecord = {
   invoice: string;
   sources: string[];
   markedAt: string;
+  billingScope: BillingScope;
 };
 
 const money = (value: number) =>
@@ -216,9 +218,23 @@ const scanKey = (value?: string) =>
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
-const billedDocumentKey = (partnerId: string, cte?: string) => {
+const isMaexAdditionalBillingSource = (source: string) => {
+  const value = normalized(source);
+  return (
+    value.includes("fechamento adicional maex") ||
+    value.includes("maex adicional")
+  );
+};
+const billedDocumentKey = (
+  partnerId: string,
+  cte?: string,
+  billingScope: BillingScope = "normal",
+) => {
   const key = scanKey(cte);
-  return key ? `${partnerId}|${key}` : "";
+  if (!key) return "";
+  return billingScope === "maex-additional"
+    ? `maex-additional|${key}`
+    : `${partnerId}|${key}`;
 };
 const mergeBilledDocuments = (
   current: Record<string, BilledDocumentRecord>,
@@ -233,10 +249,54 @@ const mergeBilledDocuments = (
           partnerName: addition.partnerName,
           invoice: existing.invoice || addition.invoice,
           sources: [...new Set([...existing.sources, ...addition.sources])],
+          billingScope: addition.billingScope,
         }
       : addition;
   });
   return next;
+};
+const normalizeBilledDocuments = (
+  saved: Record<string, BilledDocumentRecord>,
+) => {
+  let normalizedRecords: Record<string, BilledDocumentRecord> = {};
+  Object.values(saved || {}).forEach((document) => {
+    const sources = Array.isArray(document.sources) ? document.sources : [];
+    const grouped = new Map<BillingScope, string[]>();
+    if (!sources.length) {
+      const scope =
+        document.partnerId === "maex" &&
+        document.billingScope === "maex-additional"
+          ? "maex-additional"
+          : "normal";
+      grouped.set(scope, []);
+    }
+    sources.forEach((source) => {
+      const scope =
+        document.partnerId === "maex" &&
+        (document.billingScope === "maex-additional" ||
+          isMaexAdditionalBillingSource(source))
+          ? "maex-additional"
+          : "normal";
+      grouped.set(scope, [...(grouped.get(scope) || []), source]);
+    });
+    grouped.forEach((scopeSources, billingScope) => {
+      const key = billedDocumentKey(
+        document.partnerId,
+        document.cte,
+        billingScope,
+      );
+      if (!key) return;
+      normalizedRecords = mergeBilledDocuments(normalizedRecords, [
+        {
+          ...document,
+          key,
+          sources: [...new Set(scopeSources)],
+          billingScope,
+        },
+      ]);
+    });
+  });
+  return normalizedRecords;
 };
 function identifyPartner(raw: string) {
   const text = normalized(raw);
@@ -542,7 +602,7 @@ export default function Home() {
         if (savedEntries) setEntries(normalizeSavedEntries(savedEntries));
         if (savedScans) setScannedCtes(JSON.parse(savedScans));
         if (savedBilledDocuments)
-          setBilledDocuments(savedBilledDocuments);
+          setBilledDocuments(normalizeBilledDocuments(savedBilledDocuments));
         if (savedTde) {
           if (Array.isArray(parsedTde?.rates))
             setTdeRates(
@@ -654,7 +714,8 @@ export default function Home() {
           maexRecord?.version || (await saveCloudState("maex", {}));
 
         const billed = billedRecord?.value;
-        if (billed && typeof billed === "object") setBilledDocuments(billed);
+        if (billed && typeof billed === "object")
+          setBilledDocuments(normalizeBilledDocuments(billed));
         else setBilledDocuments({});
         cloudVersionsRef.current.billed =
           billedRecord?.version || (await saveCloudState("billed", {}));
@@ -922,7 +983,7 @@ export default function Home() {
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
           cloudVersionsRef.current[key] = record.version;
-          setBilledDocuments(record.value || {});
+          setBilledDocuments(normalizeBilledDocuments(record.value || {}));
         }
       }
       setCloudStatus("ready");
@@ -998,16 +1059,42 @@ export default function Home() {
       })
       .slice(0, 8);
   }, [manualClientName, manualClientOptions]);
-  const billedKeys = useMemo(
-    () => new Set(Object.keys(billedDocuments)),
+  const normalBilledKeys = useMemo(
+    () =>
+      new Set(
+        Object.values(billedDocuments)
+          .filter((document) => document.billingScope === "normal")
+          .map((document) => document.key),
+      ),
+    [billedDocuments],
+  );
+  const maexAdditionalBilledKeys = useMemo(
+    () =>
+      new Set(
+        Object.values(billedDocuments)
+          .filter(
+            (document) => document.billingScope === "maex-additional",
+          )
+          .map((document) => document.key),
+      ),
     [billedDocuments],
   );
   const currentBilledEntries = useMemo(
     () =>
-      entriesWithTde.filter((entry) =>
-        billedKeys.has(billedDocumentKey(entry.partnerId, entry.cte)),
-      ),
-    [billedKeys, entriesWithTde],
+      entriesWithTde.filter((entry) => {
+        const normalKey = billedDocumentKey(entry.partnerId, entry.cte);
+        const additionalKey = billedDocumentKey(
+          entry.partnerId,
+          entry.cte,
+          "maex-additional",
+        );
+        return (
+          normalBilledKeys.has(normalKey) ||
+          (entry.partnerId === "maex" &&
+            maexAdditionalBilledKeys.has(additionalKey))
+        );
+      }),
+    [entriesWithTde, maexAdditionalBilledKeys, normalBilledKeys],
   );
   const periodFiltered = useMemo(
     () =>
@@ -1021,17 +1108,29 @@ export default function Home() {
   const billedInPeriod = useMemo(
     () =>
       periodFiltered.filter((entry) =>
-        billedKeys.has(billedDocumentKey(entry.partnerId, entry.cte)),
+        normalBilledKeys.has(billedDocumentKey(entry.partnerId, entry.cte)),
       ),
-    [billedKeys, periodFiltered],
+    [normalBilledKeys, periodFiltered],
   );
   const filtered = useMemo(
     () =>
       periodFiltered.filter(
         (entry) =>
-          !billedKeys.has(billedDocumentKey(entry.partnerId, entry.cte)),
+          !normalBilledKeys.has(billedDocumentKey(entry.partnerId, entry.cte)),
       ),
-    [billedKeys, periodFiltered],
+    [normalBilledKeys, periodFiltered],
+  );
+  const maexAdditionalOpenRows = useMemo(
+    () =>
+      entriesWithTde.filter(
+        (entry) =>
+          entry.partnerId === "maex" &&
+          (!dateTo || !entry.date || entry.date <= dateTo) &&
+          !maexAdditionalBilledKeys.has(
+            billedDocumentKey("maex", entry.cte, "maex-additional"),
+          ),
+      ),
+    [dateTo, entriesWithTde, maexAdditionalBilledKeys],
   );
   const billedSources = useMemo(() => {
     const sources = new Map<
@@ -1046,7 +1145,11 @@ export default function Home() {
           partners: new Set<string>(),
         };
         current.keys.add(document.key);
-        current.partners.add(document.partnerName);
+        current.partners.add(
+          document.billingScope === "maex-additional"
+            ? "Maex (somente adicional)"
+            : document.partnerName,
+        );
         sources.set(source, current);
       });
     });
@@ -1071,10 +1174,12 @@ export default function Home() {
       current.rows.push(entry);
       map.set(entry.partnerId, current);
     });
+    if (maexAdditionalOpenRows.length && !map.has("maex"))
+      map.set("maex", { id: "maex", name: "Maex", rows: [] });
     return [...map.values()].sort((a, b) =>
       a.name.localeCompare(b.name, "pt-BR"),
     );
-  }, [filtered]);
+  }, [filtered, maexAdditionalOpenRows.length]);
   const pajussaraComparison = useMemo(() => {
     if (!pajussaraClosing) return null;
     const rows = partners.find((partner) => partner.id === "pajucara")?.rows || [];
@@ -1527,8 +1632,16 @@ export default function Home() {
         const partner = identifyPartner(result.partner);
         if (partner.id === "unidentified")
           throw new Error("transportadora não identificada");
+        const billingScope: BillingScope =
+          partner.id === "maex" && isMaexAdditionalBillingSource(file.name)
+            ? "maex-additional"
+            : "normal";
         result.documents.forEach((document) => {
-          const key = billedDocumentKey(partner.id, document.cte);
+          const key = billedDocumentKey(
+            partner.id,
+            document.cte,
+            billingScope,
+          );
           if (!key) return;
           const existing = additions.get(key);
           additions.set(key, {
@@ -1541,6 +1654,7 @@ export default function Home() {
               ...new Set([...(existing?.sources || []), file.name]),
             ],
             markedAt: existing?.markedAt || markedAt,
+            billingScope,
           });
         });
         validFiles++;
@@ -1557,7 +1671,11 @@ export default function Home() {
         ...additions.keys(),
       ]);
       const matchedCurrent = entriesWithTde.filter((entry) =>
-        allKeys.has(billedDocumentKey(entry.partnerId, entry.cte)),
+        allKeys.has(billedDocumentKey(entry.partnerId, entry.cte)) ||
+        (entry.partnerId === "maex" &&
+          allKeys.has(
+            billedDocumentKey("maex", entry.cte, "maex-additional"),
+          )),
       ).length;
       const newDocuments = [...additions.keys()].filter(
         (key) => !billedDocuments[key],
@@ -1566,7 +1684,7 @@ export default function Home() {
         mergeBilledDocuments(current, [...additions.values()]),
       );
       setMessage(
-        `${validFiles} arquivo(s) validado(s). ${newDocuments} documento(s) novo(s) marcado(s) como enviados ao faturamento. ${matchedCurrent} registro(s) do relatório atual não entrarão no próximo fechamento.${
+        `${validFiles} arquivo(s) validado(s). ${newDocuments} documento(s) novo(s) marcado(s) no histórico. ${matchedCurrent} registro(s) do relatório atual conferido(s). Arquivos do MAEX ADICIONAL afetam somente o adicional e não retiram documentos do fechamento normal.${
           errors.length ? ` ${errors.length} arquivo(s) não puderam ser lidos.` : ""
         }`,
       );
@@ -1582,6 +1700,7 @@ export default function Home() {
 
   function removeBilledSource(source: string) {
     const sourceInfo = billedSources.find((item) => item.name === source);
+    const isAdditionalSource = isMaexAdditionalBillingSource(source);
     setBilledDocuments((current) => {
       const next: Record<string, BilledDocumentRecord> = {};
       Object.values(current).forEach((document) => {
@@ -1591,7 +1710,9 @@ export default function Home() {
       return next;
     });
     setMessage(
-      `${sourceInfo?.count || 0} documento(s) de ${source} retirado(s) do histórico. Se também estiverem em outro arquivo, continuam marcados.`,
+      isAdditionalSource
+        ? `${sourceInfo?.count || 0} documento(s) de ${source} retirado(s) somente do histórico do MAEX ADICIONAL. O fechamento normal não foi alterado.`
+        : `${sourceInfo?.count || 0} documento(s) de ${source} retirado(s) do histórico normal. Se também estiverem em outro arquivo, continuam marcados.`,
     );
   }
 
@@ -1652,7 +1773,7 @@ export default function Home() {
       setTdeRates(Array.isArray(backup.tde?.rates) ? backup.tde.rates : []);
       setTdeImportInfo(backup.tde?.importInfo || null);
       setMaexAdditionalSenders(backup.maex || {});
-      setBilledDocuments(backup.billed || {});
+      setBilledDocuments(normalizeBilledDocuments(backup.billed || {}));
       setSelectedExports([]);
       setMessage(
         cloudHosted
@@ -1829,42 +1950,69 @@ export default function Home() {
     const exportedAt = new Date().toISOString();
     chosen.forEach((partner) => {
       const exportRows = rowsForClosing(partner);
-      if (!exportRows.length) {
+      const additionalRows =
+        partner.id === "maex"
+          ? maexAdditionalOpenRows.filter(isMaexAdditional)
+          : [];
+      if (!exportRows.length && !additionalRows.length) {
         skipped.push(partner.name);
+        if (partner.id === "maex") maexSelectedWithoutAdditional = true;
         return;
       }
-      generated += exportClosingXlsx(
-        exportRows.map((entry) => toExportRow(entry, partner.name)),
-        partner.name,
-        period,
-      );
-      const source = `Fechamento ${partner.name} - ${period} (gerado pelo sistema)`;
-      exportRows.forEach((entry) => {
-        const key = billedDocumentKey(partner.id, entry.cte);
-        if (!key) return;
-        const existing = exportedDocuments.get(key);
-        exportedDocuments.set(key, {
-          key,
-          partnerId: partner.id,
-          partnerName: partner.name,
-          cte: entry.cte,
-          invoice: existing?.invoice || entry.invoice,
-          sources: [...new Set([...(existing?.sources || []), source])],
-          markedAt: existing?.markedAt || exportedAt,
+      if (exportRows.length) {
+        generated += exportClosingXlsx(
+          exportRows.map((entry) => toExportRow(entry, partner.name)),
+          partner.name,
+          period,
+        );
+        const source = `Fechamento ${partner.name} - ${period} (gerado pelo sistema)`;
+        exportRows.forEach((entry) => {
+          const key = billedDocumentKey(partner.id, entry.cte);
+          if (!key) return;
+          const existing = exportedDocuments.get(key);
+          exportedDocuments.set(key, {
+            key,
+            partnerId: partner.id,
+            partnerName: partner.name,
+            cte: entry.cte,
+            invoice: existing?.invoice || entry.invoice,
+            sources: [...new Set([...(existing?.sources || []), source])],
+            markedAt: existing?.markedAt || exportedAt,
+            billingScope: "normal",
+          });
         });
-      });
-      if (partner.id === "maex") {
-        const additionalRows = exportRows.filter(isMaexAdditional);
-        if (additionalRows.length) {
-          exportMaexAdditionalXlsx(
-            additionalRows.map((entry) => toExportRow(entry, partner.name)),
-            period,
+      }
+      if (partner.id === "maex" && additionalRows.length) {
+        exportMaexAdditionalXlsx(
+          additionalRows.map((entry) => toExportRow(entry, partner.name)),
+          period,
+        );
+        const additionalSource = `Fechamento Adicional Maex - ${period} (gerado pelo sistema)`;
+        additionalRows.forEach((entry) => {
+          const key = billedDocumentKey(
+            "maex",
+            entry.cte,
+            "maex-additional",
           );
-          generated++;
-          maexAdditionalGenerated = true;
-        } else {
-          maexSelectedWithoutAdditional = true;
-        }
+          if (!key) return;
+          const existing = exportedDocuments.get(key);
+          exportedDocuments.set(key, {
+            key,
+            partnerId: "maex",
+            partnerName: partner.name,
+            cte: entry.cte,
+            invoice: existing?.invoice || entry.invoice,
+            sources: [
+              ...new Set([...(existing?.sources || []), additionalSource]),
+            ],
+            markedAt: existing?.markedAt || exportedAt,
+            billingScope: "maex-additional",
+          });
+        });
+        generated++;
+        maexAdditionalGenerated = true;
+      } else if (partner.id === "maex") {
+        maexSelectedWithoutAdditional = true;
       }
     });
     if (exportedDocuments.size) {
@@ -2806,16 +2954,18 @@ export default function Home() {
                             <p>
                               Marque um documento uma vez. O remetente fica salvo e
                               os documentos atuais e futuros dele serão marcados
-                              automaticamente.
+                              automaticamente. O histórico adicional é independente
+                              do fechamento normal, inclusive quando ainda não há
+                              data de entrega.
                             </p>
                           </div>
                           <b>
-                            {active.rows.filter(isMaexAdditional).length} de{" "}
-                            {active.rows.length} documentos
+                            {maexAdditionalOpenRows.filter(isMaexAdditional).length}{" "}
+                            de {maexAdditionalOpenRows.length} documentos em aberto
                           </b>
                         </div>
                         <div className="maex-additional-list">
-                          {active.rows.map((entry) => {
+                          {maexAdditionalOpenRows.map((entry) => {
                             const senderKey = maexSenderKey(entry);
                             const marked = isMaexAdditional(entry);
                             return (
