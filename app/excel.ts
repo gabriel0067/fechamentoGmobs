@@ -701,6 +701,16 @@ export const commissionTotal = (row: {
 }) => Math.max(0, (row.reportedTotal ?? row.freight) + row.tde);
 const baseFreightOf = (row: ExportRow) =>
   Math.max(0, row.reportedTotal ?? row.freight);
+
+function maexPeriodName(period: string) {
+  const match = period.match(
+    /^([12])[ªº°]\s+Quinzena\s+de\s+(.+?)\s+de\s+(\d{4})$/i,
+  );
+  return match
+    ? `${match[1]}° Quinzena de ${match[2]} / ${match[3].slice(-2)}`
+    : period;
+}
+
 function buildClosingSheet(
   rows: ExportRow[],
   partnerName: string,
@@ -709,6 +719,7 @@ function buildClosingSheet(
 ) {
   const showTde = options.showTde !== false;
   const showDedicated = options.showDedicated !== false;
+  const isMaex = normalize(partnerName) === "maex";
   const header = [
     "ENTRADA",
     "CTE",
@@ -723,14 +734,34 @@ function buildClosingSheet(
     `FRETE ${partnerName.toUpperCase()}`,
     "TOTAL COMISSAO",
   ];
+  const institutionalRows = isMaex
+    ? [
+        ["Empresa: GISE TRANSPORTES LTDA"],
+        ["RUA CARLOS MARCONDES, 279, LIMOEIRO SAO JOSE DOS CAMPOS-SP"],
+        ["CNPJ: 53.823.705/0001-75 IE 135.201.059.11"],
+        [
+          "DADOS BANCARIOS: BANCO BRADESCO AG 0858 C/C 17133-6 ou PIX   53.823.705/0001-75",
+        ],
+        [maexPeriodName(period)],
+        [""],
+        ["Parceiro: MAEX"],
+      ]
+    : [
+        ["Empresa: MVF TRANSPORTES"],
+        ["RUA CARLOS MARCONDES, 279, LIMOEIRO SAO JOSE DOS CAMPOS-SP"],
+        ["CNPJ: 19.712.822/0001-23 IE 645.650.481.111"],
+        [
+          "DADOS BANCARIOS: BANCO ITAU - AG 7440   C/C 0011791-4   PIX 19712822000123",
+        ],
+        [period],
+      ];
+  const headerRowIndex = institutionalRows.length;
+  const headerExcelRow = headerRowIndex + 1;
+  const firstDataRowIndex = headerRowIndex + 1;
+  const firstDataExcelRow = firstDataRowIndex + 1;
+  const totalExcelRow = rows.length + firstDataExcelRow;
   const data = [
-    ["Empresa: MVF TRANSPORTES"],
-    ["RUA CARLOS MARCONDES, 279, LIMOEIRO SAO JOSE DOS CAMPOS-SP"],
-    ["CNPJ: 19.712.822/0001-23 IE 645.650.481.111"],
-    [
-      "DADOS BANCARIOS: BANCO ITAU - AG 7440   C/C 0011791-4   PIX 19712822000123",
-    ],
-    [period],
+    ...institutionalRows,
     header,
     ...rows.map((row) => {
       const isFreightComplement = normalize(row.status) === "cf";
@@ -761,18 +792,18 @@ function buildClosingSheet(
       ...Array.from({ length: header.length - 2 }, () => ""),
       "TOTAL:",
       {
-        f: `SUM(${XLSX.utils.encode_col(header.length - 1)}7:${XLSX.utils.encode_col(header.length - 1)}${rows.length + 6})`,
+        f: `SUM(${XLSX.utils.encode_col(header.length - 1)}${firstDataExcelRow}:${XLSX.utils.encode_col(header.length - 1)}${totalExcelRow - 1})`,
         v: rows.reduce((sum, row) => sum + row.total, 0),
         t: "n",
       },
     ],
   ];
   const sheet = XLSX.utils.aoa_to_sheet(data);
-  sheet["!merges"] = Array.from({ length: 5 }, (_, r) => ({
+  sheet["!merges"] = Array.from({ length: institutionalRows.length }, (_, r) => ({
     s: { r, c: 0 },
     e: { r, c: header.length - 1 },
   }));
-  const last = rows.length + 7;
+  const last = totalExcelRow;
   const widths = [
     12,
     12,
@@ -788,18 +819,31 @@ function buildClosingSheet(
     18,
   ];
   sheet["!cols"] = widths.map((wch) => ({ wch }));
-  sheet["!rows"] = [
-    { hpt: 21 },
-    { hpt: 20 },
-    { hpt: 20 },
-    { hpt: 20 },
-    { hpt: 22 },
-    { hpt: 24 },
-  ];
+  sheet["!rows"] = isMaex
+    ? [
+        { hpt: 21 },
+        { hpt: 20 },
+        { hpt: 20 },
+        { hpt: 20 },
+        { hpt: 22 },
+        { hpt: 12 },
+        { hpt: 21 },
+        { hpt: 24 },
+      ]
+    : [
+        { hpt: 21 },
+        { hpt: 20 },
+        { hpt: 20 },
+        { hpt: 20 },
+        { hpt: 22 },
+        { hpt: 24 },
+      ];
   const lastColumn = XLSX.utils.encode_col(header.length - 1);
   const totalLabelColumn = XLSX.utils.encode_col(header.length - 2);
-  sheet["!autofilter"] = { ref: `A6:${lastColumn}${last - 1}` };
-  sheet["!freeze"] = { xSplit: 0, ySplit: 6 };
+  sheet["!autofilter"] = {
+    ref: `A${headerExcelRow}:${lastColumn}${last - 1}`,
+  };
+  sheet["!freeze"] = { xSplit: 0, ySplit: firstDataRowIndex };
   for (let r = 0; r < last; r++)
     for (let c = 0; c < header.length; c++) {
       const address = XLSX.utils.encode_cell({ r, c });
@@ -815,11 +859,12 @@ function buildClosingSheet(
     font: { color: { rgb: "111111" }, bold: true, sz: 12 },
     alignment: { vertical: "center" },
   };
-  ["A1", "A2", "A3", "A4", "A5"].forEach((a) => {
+  const titleRows = isMaex ? [1, 2, 3, 4, 5, 7] : [1, 2, 3, 4, 5];
+  titleRows.map((row) => `A${row}`).forEach((a) => {
     if (sheet[a]) sheet[a].s = titleStyle;
   });
   for (let c = 0; c < header.length; c++) {
-    const cell = sheet[XLSX.utils.encode_cell({ r: 5, c })];
+    const cell = sheet[XLSX.utils.encode_cell({ r: headerRowIndex, c })];
     cell.s = {
       fill: { patternType: "solid", fgColor: { rgb: "000000" } },
       font: { color: { rgb: "FFFFFF" }, bold: true },
@@ -827,7 +872,7 @@ function buildClosingSheet(
       border: { bottom: { style: "thin", color: { rgb: "000000" } } },
     };
   }
-  for (let r = 6; r < last - 1; r++) {
+  for (let r = firstDataRowIndex; r < last - 1; r++) {
     const dateCell = sheet[XLSX.utils.encode_cell({ r, c: 0 })];
     if (dateCell?.v instanceof Date) {
       dateCell.t = "d";
@@ -1074,15 +1119,6 @@ function buildArgiusSheet(
   });
   return sheet;
 }
-
-const maexPeriodName = (period: string) => {
-  const match = period.match(
-    /^([12])[ªº°]\s+Quinzena\s+de\s+(.+?)\s+de\s+(\d{4})$/i,
-  );
-  return match
-    ? `${match[1]}° Quinzena de ${match[2]} / ${match[3].slice(-2)}`
-    : period;
-};
 
 const excelSerialFromIso = (date: string) => {
   const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);

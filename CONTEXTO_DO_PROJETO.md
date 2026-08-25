@@ -172,6 +172,8 @@ O período é definido como primeira quinzena para datas até o dia 15 e segunda
 
 No formato padrão, cada uma das cinco linhas iniciais do cabeçalho é mesclada individualmente de `A` até a última coluna da tabela.
 
+O fechamento normal da Maex é a exceção institucional dentro desse formato. Ele usa sete linhas mescladas até a última coluna: `Empresa: GISE TRANSPORTES LTDA`, endereço da Rua Carlos Marcondes, CNPJ `53.823.705/0001-75` e IE `135.201.059.11`, dados bancários do Bradesco, período abreviado como `1° Quinzena de agosto / 26`, uma linha em branco e `Parceiro: MAEX`. O cabeçalho preto da tabela começa na linha 8 e os registros começam na linha 9. Essa alteração não afeta o arquivo `MAEX ADICIONAL`, que mantém seu layout próprio.
+
 O cabeçalho da tabela padrão fica na linha 6 e possui 12 colunas: `Entrada`, `CTE`, `NF`, `Remetente`, `Destinatário`, `Cidade`, `Data de Entrega`, `TDE`, `Dedicado`, `TDA`, `Frete da Parceira` e `Total Comissão`. TDA e TRT representam o mesmo serviço, então a exportação mostra somente `TDA`: usa primeiro o valor de TDA e, quando ele estiver vazio ou zerado, reaproveita o valor de TRT, sem somar os dois. A linha final soma a coluna L. As cinco linhas institucionais são mescladas individualmente de A até L.
 
 A Fitlog possui uma exceção apenas de formato. A aba principal `DadosExcel` mantém todos os registros e a coluna `TDE`, mas não possui a coluna `Dedicado`; por isso o cabeçalho vai de A até K e o total fica na coluna K. Não existe aba TDE separada. Em todas as transportadoras, inclusive a Fitlog, cada linha de `Total Comissão` é calculada como `Valor do Frete` (BA) + TDE, e a linha final soma esses totais.
