@@ -1097,7 +1097,7 @@ const excelSerialFromIso = (date: string) => {
 function buildMaexAdditionalSheet(rows: ExportRow[], period: string) {
   const furnitureRate = 15;
   const header = [
-    "CHEGADA",
+    "EMISSÃO",
     "Mde",
     "CTE",
     "NF",
@@ -1106,7 +1106,6 @@ function buildMaexAdditionalSheet(rows: ExportRow[], period: string) {
     "CIDADE",
     "PESO",
     "VOL",
-    "ENTREGA",
     "TAXA DE MOVEIS",
   ];
   const data = [
@@ -1130,18 +1129,13 @@ function buildMaexAdditionalSheet(rows: ExportRow[], period: string) {
       row.city,
       row.weight || "",
       row.volumes || "",
-      row.deliveryDate
-        ? excelSerialFromIso(row.deliveryDate)
-        : row.isRedelivery
-          ? "RE"
-          : row.status || "",
       furnitureRate,
     ]),
     [
       ...Array.from({ length: header.length - 2 }, () => ""),
       "TOTAL:",
       {
-        f: `SUM(K9:K${rows.length + 8})`,
+        f: `SUM(J9:J${rows.length + 8})`,
         v: rows.length * furnitureRate,
         t: "n",
       },
@@ -1152,9 +1146,9 @@ function buildMaexAdditionalSheet(rows: ExportRow[], period: string) {
   const lastDataRow = rows.length + 8;
   sheet["!merges"] = Array.from({ length: 7 }, (_, r) => ({
     s: { r, c: 0 },
-    e: { r, c: 10 },
+    e: { r, c: 9 },
   }));
-  sheet["!cols"] = [12, 13, 13, 20, 38, 38, 25, 11, 9, 14, 18].map(
+  sheet["!cols"] = [12, 13, 13, 20, 38, 38, 25, 11, 9, 18].map(
     (wch) => ({ wch }),
   );
   sheet["!rows"] = [
@@ -1167,7 +1161,7 @@ function buildMaexAdditionalSheet(rows: ExportRow[], period: string) {
     { hpt: 21 },
     { hpt: 25 },
   ];
-  sheet["!autofilter"] = { ref: `A8:K${lastDataRow}` };
+  sheet["!autofilter"] = { ref: `A8:J${lastDataRow}` };
   sheet["!freeze"] = { xSplit: 0, ySplit: 8 };
 
   for (let r = 0; r < lastRow; r++) {
@@ -1219,7 +1213,7 @@ function buildMaexAdditionalSheet(rows: ExportRow[], period: string) {
         bottom: { style: "thin", color: { rgb: "D8D8D8" } },
       };
     }
-    [0, 9].forEach((c) => {
+    [0].forEach((c) => {
       const cell = sheet[XLSX.utils.encode_cell({ r, c })];
       if (typeof cell?.v === "number") {
         cell.t = "n";
@@ -1237,20 +1231,20 @@ function buildMaexAdditionalSheet(rows: ExportRow[], period: string) {
       volumeCell.z = "0";
       volumeCell.s.numFmt = "0";
     }
-    const rateCell = sheet[XLSX.utils.encode_cell({ r, c: 10 })];
+    const rateCell = sheet[XLSX.utils.encode_cell({ r, c: 9 })];
     rateCell.z = "R$ #,##0.00";
     rateCell.s.numFmt = "R$ #,##0.00";
   }
 
-  ["J", "K"].forEach((column) => {
+  ["I", "J"].forEach((column) => {
     const cell = sheet[`${column}${lastRow}`];
     cell.s = {
       fill: { patternType: "solid", fgColor: { rgb: "FFF200" } },
       font: { name: "Calibri", color: { rgb: "111111" }, bold: true, sz: 14 },
-      alignment: { horizontal: column === "J" ? "left" : "right" },
-      ...(column === "K" ? { numFmt: "R$ #,##0.00" } : {}),
+      alignment: { horizontal: column === "I" ? "left" : "right" },
+      ...(column === "J" ? { numFmt: "R$ #,##0.00" } : {}),
     };
-    if (column === "K") cell.z = "R$ #,##0.00";
+    if (column === "J") cell.z = "R$ #,##0.00";
   });
   return sheet;
 }

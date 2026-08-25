@@ -124,6 +124,8 @@ Na prévia são exibidos:
 - quantidade de reentregas;
 - valor total do fechamento.
 
+Quando um período é informado, o fechamento normal aplica o intervalo às duas datas: emissão e entrega. Um documento emitido em 15/08 e entregue em 18/08 não aparece se a data final for 16/08. Registros comuns sem data de entrega também ficam fora enquanto houver filtro. As exceções `RE`, `CF` e `OUTROS` continuam elegíveis pela data de emissão, pois nesses casos o campo de entrega pode conter um código em vez de uma data. O MAEX ADICIONAL não usa essa regra de entrega: ele considera somente a emissão até a data final escolhida.
+
 Antes de montar a lista normal de parceiras, o sistema retira os registros cujo par `transportadora + CTE` já consta no histórico normal de faturamento. Uma faixa informa quantos registros do período foram ocultados. O histórico do `MAEX ADICIONAL` não participa desse filtro: um documento faturado no adicional continua disponível para o fechamento normal quando a entrega ocorrer.
 
 Argius, TRD e D&Y usam conferência por bipagem do CTE da parceira. Leituras com exatamente 44 dígitos são procuradas na coluna `Chave CT-e Parceiro` (AK); leituras menores são procuradas na coluna `CT-e Parceiro` (AJ). A marcação `OK` é feita na prévia e, no site publicado, fica salva no conjunto `scans` do banco central, permanecendo entre acessos, computadores e novas importações. Se um CTE bipado ainda não existir no relatório, ele fica como `AGUARDANDO` e recebe `OK` automaticamente quando aparecer em uma importação futura da mesma parceira. Para essas três parceiras, quantidades, valores e exportação consideram somente documentos bipados que já apareceram no relatório. Uma bipagem pode ser removida em caso de erro.
@@ -187,16 +189,17 @@ Quando a Maex é selecionada para exportação, o fechamento normal usa somente 
 O adicional segue o modelo fornecido pelo usuário:
 
 - aba `TEMP_EXPORT`;
-- linhas 1 a 7 mescladas individualmente de A até K;
+- linhas 1 a 7 mescladas individualmente de A até J;
 - período no padrão `1° Quinzena de agosto / 26` ou `2° Quinzena ...`;
 - aviso de adicional de móveis em faixa vermelha na linha 6;
 - identificação `Parceiro: MAEX` na linha 7;
-- cabeçalho preto na linha 8 com `CHEGADA`, `Mde`, `CTE`, `NF`, `REMETENTE`, `DESTINATARIO`, `CIDADE`, `PESO`, `VOL`, `ENTREGA` e `TAXA DE MOVEIS`;
+- cabeçalho preto na linha 8 com `EMISSÃO`, `Mde`, `CTE`, `NF`, `REMETENTE`, `DESTINATARIO`, `CIDADE`, `PESO`, `VOL` e `TAXA DE MOVEIS`;
+- não possui coluna de entrega e usa apenas a data de emissão para o corte do fechamento adicional;
 - taxa fixa de R$ 15 por documento;
-- linha final amarela com fórmula de soma da coluna K;
+- linha final amarela com fórmula de soma da coluna J;
 - datas em `dd/mm/aaaa` e MDe/CTE mantidos como texto para evitar notação científica ou perda de zeros.
 
-Em `ENTREGA`, usa a data de entrega quando disponível. Sem data, usa `RE` para reentrega ou o código de status disponível. O arquivo adicional não substitui nem altera os valores ou o histórico do fechamento normal da Maex. Quando esse documento receber data de entrega em uma importação futura, ele ainda poderá entrar no fechamento normal.
+O arquivo adicional não possui mais a coluna `ENTREGA`. Ele não substitui nem altera os valores ou o histórico do fechamento normal da Maex. Quando esse documento receber data de entrega em uma importação futura, ele ainda poderá entrar no fechamento normal.
 
 ### 6. Persistência e limites
 
@@ -292,7 +295,7 @@ git push
 7. Para qualquer mudança em TDE, validar a lista, CNPJ com zero à esquerda, taxa da transportadora correta, cadastro manual e persistência em `gmobs-tde-rates-v1`.
 8. Para qualquer mudança de bipagem, validar leitor/digitação, TXT, caixas de seleção, AJ, AK, `AGUARDANDO`, `OK`, nova importação e persistência no D1 compartilhado.
 9. Para qualquer mudança de exportação, validar separadamente formato padrão, CF/aba `OUTROS`, os dois arquivos da Argius, a exceção da Fitlog sem Dedicado e a lista de faltantes da Pajussara.
-10. Para qualquer mudança na Maex, validar o fechamento normal e o adicional separadamente, incluindo marcação por remetente, nova importação, taxa fixa de R$ 15 e layout A:K.
+10. Para qualquer mudança na Maex, validar o fechamento normal e o adicional separadamente, incluindo marcação por remetente, nova importação, taxa fixa de R$ 15 e layout A:J sem coluna de entrega.
 11. Executar `npx vite build` antes de concluir.
 12. Atualizar este documento ao mudar qualquer regra aprovada.
 

@@ -44,6 +44,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - Depois de uma exportação bem-sucedida, marcar automaticamente os CTEs no tipo correspondente: normal para o fechamento principal e `maex-additional` para o arquivo adicional.
 - Alterar TDE afeta o total de todas as transportadoras: cada linha e o fechamento devem usar BA + TDE.
 - Gerar um arquivo Excel separado para cada transportadora selecionada.
+- No fechamento normal, quando houver filtro de período, exigir que tanto a data de emissão quanto a data de entrega estejam dentro do intervalo. Se a entrega estiver depois da data final, excluir o documento mesmo que a emissão esteja dentro. `RE`, `CF` e `OUTROS` não exigem data de entrega e continuam seguindo somente a data de emissão.
 - Manter `Data de Entrega` depois de `Cidade`; mostrar `REENTREGA` para RE e `OUTROS` para CF.
 - Para CF, deixar o frete da parceira vazio, colocar somente `Valor do Frete` (BA) em `Dedicado` e criar a aba `OUTROS` com `Observação` (BQ), exceto no formato especial da Argius. O TDE entra no `Total Comissão`, mas não deve ser misturado ao valor de `Dedicado` nem ao `Valor do Frete` da aba `OUTROS`.
 - Preservar o modelo especial da Argius: gerar dois arquivos em tabela direta, sem as cinco linhas institucionais, com cabeçalho preto, linhas alternadas e soma total ao final. O normal mantém os dados do cliente, omite TDA, TDE e Dedicado e usa como total líquido `Total Comissão - TDA - TDE - Dedicado`, sem ficar negativo. O segundo mostra somente registros com adicionais e mantém as colunas na ordem TDA, TDE e Dedicado; seu total por linha é a soma desses três valores.
@@ -62,7 +63,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - Manter bipagens não encontradas como `AGUARDANDO` para associação automática em importações futuras.
 - Na prévia da Maex, permitir marcar documentos para `MAEX ADICIONAL`. A marcação representa o remetente: usar primeiro o CNPJ do remetente e, se estiver ausente, o nome normalizado. Todos os documentos atuais e futuros desse remetente devem herdar a marcação.
 - A exportação da Maex mantém o fechamento normal independente. O `MAEX ADICIONAL` considera os remetentes marcados que ainda estejam em aberto no histórico adicional até a data final escolhida, inclusive sem data de entrega e mesmo que o documento já tenha sido faturado no normal. Gerar o arquivo adicional com taxa fixa de R$ 15 por documento.
-- Preservar o layout específico do `MAEX ADICIONAL`: sete linhas iniciais mescladas de A até K, aviso vermelho na linha 6, parceiro na linha 7, cabeçalho preto na linha 8, colunas `CHEGADA`, `Mde`, `CTE`, `NF`, `REMETENTE`, `DESTINATARIO`, `CIDADE`, `PESO`, `VOL`, `ENTREGA` e `TAXA DE MOVEIS`, além do total amarelo ao final.
+- Preservar o layout específico do `MAEX ADICIONAL`: sete linhas iniciais mescladas de A até J, aviso vermelho na linha 6, parceiro na linha 7, cabeçalho preto na linha 8, colunas `EMISSÃO`, `Mde`, `CTE`, `NF`, `REMETENTE`, `DESTINATARIO`, `CIDADE`, `PESO`, `VOL` e `TAXA DE MOVEIS`, sem coluna de entrega e com total amarelo ao final.
 - Preservar funcionamento responsivo em telas menores.
 
 ## Persistência local e no banco central
@@ -94,6 +95,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - Para todas as parceiras, confira que o TDE é somado ao `Total Comissão` uma única vez. Na Fitlog, confira também que a aba principal mostra TDE, não mostra Dedicado e não cria aba TDE separada.
 - Para mudanças financeiras, compare entradas e saídas com exemplos calculados manualmente.
 - Para mudanças na exportação, abra ou inspecione o `.xlsx` gerado e confira abas, colunas, formatos e totais.
+- Para mudanças no filtro, teste emissão e entrega dentro do período, entrega depois da data final, entrega antes da data inicial, ausência de entrega comum e as exceções `RE`, `CF` e `OUTROS`. O MAEX ADICIONAL deve usar somente a emissão.
 - Para a validação da Pajussara, teste arquivo com abas `Extrato` e `MAPA`, NF com série no nosso relatório, NF numérica no arquivo deles, zeros à esquerda, NFs duplicadas, período filtrado, lista de faltantes e exportação das pendências.
 - Para mudanças na bipagem, teste digitação/leitor, importação TXT, caixa de seleção, AJ, AK com 44 dígitos, `AGUARDANDO`, reaparecimento após nova importação e remoção manual.
 - Para mudanças no adicional da Maex, teste persistência por CNPJ/nome do remetente, documento sem data de entrega, documento já faturado no normal, histórico adicional independente, desfazer adicional sem afetar o normal, taxa fixa de R$ 15 e comparação visual do Excel adicional com o modelo aprovado.

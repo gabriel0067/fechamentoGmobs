@@ -30,6 +30,10 @@ import {
   type PajussaraClosingDocument,
 } from "./excel";
 import {
+  matchesMaexAdditionalCutoff,
+  matchesNormalClosingPeriod,
+} from "./closing-period";
+import {
   BILLED_STORAGE_KEY,
   CLOSING_STORAGE_KEY,
   readBilledStorage,
@@ -1099,9 +1103,7 @@ export default function Home() {
   const periodFiltered = useMemo(
     () =>
       entriesWithTde.filter(
-        (entry) =>
-          (!dateFrom || !entry.date || entry.date >= dateFrom) &&
-          (!dateTo || !entry.date || entry.date <= dateTo),
+        (entry) => matchesNormalClosingPeriod(entry, dateFrom, dateTo),
       ),
     [entriesWithTde, dateFrom, dateTo],
   );
@@ -1125,7 +1127,7 @@ export default function Home() {
       entriesWithTde.filter(
         (entry) =>
           entry.partnerId === "maex" &&
-          (!dateTo || !entry.date || entry.date <= dateTo) &&
+          matchesMaexAdditionalCutoff(entry.date, dateTo) &&
           !maexAdditionalBilledKeys.has(
             billedDocumentKey("maex", entry.cte, "maex-additional"),
           ),
