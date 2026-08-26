@@ -61,6 +61,30 @@ export type BilledClosingImport = {
   documents: BilledClosingDocument[];
 };
 
+export type ImportedRomaneioRow = {
+  filial: string;
+  romaneio: string;
+  tabela: string;
+  status: string;
+  emissionDate: string;
+  deliveryPartner: string;
+  freightLetter: string;
+  freightLetterDate: string;
+  cpf: string;
+  driver: string;
+  plate: string;
+  vehicleType: string;
+  trailer: string;
+  freight: number;
+  weight: number;
+  deliveries: number;
+  volumes: number;
+  route: string;
+  documents: string[];
+  helpers: string;
+  checkers: string;
+};
+
 const aliases: Record<keyof ImportedRow, string[]> = {
   partner: [
     "parceiro",
@@ -212,6 +236,142 @@ const excelDate = (value: unknown) => {
     : parsed.toISOString().slice(0, 10);
 };
 
+const excelDateTime = (value: unknown) => {
+  const dateParts = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
+  if (value instanceof Date) return dateParts(value);
+  if (typeof value === "number" && value > 20000) {
+    const date = XLSX.SSF.parse_date_code(value);
+    if (date)
+      return `${date.y}-${String(date.m).padStart(2, "0")}-${String(date.d).padStart(2, "0")}T${String(date.H || 0).padStart(2, "0")}:${String(date.M || 0).padStart(2, "0")}:${String(Math.floor(date.S || 0)).padStart(2, "0")}`;
+  }
+  const text = String(value ?? "").trim();
+  const br = text.match(
+    /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/,
+  );
+  if (br)
+    return `${br[3].length === 2 ? `20${br[3]}` : br[3]}-${br[2].padStart(2, "0")}-${br[1].padStart(2, "0")}T${(br[4] || "0").padStart(2, "0")}:${br[5] || "00"}:${br[6] || "00"}`;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? "" : dateParts(parsed);
+};
+
+export async function readRomaneioFile(file: File) {
+  const workbook = XLSX.read(await file.arrayBuffer(), {
+    type: "array",
+    cellDates: false,
+  });
+  let best: {
+    rows: unknown[][];
+    header: number;
+    sheet: string;
+    columns: Record<string, number>;
+    score: number;
+  } | null = null;
+
+  for (const sheetName of workbook.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(
+      workbook.Sheets[sheetName],
+      { header: 1, defval: "", raw: true },
+    );
+    for (let header = 0; header < Math.min(rows.length, 25); header++) {
+      const titles = rows[header].map(normalize);
+      const at = (name: string, start = 0) =>
+        titles.findIndex(
+          (title, index) => index >= start && title === normalize(name),
+        );
+      const columns: Record<string, number> = {
+        filial: at("FILIAL"),
+        romaneio: at("ROMANEIO"),
+        tabela: at("TABELA"),
+        status: at("STATUS"),
+        emissionDate: at("DATA EMISSAO"),
+        deliveryPartner: at("PARCEIRA DE ENTREGA"),
+        freightLetter: at("CARTA FRETE"),
+        cpf: at("CPF"),
+        driver: at("MOTORISTA"),
+        plate: at("PLACA"),
+        vehicleType: at("TIPO VEICULO"),
+        trailer: at("ENGATE"),
+        freight: at("FRETE"),
+        weight: at("PESO"),
+        deliveries: at("QTD. ENTREGAS"),
+        volumes: at("VOLUMES"),
+        route: at("EM ROTA"),
+        documents: at("DOCUMENTOS"),
+        helpers: at("AJUDANTES"),
+        checkers: at("CONFERENTES"),
+      };
+      columns.freightLetterDate = at(
+        "DATA EMISSAO",
+        Math.max(0, columns.freightLetter + 1),
+      );
+      const required = [
+        "romaneio",
+        "emissionDate",
+        "driver",
+        "plate",
+        "route",
+        "documents",
+      ];
+      const score = Object.values(columns).filter((column) => column >= 0).length;
+      if (
+        required.every((key) => columns[key] >= 0) &&
+        (!best || score > best.score)
+      )
+        best = { rows, header, sheet: sheetName, columns, score };
+    }
+  }
+
+  if (!best)
+    throw new Error(
+      "Não encontrei as colunas ROMANEIO, DATA EMISSÃO, MOTORISTA, PLACA, EM ROTA e DOCUMENTOS.",
+    );
+
+  const value = (row: unknown[], key: string) => {
+    const column = best!.columns[key];
+    return column === undefined || column < 0 ? "" : row[column];
+  };
+  const rows = best.rows
+    .slice(best.header + 1)
+    .map((row): ImportedRomaneioRow => ({
+      filial: identifierText(value(row, "filial")),
+      romaneio: identifierText(value(row, "romaneio")),
+      tabela: String(value(row, "tabela") ?? "").trim(),
+      status: String(value(row, "status") ?? "").trim(),
+      emissionDate: excelDateTime(value(row, "emissionDate")),
+      deliveryPartner: String(value(row, "deliveryPartner") ?? "").trim(),
+      freightLetter: identifierText(value(row, "freightLetter")),
+      freightLetterDate: excelDateTime(value(row, "freightLetterDate")),
+      cpf: identifierText(value(row, "cpf")),
+      driver: String(value(row, "driver") ?? "").trim(),
+      plate: String(value(row, "plate") ?? "").trim(),
+      vehicleType: String(value(row, "vehicleType") ?? "").trim(),
+      trailer: String(value(row, "trailer") ?? "").trim(),
+      freight: toNumber(value(row, "freight")),
+      weight: toNumber(value(row, "weight")),
+      deliveries: toNumber(value(row, "deliveries")),
+      volumes: toNumber(value(row, "volumes")),
+      route: String(value(row, "route") ?? "").trim(),
+      documents: String(value(row, "documents") ?? "")
+        .split(/[,;\n]+/)
+        .map((document) => document.trim())
+        .filter(Boolean),
+      helpers: String(value(row, "helpers") ?? "").trim(),
+      checkers: String(value(row, "checkers") ?? "").trim(),
+    }))
+    .filter(
+      (row) =>
+        Boolean(row.romaneio) &&
+        !["total", "subtotal"].includes(normalize(row.romaneio)),
+    );
+
+  if (!rows.length)
+    throw new Error(
+      "O relatório foi reconhecido, mas não encontrei romaneios abaixo do cabeçalho.",
+    );
+  return { rows, sheet: best.sheet };
+}
+
 export async function readClosingFile(file: File) {
   const workbook = XLSX.read(await file.arrayBuffer(), {
     type: "array",
@@ -246,8 +406,11 @@ export async function readClosingFile(file: File) {
       const remetente = headerAt("CNPJ Remetente");
       const destinatario = headerAt("CNPJ Destinatario");
       const redespacho = headerAt("CNPJ Redespacho");
+      const documentoMde = headerAt("Documento");
       const cteParceiro = headerAt("CT-e Parceiro");
       const chaveCteParceiro = headerAt("Chave CT-e Parceiro");
+      const valorDoFrete = headerAt("Valor do Frete");
+      if (documentoMde >= 0) map.mde = documentoMde;
       if (remetente >= 0) map.sender = remetente + 1;
       if (remetente >= 0) map.senderCnpj = remetente;
       if (destinatario >= 0) {
@@ -259,6 +422,7 @@ export async function readClosingFile(file: File) {
       if (redespacho >= 0) map.partnerCnpj = redespacho;
       if (cteParceiro >= 0) map.cte = cteParceiro;
       if (chaveCteParceiro >= 0) map.cteKey = chaveCteParceiro;
+      if (valorDoFrete >= 0) map.reportedTotal = valorDoFrete;
       const score =
         Object.keys(map).length +
         (map.cte !== undefined ? 3 : 0) +
@@ -334,19 +498,29 @@ export async function readClosingFile(file: File) {
     })
     .filter(
       (row) =>
-        (row.cte || row.invoice) &&
+        (row.mde || row.cte || row.invoice) &&
+        !normalize(row.mde).includes("total") &&
         !normalize(row.cte).includes("total") &&
         !normalize(row.invoice).includes("total"),
     );
-  const eligible = imported.filter((row) => row.eligible);
-  if (!eligible.length)
+  const eligible = imported.filter(
+    (row) => row.eligible && Boolean(row.cte || row.invoice),
+  );
+  if (!imported.length)
     throw new Error(
       "A planilha foi reconhecida, mas não encontrei documentos nas linhas abaixo do cabeçalho.",
     );
+  const latestEmissionDate = imported.reduce((latest, row) => {
+    const date = String(row.date || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return latest;
+    return !latest || date > latest ? date : latest;
+  }, "");
   return {
     rows: eligible,
+    referenceRows: imported,
     excluded: imported.length - eligible.length,
     sheet: best.sheet,
+    latestEmissionDate,
     recognized: (Object.keys(best.map) as (keyof ImportedRow)[]).map(
       (key) => aliases[key][0],
     ),

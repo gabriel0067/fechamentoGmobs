@@ -6,7 +6,7 @@ Este projeto transforma o processo de fechamento de transportadoras/parceiras em
 
 Este documento existe para permitir a continuidade do trabalho em outra máquina ou em uma nova conversa com o Codex sem precisar reexplicar o projeto desde o início.
 
-## Estado atual em 24/08/2026
+## Estado atual em 25/08/2026
 
 - O projeto foi colocado no Git e enviado ao GitHub.
 - A branch de trabalho é `main`.
@@ -17,6 +17,7 @@ Este documento existe para permitir a continuidade do trabalho em outra máquina
 - A persistência em nuvem foi implementada com Cloudflare D1. `.openai/hosting.json` declara a ligação lógica `DB`, `db/schema.ts` define `cloud_state_chunks` e a migração correspondente fica em `drizzle/`.
 - No endereço local, os dados importados continuam sendo guardados no IndexedDB do navegador, no banco `gmobs-closing-storage`, usando a chave lógica `gmobs-closing-v3`. No site publicado, o Cloudflare D1 é a única fonte operacional: nenhum relatório ou histórico é restaurado do armazenamento do navegador.
 - As bipagens, a tabela de TDE, os cadastros manuais, os remetentes do `MAEX ADICIONAL` e o histórico de faturamento também ficam no D1 compartilhado no endereço publicado.
+- A importação e a tela separada de romaneios estão implementadas e validadas localmente, mas ainda não foram publicadas; aguardam aprovação visual do usuário.
 - O endereço publicado é acessível pela internet, mas a interface e a API exigem login próprio. A sessão é assinada no servidor e mantida em cookie HttpOnly.
 
 ## O que foi construído
@@ -36,6 +37,8 @@ Em `app/excel.ts`, o sistema:
 - informa quantos registros ficaram fora do fechamento.
 
 Os campos reconhecidos incluem parceira e CNPJ do redespacho, ocorrência, status, data de emissão, data de entrega, MDe/documento, CTE, chave do CTE, nota fiscal/minuta, remetente e CNPJ, destinatário e CNPJ, cidade, peso, volumes, observação, fretes, TDE, TDA, TRT, reentrega, dedicado, ajuste e total informado.
+
+No cartão `Relatório geral`, a tela mostra sempre a maior `Data de Emissão` encontrada na coluna F do último arquivo importado. Essa informação é salva junto com os metadados do relatório no endereço local e no estado `closing` do banco publicado. Para dados antigos sem esse metadado, a maior data é reconstruída automaticamente a partir dos registros atuais.
 
 #### Lista de taxas TDE
 
@@ -78,6 +81,34 @@ A transportadora é reconhecida pelo nome do arquivo ou por uma indicação expl
 
 O histórico mostra a quantidade de registros, quantos foram encontrados no relatório atual e a relação dos arquivos importados. Fontes do adicional aparecem como `Maex (somente adicional)`. O botão `Desfazer` de um arquivo adicional remove apenas o histórico adicional e nunca altera o normal; se o mesmo CTE também estiver presente em outro arquivo do mesmo tipo, ele continua marcado.
 
+#### Relatórios de romaneio
+
+A primeira página possui um quarto campo de importação para um ou vários relatórios de romaneio `.xls`, `.xlsx` ou `.csv`. O arquivo aprovado contém as colunas `FILIAL`, `ROMANEIO`, `TABELA`, `STATUS`, `DATA EMISSAO`, `PARCEIRA DE ENTREGA`, `CARTA FRETE`, `CPF`, `MOTORISTA`, `PLACA`, `TIPO VEICULO`, `ENGATE`, `FRETE`, `PESO`, `QTD. ENTREGAS`, `VOLUMES`, `EM ROTA`, `DOCUMENTOS`, `AJUDANTES` e `CONFERENTES`.
+
+Os registros ficam em uma aba independente chamada `Romaneios`. A tela operacional agrupa as linhas por dia de emissão + motorista, ignorando o horário e reunindo todos os romaneios e rotas desse motorista no mesmo painel diário. O painel mostra números dos romaneios, dia, motorista, rota agrupada e editável, quantidade de entregas, peso total, frete total das linhas do romaneio e produção gravada. A tela não possui filtro separado de dia nem cartões gerais de totais. Há um único campo global para procurar motorista, romaneio, rota ou cliente e também para bipar MD-e, CT-e Parceiro ou NF. Os detalhes só são renderizados quando o usuário abre o painel, evitando lentidão com milhares de documentos.
+
+A coluna `DOCUMENTOS` (S) é dividida por vírgula, ponto e vírgula ou quebra de linha. O prefixo define o vínculo com o relatório geral:
+
+- `M-627822-1` significa MD-e `627822` e é comparado com o campo MDe/documento do relatório geral;
+- `C-8160-1` significa CT-e `8160` e é comparado com o CTE do relatório geral;
+- o sufixo final, como `-1`, não participa da comparação.
+
+Cada referência aparece em verde quando foi localizada e em amarelo como `AGUARDANDO RELATÓRIO` quando ainda não existe no relatório geral. O vínculo do MD-e usa a coluna C (`Documento`). Os dados exibidos vêm das colunas R (`Nome` do remetente), V (`Nome` do destinatário) e W (`Cidade` do destinatário); a busca também aceita o CT-e Parceiro da AJ e a chave de 44 dígitos da AK. A base de consulta do romaneio preserva todos os status importados, inclusive `LT` e `RM`, mesmo que eles ainda não estejam liberados para o fechamento. Como o vínculo é recalculado a partir dos dois estados atuais, um documento pendente passa automaticamente para localizado quando aparecer em uma futura importação do relatório geral, sem precisar importar novamente o romaneio.
+
+O frete de cada documento não é obtido dividindo o frete total da linha do romaneio. O sistema faz uma busca equivalente a PROCV no relatório geral: `M-...` procura o MD-e, `C-...` procura o CT-e e usa exclusivamente o `Valor do Frete` da coluna BA encontrado naquele registro. A produção individual é `BA × 88%`, correspondente ao desconto de 12%. Um documento ainda ausente no relatório geral aparece como `PROCV pendente` e fica sem produção até ser associado automaticamente numa importação futura.
+
+Ao bipar ou digitar MD-e, CT-e Parceiro, chave da AK ou NF no campo global, o sistema localiza e abre automaticamente o painel diário vinculado. A própria primeira leitura já prepara o documento como Entregue, e as próximas leituras continuam localizando e marcando documentos. A lista também permite selecionar `Entregue`, `Volta`, `Retorno` ou `Retido`; Retorno exige motivo. Nenhuma alteração comum do painel é definitiva antes do botão `Gravar conferência`. Depois de gravados, os documentos deixam a lista de pendências. Entregues e Retidos somam produção; Volta e Retorno não somam. O valor total da produção considera somente situações já gravadas.
+
+Para facilitar a conferência, um documento bipado ou com situação manual completa desaparece da lista visível assim que fica preparado; ele continua contado na faixa de alterações aguardando gravação. Um Retorno ainda sem motivo permanece visível até o preenchimento obrigatório. Se houver qualquer situação não gravada e o usuário tentar bipar um documento pertencente a outro painel diário, a leitura é bloqueada e aparece no centro da tela um alerta forte, com fundo escurecido e dois sinais sonoros curtos, pedindo para usar `Gravar conferência` primeiro. Ao tentar gravar uma conferência parcial, o mesmo alerta informa quantos documentos continuam sem situação e oferece `Voltar e conferir` ou `Gravar mesmo assim`. Assim, a operação chama atenção sem impedir conscientemente uma gravação parcial necessária.
+
+Documentos que chegam do relatório geral com status `LT` ou `RM` ficam disponíveis para consulta no Romaneio, mas permanecem fora do fechamento enquanto não houver conferência gravada. Depois de `Gravar conferência`, Entregue/Bipado converte o documento em `ET`; Volta, Retorno e Retido convertem em `OC`. A data operacional passa a ser o dia do romaneio e o documento convertido fica liberado para o fechamento. Essa conversão também é reaplicada automaticamente quando o relatório geral for importado novamente, porque a situação gravada do Romaneio é persistente.
+
+Os Retidos entram automaticamente numa visão separada chamada `Relatório de Retidos`. Quando um documento retido é lido no campo global da operação, ele recebe baixa imediata como Entregue e sai somente do relatório de Retidos. Dentro da própria visão de Retidos, o usuário ainda pode bipar ou selecionar várias baixas e precisa clicar em `Gravar baixas`. Em ambos os casos, a produção já contabilizada é mantida.
+
+Os romaneios são cumulativos: uma nova importação acrescenta as linhas novas ao conjunto que já estava salvo. Uma linha de romaneio só é ignorada quando todos os seus campos são idênticos aos de outra linha já salva ou selecionada, mesmo que a cópia esteja em outro arquivo. A mesma regra de linha inteira foi aplicada ao relatório geral dentro de cada importação: células isoladas podem se repetir normalmente; somente uma linha completamente igual é removida. O resumo informa quantas duplicatas completas foram descartadas.
+
+No teste local com `Relat_Romaneio_Emitidos (7).xls`, o sistema reconheceu 592 linhas, agrupadas em 254 romaneios e 5.804 referências da coluna S. Depois de importar um relatório geral compatível, 4.914 referências foram localizadas e 890 permaneceram aguardando. Esses números servem apenas como validação local e os arquivos reais não pertencem ao Git.
+
 ### 2. Identificação das parceiras
 
 Em `app/page.tsx`, há aliases para:
@@ -111,11 +142,12 @@ O resumo da importação mostra quantidade importada, reentregas, registros fora
 
 ### 4. Prévia do fechamento
 
-A tela possui três etapas:
+A tela possui quatro etapas:
 
 1. **Importar**: seleção do relatório geral.
-2. **Prévia**: filtro por período e visão por transportadora.
-3. **Exportar**: seleção das transportadoras e geração do fechamento.
+2. **Romaneios**: consulta independente de rotas e documentos vinculados ao relatório geral.
+3. **Prévia**: filtro por período e visão por transportadora.
+4. **Exportar**: seleção das transportadoras e geração do fechamento.
 
 Na prévia são exibidos:
 
@@ -129,6 +161,8 @@ Quando um período é informado, o fechamento normal aplica o intervalo às duas
 Antes de montar a lista normal de parceiras, o sistema retira os registros cujo par `transportadora + CTE` já consta no histórico normal de faturamento. Uma faixa informa quantos registros do período foram ocultados. O histórico do `MAEX ADICIONAL` não participa desse filtro: um documento faturado no adicional continua disponível para o fechamento normal quando a entrega ocorrer.
 
 Argius, TRD e D&Y usam conferência por bipagem do CTE da parceira. Leituras com exatamente 44 dígitos são procuradas na coluna `Chave CT-e Parceiro` (AK); leituras menores são procuradas na coluna `CT-e Parceiro` (AJ). A marcação `OK` é feita na prévia e, no site publicado, fica salva no conjunto `scans` do banco central, permanecendo entre acessos, computadores e novas importações. Se um CTE bipado ainda não existir no relatório, ele fica como `AGUARDANDO` e recebe `OK` automaticamente quando aparecer em uma importação futura da mesma parceira. Para essas três parceiras, quantidades, valores e exportação consideram somente documentos bipados que já apareceram no relatório. Uma bipagem pode ser removida em caso de erro.
+
+Nas demais parceiras, a parte superior da prévia possui a opção `Exportar apenas documentos bipados`, desligada por padrão. Desligada, a parceira continua mostrando e exportando todos os documentos, sem exigir leitura. Ligada, o mesmo painel de bipagem da Argius aparece e somente documentos com `OK` participam das quantidades, valores e exportação. A opção é temporária para o relatório atual, reinicia desligada ao importar ou restaurar outro relatório e não modifica a lista lateral de parceiras. As leituras confirmadas continuam persistidas normalmente no conjunto `scans`.
 
 Além da leitura individual, a prévia dessas três parceiras permite importar um arquivo `.txt` com um CTE por linha ou valores separados por vírgula. O sistema adiciona todas as leituras válidas ao histórico existente, sem apagar bipagens anteriores. CTEs encontrados recebem `OK`; os que ainda não apareceram no relatório ficam como `AGUARDANDO`, obedecendo à mesma regra de AJ/AK.
 
@@ -206,16 +240,18 @@ O arquivo adicional não possui mais a coluna `ENTREGA`. Ele não substitui nem 
 ### 6. Persistência e limites
 
 - `gmobs-closing-v3`: registros atualmente importados, identificações manuais e transportadoras cadastradas a partir desses registros. Fica no IndexedDB `gmobs-closing-storage`, cuja capacidade é adequada para relatórios grandes.
+- `gmobs-general-import-info-v1`: metadados locais do último relatório geral, incluindo arquivo, quantidades e maior Data de Emissão da coluna F. No site publicado, o mesmo conteúdo fica dentro de `closing` no D1.
 - `gmobs-scanned-ctes-v1`: bipagens da Argius, TRD e D&Y, encontradas ou aguardando.
 - `gmobs-tde-rates-v1`: taxas TDE importadas, nome/resumo do último arquivo e cadastros manuais.
 - `gmobs-maex-additional-senders-v1`: remetentes marcados para o adicional da Maex, identificados por CNPJ ou nome normalizado.
 - `gmobs-billed-documents-v1`: histórico no IndexedDB dos documentos enviados, identificado por escopo (`normal` ou `maex-additional`) + transportadora + CTE e acompanhado dos arquivos de origem. Dados antigos são normalizados ao carregar; fontes chamadas `Fechamento Adicional Maex` migram automaticamente para o escopo adicional.
-- O D1 guarda os cinco conjuntos duráveis `closing`, `scans`, `tde`, `maex` e `billed`. O cliente compacta cada conjunto com gzip antes do envio e a API divide a carga em blocos de até 1,5 MB, abaixo do limite de 2 MB por linha do D1.
+- `gmobs-romaneios-v1`: linhas importadas dos romaneios, arquivos de origem, resumo da última importação, situações gravadas dos documentos e nomes de rota editados.
+- O D1 guarda os seis conjuntos duráveis `closing`, `scans`, `tde`, `maex`, `billed` e `romaneios`. O cliente compacta cada conjunto com gzip antes do envio e a API divide a carga em blocos de até 1,5 MB, abaixo do limite de 2 MB por linha do D1.
 - A tabela `cloud_state_chunks` usa a chave primária composta `(owner_id, state_key, chunk_index)`. No site publicado, todos os logins autorizados usam o proprietário lógico `shared:fechamentos-gmobs`, formando um banco operacional único para a equipe.
 - `app/auth.ts` valida as credenciais recebidas contra `GMOBS_LOGIN_USER` e `GMOBS_LOGIN_PASSWORD`, configuradas na hospedagem. A sessão dura oito horas, é assinada com `GMOBS_SESSION_SECRET` e fica em cookie HttpOnly, Secure e SameSite Strict. Senha e segredo não pertencem ao código nem ao Git.
-- A API aceita somente os cinco conjuntos conhecidos, limita o tamanho recebido, usa comandos preparados e exige sessão válida fora do ambiente local.
+- A API aceita somente os seis conjuntos conhecidos, limita o tamanho recebido, usa comandos preparados e exige sessão válida fora do ambiente local.
 - A sincronização acontece cerca de 600 milissegundos depois de uma alteração. Várias mudanças rápidas são agrupadas pelo atraso, e o processamento pesado de compactação ocorre no navegador para não consumir o limite reduzido de CPU do servidor gratuito.
-- O site consulta as versões dos cinco conjuntos a cada 60 segundos, ao voltar para a aba e ao receber foco. Quando detecta alteração feita por outro computador, recarrega apenas os conjuntos modificados.
+- O site consulta as versões dos seis conjuntos a cada 60 segundos, ao voltar para a aba e ao receber foco. Quando detecta alteração feita por outro computador, recarrega apenas os conjuntos modificados.
 - Se o banco não responder, a interface publicada bloqueia a operação e oferece nova tentativa. Ela não usa uma cópia local silenciosa, evitando que dois computadores trabalhem com estados divergentes.
 - Ao abrir uma versão atualizada, um relatório que ainda esteja no antigo `localStorage` é migrado automaticamente para o IndexedDB. A cópia antiga só é removida após o novo salvamento ser concluído.
 - Se o IndexedDB não estiver disponível, o sistema tenta o `localStorage` como alternativa. Se ambos recusarem a gravação, a tela não cai: o relatório permanece aberto na sessão e aparece um aviso para não recarregar antes de exportar.
@@ -227,7 +263,7 @@ O arquivo adicional não possui mais a coluna `ENTREGA`. Ele não substitui nem 
 - A taxa manual prevalece sobre a taxa importada para o mesmo CNPJ + transportadora.
 - Git guarda apenas o código. Nenhum dado operacional, credencial ou segredo é levado para outra máquina pelo repositório.
 - Limpar os dados do navegador publicado encerra a sessão, mas não apaga o conteúdo central do D1.
-- A tela Importar possui `Baixar backup completo` e `Restaurar backup`. O arquivo JSON inclui relatório, bipagens, TDE, remetentes adicionais da Maex e histórico de faturamento.
+- A tela Importar possui `Baixar backup completo` e `Restaurar backup`. O arquivo JSON inclui relatório geral, romaneios, bipagens, TDE, remetentes adicionais da Maex e histórico de faturamento.
 - Como `127.0.0.1` e o endereço publicado são domínios diferentes, os dados antigos não atravessam automaticamente na primeira publicação. É necessário baixar o backup no site local e restaurá-lo uma vez no site publicado; depois todos os computadores autorizados passam a usar o mesmo banco.
 
 ## Estrutura importante
@@ -235,7 +271,7 @@ O arquivo adicional não possui mais a coluna `ENTREGA`. Ele não substitui nem 
 - `app/page.tsx`: tela principal, estado da aplicação, identificação de parceiras, filtros, prévia e comando de exportação.
 - `app/excel.ts`: leitura das planilhas, reconhecimento de colunas, normalização e criação do Excel final.
 - `app/storage.ts`: armazenamento de maior capacidade dos registros importados e migração segura do antigo `localStorage` para IndexedDB.
-- `app/cloud-storage.ts`: compactação, leitura e gravação dos cinco conjuntos persistentes na API do D1.
+- `app/cloud-storage.ts`: compactação, leitura e gravação dos seis conjuntos persistentes na API do D1.
 - `app/auth.ts` e `app/api/auth/`: validação do login, criação e encerramento da sessão assinada.
 - `app/api/cloud-state/route.ts`: API protegida de leitura e gravação do estado compartilhado em blocos.
 - `app/globals.css`: aparência responsiva da interface.
@@ -300,6 +336,7 @@ git push
 10. Para qualquer mudança na Maex, validar o fechamento normal e o adicional separadamente, incluindo marcação por remetente, nova importação, taxa fixa de R$ 15 e layout A:J sem coluna de entrega.
 11. Executar `npx vite build` antes de concluir.
 12. Atualizar este documento ao mudar qualquer regra aprovada.
+13. Antes de publicar a aba de romaneios, obter aprovação do usuário na prévia local.
 
 ## Pontos de atenção
 
@@ -322,6 +359,7 @@ git push
 6. Restaurar o primeiro backup no endereço publicado e conferir a recuperação em outro navegador/computador.
 7. Limpar arquivos de cache que entraram no primeiro commit.
 8. Acompanhar o consumo do plano gratuito e fazer backups periódicos do histórico operacional.
+9. Depois da aprovação visual, publicar a aba de romaneios e validar o estado `romaneios` no D1 compartilhado.
 
 ## Regra de manutenção deste documento
 

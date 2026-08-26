@@ -7,6 +7,7 @@ const ALLOWED_STATE_KEYS = new Set([
   "tde",
   "maex",
   "billed",
+  "romaneios",
 ]);
 const ALLOWED_ENCODINGS = new Set(["gzip-base64", "json"]);
 const CHUNK_SIZE = 1_500_000;

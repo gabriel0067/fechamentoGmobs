@@ -25,6 +25,17 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 ## Regras que devem ser preservadas
 
 - Aceitar arquivos `.xls`, `.xlsx` e `.csv`.
+- No cartão de importação do relatório geral, mostrar sempre a maior `Data de Emissão` encontrada na coluna F dos registros atuais, inclusive depois de recarregar a página ou restaurar os dados.
+- Na importação do relatório geral e dos romaneios, eliminar somente linhas completamente idênticas. A repetição de uma célula isolada, como CTE, rota, motorista ou valor, nunca basta para excluir a linha.
+- Permitir importar um ou vários relatórios de romaneio na primeira página e manter a consulta em uma aba `Romaneios` independente do fechamento. Importações posteriores acrescentam somente linhas novas ao histórico existente.
+- No romaneio, tratar a coluna `DOCUMENTOS` (S) como uma lista: `M-627822-1` referencia o MD-e `627822` e `C-8160-1` referencia o CT-e `8160`. No relatório geral, o MD-e vem da coluna C, o remetente da R, o destinatário da V, a cidade da W, o CT-e Parceiro da AJ e sua chave da AK. Manter todos os status do relatório como base de consulta do romaneio, inclusive `LT` e `RM`, mesmo que ainda não sejam elegíveis ao fechamento. Preservar os itens não encontrados como `AGUARDANDO RELATÓRIO` para associação automática após uma futura importação geral.
+- Agrupar a conferência dos romaneios por dia de emissão + motorista, ignorando o horário e reunindo todos os romaneios e rotas desse motorista no mesmo painel diário.
+- Na produção dos romaneios, nunca dividir o frete total da linha pela quantidade de documentos. Para cada `M-...` ou `C-...`, fazer uma busca equivalente a PROCV no relatório geral, usar exclusivamente o `Valor do Frete` da coluna BA daquele documento e calcular `Produção = BA × 88%`. Documentos ainda não localizados ficam sem produção até aparecerem no relatório geral.
+- Usar um único campo global para procurar e bipar nos romaneios; não exibir filtro separado de dia nem os cartões gerais de Motoristas, Romaneios, Entregas, Pendentes, Retidos, Frete e Produção.
+- A primeira leitura global de MD-e, CT-e Parceiro ou NF deve localizar e abrir automaticamente o painel diário vinculado e preparar o documento como `Entregue`. A confirmação dos documentos do painel continua exigindo `Gravar conferência`.
+- Enquanto um painel tiver situações ainda não gravadas, impedir que uma leitura abra outro romaneio e mostrar no centro da tela um alerta bloqueante com fundo escurecido e som curto, informando que falta clicar em `Gravar conferência`. Documentos bipados ou com situação manual completa devem desaparecer imediatamente da lista visível de pendências; um Retorno permanece visível somente enquanto faltar o motivo obrigatório. Ao tentar gravar com documentos ainda pendentes, usar o mesmo alerta com a quantidade restante e oferecer `Voltar e conferir` ou `Gravar mesmo assim`. A produção continua considerando apenas o que já foi gravado.
+- A conferência diária deve permitir marcar `Entregue`, `Volta`, `Retorno` com motivo obrigatório ou `Retido`. Para registros cuja origem seja `LT` ou `RM`, eles permanecem fora do fechamento antes da conferência; somente depois de `Gravar conferência` passam a poder entrar no fechamento, convertidos em `ET` quando Entregues e em `OC` quando forem Volta, Retorno ou Retido. A data operacional usada na liberação é o dia do romaneio. Entregues e Retidos entram na produção, e o total só muda depois da gravação.
+- Manter um relatório separado de Retidos. Uma leitura feita no campo global dá baixa imediata no documento retido e o grava como Entregue; a seleção manual dentro do relatório de Retidos continua exigindo `Gravar baixas`.
 - Manter a interface em português do Brasil e valores em BRL.
 - Incluir registros elegíveis `ET`, `RE` e `CF`.
 - Manter registros não identificados visíveis para conferência, mas impedir sua exportação automática.
@@ -59,6 +70,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - Permitir baixar os faltantes da Pajussara em Excel com CTE, NF, remetente, destinatário, cidade, datas e Total Comissão. A comparação usa apenas os registros da Pajussara no período filtrado e o arquivo recebido não é persistido.
 - Preservar a identificação manual de registros desconhecidos, inclusive cadastro de nova transportadora.
 - Para Argius, TRD e D&Y, considerar na prévia e exportação somente documentos bipados. Chaves com 44 dígitos buscam AK; leituras menores buscam AJ.
+- Para todas as demais parceiras, mostrar dentro da prévia da parceira a opção `Exportar apenas documentos bipados`, desligada por padrão. Quando ligada, exibir o mesmo painel de bipagem e filtrar prévia, totais e exportação pelos documentos com `OK`; quando desligada, considerar todos os documentos como antes. Essa escolha é temporária para o relatório atual e não deve alterar a lista lateral de parceiras.
 - Para essas três parceiras, permitir importar um arquivo `.txt` com CTEs. A importação deve adicionar as leituras ao histórico existente, aceitar um CTE por linha ou separado por vírgula e manter os não encontrados como `AGUARDANDO`.
 - Na prévia da bipagem, listar documentos que ainda estão sem `OK` e permitir marcá-los manualmente por caixa de seleção. A seleção manual deve usar o mesmo armazenamento persistente das bipagens.
 - Manter bipagens não encontradas como `AGUARDANDO` para associação automática em importações futuras.
@@ -70,15 +82,17 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 ## Persistência local e no banco central
 
 - `gmobs-closing-v3` é a chave lógica dos registros importados e identificações. O conteúdo principal fica no IndexedDB `gmobs-closing-storage`, que comporta relatórios maiores.
+- `gmobs-general-import-info-v1` guarda localmente os metadados pequenos do último relatório geral, inclusive a maior data de emissão da coluna F.
 - A versão antiga em `localStorage` é lida como fallback e migrada automaticamente para o IndexedDB; só depois de uma gravação bem-sucedida a cópia antiga é removida para liberar espaço.
 - `gmobs-scanned-ctes-v1` guarda bipagens confirmadas ou aguardando no `localStorage`.
 - `gmobs-tde-rates-v1` guarda a lista de taxas TDE importada, o nome do arquivo e os cadastros manuais no `localStorage`.
 - `gmobs-maex-additional-senders-v1` guarda os remetentes marcados para o fechamento adicional da Maex no `localStorage`.
 - `gmobs-billed-documents-v1` guarda no IndexedDB o histórico de CTEs já enviados, com escopo `normal` ou `maex-additional`, transportadora e arquivos de origem. Registros antigos cujo arquivo contenha `Fechamento Adicional Maex` são migrados automaticamente para o escopo adicional.
+- `gmobs-romaneios-v1` guarda localmente as linhas dos romaneios, os arquivos de origem, o resumo da última importação, as situações gravadas dos documentos e os nomes de rota editados.
 - Uma nova importação substitui os registros, mas não apaga as bipagens.
 - Uma nova lista de TDE substitui as taxas vindas de arquivo, mas preserva os cadastros manuais.
 - A aplicação publicada usa Cloudflare D1 por meio da ligação lógica `DB`. O D1 é a única fonte de dados operacionais no endereço publicado; não carregar nem salvar esses dados no IndexedDB ou `localStorage` do navegador hospedado.
-- `app/cloud-storage.ts` compacta o estado no navegador com gzip e sincroniza cinco conjuntos: `closing`, `scans`, `tde`, `maex` e `billed`.
+- `app/cloud-storage.ts` compacta o estado no navegador com gzip e sincroniza seis conjuntos: `closing`, `scans`, `tde`, `maex`, `billed` e `romaneios`.
 - `app/auth.ts` valida as credenciais configuradas nas variáveis `GMOBS_LOGIN_USER` e `GMOBS_LOGIN_PASSWORD` e cria uma sessão assinada por `GMOBS_SESSION_SECRET` em cookie HttpOnly. Nunca gravar as credenciais no código, Git ou documentação.
 - `app/api/cloud-state/route.ts` exige uma sessão válida e usa o proprietário lógico compartilhado `shared:fechamentos-gmobs`, para que todos os computadores autorizados vejam o mesmo conteúdo. A API grava blocos de até 1,5 MB em `cloud_state_chunks`.
 - A chave primária `(owner_id, state_key, chunk_index)` deve ser preservada: ela garante leitura indexada sem varrer o banco inteiro.
@@ -101,6 +115,7 @@ O usuário não é técnico. Explique resultados e decisões em linguagem simple
 - Para mudanças na bipagem, teste digitação/leitor, importação TXT, caixa de seleção, AJ, AK com 44 dígitos, `AGUARDANDO`, reaparecimento após nova importação e remoção manual.
 - Para mudanças no adicional da Maex, teste persistência por CNPJ/nome do remetente, documento sem data de entrega, documento já faturado no normal, histórico adicional independente, desfazer adicional sem afetar o normal, taxa fixa de R$ 15 e comparação visual do Excel adicional com o modelo aprovado.
 - Para mudanças no histórico de faturamento, teste importação múltipla, cabeçalhos em linhas diferentes, duplicatas, `Custos_extras_MVF` como Argius, persistência, desfazer por arquivo, ocultação na prévia e marcação automática após exportar.
+- Para mudanças em romaneios, teste múltiplos arquivos, linha inteira duplicada, agrupamento por dia + motorista sem horário, reunião de vários romaneios, busca, conversão `M-...-...`/`C-...-...`, PROCV do frete no relatório geral, produção de 88%, itens aguardando, associação depois de reimportar o relatório geral, gravação obrigatória e fluxo completo de Retidos.
 - Para a Argius, valide os dois arquivos: dados dos clientes no normal, ausência das três colunas de adicionais, ordem TDA/TDE/Dedicado no segundo arquivo e totais finais em ambos.
 - Para mudanças visuais, confira desktop e tela estreita.
 - Execute, quando aplicável:
@@ -133,8 +148,9 @@ Ao concluir uma etapa relevante:
 
 ## Prioridades atuais
 
-1. Validar bipagem e exportação com uma quinzena real completa.
-2. Validar o Excel da Argius contra o modelo aprovado.
-3. Confirmar no endereço publicado que o primeiro backup local foi restaurado e aparece em outro computador.
-4. Corrigir e ampliar testes automatizados.
-5. Atualizar o README do starter.
+1. Obter aprovação visual da nova aba de romaneios antes de publicar.
+2. Validar bipagem e exportação com uma quinzena real completa.
+3. Validar o Excel da Argius contra o modelo aprovado.
+4. Confirmar no endereço publicado que o primeiro backup local foi restaurado e aparece em outro computador.
+5. Corrigir e ampliar testes automatizados.
+6. Atualizar o README do starter.

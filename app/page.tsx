@@ -26,7 +26,9 @@ import {
   readBilledClosingFile,
   readClosingFile,
   readPajussaraClosingFile,
+  readRomaneioFile,
   readTdeFile,
+  type ImportedRomaneioRow,
   type PajussaraClosingDocument,
 } from "./excel";
 import {
@@ -42,7 +44,7 @@ import {
   writeClosingStorage,
 } from "./storage";
 
-type Tab = "import" | "preview" | "export";
+type Tab = "import" | "romaneios" | "preview" | "export";
 type CloudStatus = "local" | "loading" | "ready" | "saving" | "error";
 type AuthStatus = "checking" | "signedIn" | "signedOut";
 const cloudStatusText: Record<CloudStatus, string> = {
@@ -84,6 +86,13 @@ type Entry = {
   isRedelivery: boolean;
   reportedTotal?: number;
   sourceTde?: number;
+  romaneioDocumentKey?: string;
+  romaneioSourceStatus?: string;
+  romaneioSavedAt?: string;
+};
+type RomaneioReferenceEntry = Entry & {
+  sourceStatus: string;
+  sourceEligible: boolean;
 };
 type ImportInfo = {
   file: string;
@@ -91,6 +100,8 @@ type ImportInfo = {
   redeliveries: number;
   unidentified: number;
   excluded: number;
+  duplicates?: number;
+  latestEmissionDate?: string;
 };
 type TdeRateRecord = {
   id: string;
@@ -105,6 +116,83 @@ type TdeImportInfo = {
   file: string;
   clients: number;
   rates: number;
+};
+type RomaneioEntry = ImportedRomaneioRow & {
+  id: string;
+  sourceFile: string;
+};
+type RomaneioImportInfo = {
+  files: string[];
+  imported: number;
+  romaneios: number;
+  importedAt: string;
+  duplicates?: number;
+};
+type RomaneioSituation = "delivered" | "back" | "return" | "retained";
+type RomaneioDocumentStatusRecord = {
+  key: string;
+  document: string;
+  referenceType: "MD-e" | "CT-e" | "Documento";
+  referenceNumber: string;
+  situation: RomaneioSituation;
+  sourceStatus?: string;
+  operationalStatus?: "ET" | "OC";
+  reason: string;
+  savedAt: string;
+  day: string;
+  driver: string;
+  romaneios: string[];
+  routes: string[];
+  sender: string;
+  recipient: string;
+  city: string;
+  mde: string;
+  cte: string;
+  invoice: string;
+  grossFreight: number;
+  identifiers: string[];
+};
+type RomaneioDocumentDraft = {
+  situation: RomaneioSituation | "";
+  reason: string;
+};
+type RomaneioPendingAlert =
+  | { kind: "change-romaneio" }
+  | { kind: "save-with-pending"; groupKey: string; pendingCount: number };
+type RomaneioDailyDocument = {
+  key: string;
+  document: string;
+  referenceType: "MD-e" | "CT-e" | "Documento";
+  referenceNumber: string;
+  linkedEntries: RomaneioReferenceEntry[];
+  sourceStatus: string;
+  sender: string;
+  recipient: string;
+  city: string;
+  mde: string;
+  cte: string;
+  invoice: string;
+  routes: string[];
+  grossFreight: number;
+  production: number;
+  identifiers: string[];
+};
+type RomaneioDailyGroup = {
+  key: string;
+  day: string;
+  emissionDate: string;
+  driver: string;
+  cpf: string;
+  plates: string[];
+  vehicleTypes: string[];
+  romaneios: string[];
+  routes: string[];
+  freight: number;
+  weight: number;
+  deliveries: number;
+  volumes: number;
+  documents: RomaneioDailyDocument[];
+  sourceFiles: string[];
 };
 type MaexAdditionalSender = {
   name: string;
@@ -133,6 +221,8 @@ type BilledDocumentRecord = {
   markedAt: string;
   billingScope: BillingScope;
 };
+const ROMANEIO_STORAGE_KEY = "gmobs-romaneios-v1";
+const GENERAL_IMPORT_INFO_STORAGE_KEY = "gmobs-general-import-info-v1";
 
 const money = (value: number) =>
   value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -222,6 +312,68 @@ const scanKey = (value?: string) =>
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
+const numericDocumentId = (value?: string) => {
+  const text = String(value ?? "").trim();
+  const reference = text.match(/^[MC]\s*-\s*(\d+)(?:\s*-\s*\d+)?$/i);
+  const digits = reference?.[1] || text.replace(/\D/g, "");
+  return digits.replace(/^0+/, "") || (digits ? "0" : "");
+};
+const romaneioDocumentReference = (value: string) => {
+  const match = value.trim().match(/^([MC])\s*-\s*(\d+)(?:\s*-\s*\d+)?$/i);
+  if (!match) return null;
+  return {
+    type: match[1].toUpperCase() === "M" ? ("MD-e" as const) : ("CT-e" as const),
+    number: match[2].replace(/^0+/, "") || "0",
+  };
+};
+const romaneioDocumentKey = (value: string) => {
+  const reference = romaneioDocumentReference(value);
+  return reference
+    ? `${reference.type}|${reference.number}`
+    : `Documento|${normalized(value)}`;
+};
+const operationalIdentifier = (value?: string) => {
+  const text = String(value ?? "").trim();
+  const reference = romaneioDocumentReference(text);
+  if (reference) return reference.number;
+  const invoiceWithSeries = text.match(/^0*(\d+)\s*-\s*\d+$/);
+  if (invoiceWithSeries) return invoiceWithSeries[1];
+  const digits = text.replace(/\D/g, "");
+  return digits.replace(/^0+/, "") || (digits ? "0" : "");
+};
+const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const ROMANEIO_PRODUCTION_FACTOR = 0.88;
+const romaneioSituationLabel: Record<RomaneioSituation, string> = {
+  delivered: "Entregue (ET)",
+  back: "Volta (OC)",
+  return: "Retorno (OC)",
+  retained: "Retido (OC)",
+};
+const romaneioOperationalStatus = (
+  situation: RomaneioSituation,
+): "ET" | "OC" => (situation === "delivered" ? "ET" : "OC");
+const playRomaneioAttentionSound = () => {
+  try {
+    const context = new AudioContext();
+    const start = context.currentTime;
+    [0, 0.22].forEach((offset) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "square";
+      oscillator.frequency.setValueAtTime(880, start + offset);
+      gain.gain.setValueAtTime(0.0001, start + offset);
+      gain.gain.exponentialRampToValueAtTime(0.12, start + offset + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.14);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(start + offset);
+      oscillator.stop(start + offset + 0.15);
+    });
+    window.setTimeout(() => void context.close(), 700);
+  } catch {
+    /* o alerta visual continua funcionando quando o navegador bloqueia áudio */
+  }
+};
 const isMaexAdditionalBillingSource = (source: string) => {
   const value = normalized(source);
   return (
@@ -332,6 +484,26 @@ const normalizeSavedEntries = (savedEntries: Entry[]) =>
         }
       : entry;
   });
+const asRomaneioReferenceEntry = (entry: Entry): RomaneioReferenceEntry => {
+  const saved = entry as Entry & Partial<RomaneioReferenceEntry>;
+  return {
+    ...entry,
+    sourceStatus:
+      saved.sourceStatus || entry.romaneioSourceStatus || entry.status,
+    sourceEligible: saved.sourceEligible ?? true,
+  };
+};
+const normalizeRomaneioReferenceEntries = (
+  savedEntries: RomaneioReferenceEntry[] | undefined,
+  fallbackEntries: Entry[],
+) =>
+  (Array.isArray(savedEntries) &&
+  savedEntries.every((entry) => typeof entry?.id === "string")
+    ? savedEntries
+    : fallbackEntries
+  )
+    .map(asRomaneioReferenceEntry)
+    .filter((entry) => !entry.sourceEligible);
 const unidentifiedKey = (entry: Entry) =>
   normalized(entry.partnerCnpj || entry.partnerRaw || entry.sender || "sem-dados");
 const maexSenderKey = (entry: Entry) => {
@@ -348,6 +520,11 @@ const formatCnpj = (cnpj: string) =>
         "$1.$2.$3/$4-$5",
       )
     : cnpj;
+const formatRomaneioDay = (value: string) => {
+  if (!value) return "Sem data";
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+};
 const parseMoney = (value: string) => {
   const raw = value.replace(/R\$/gi, "").replace(/\s/g, "");
   const normalizedValue = raw.includes(",")
@@ -404,6 +581,25 @@ const writeLocalStorage = (key: string, value: unknown) => {
     return false;
   }
 };
+const completeRowKey = (row: object) =>
+  JSON.stringify(
+    Object.entries(row)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [
+        key,
+        typeof value === "string" ? value.trim() : value,
+      ]),
+  );
+const romaneioCompleteRowKey = (
+  row: ImportedRomaneioRow & Partial<Pick<RomaneioEntry, "id" | "sourceFile">>,
+) =>
+  completeRowKey(
+    Object.fromEntries(
+      Object.entries(row).filter(
+        ([key]) => key !== "id" && key !== "sourceFile",
+      ),
+    ),
+  );
 
 function useCloudStateSync<T>(
   stateKey: CloudStateKey,
@@ -456,14 +652,20 @@ function useCloudStateSync<T>(
 export default function Home() {
   const [tab, setTab] = useState<Tab>("import");
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [romaneioReferenceEntries, setRomaneioReferenceEntries] = useState<
+    RomaneioReferenceEntry[]
+  >([]);
   const [selectedPartner, setSelectedPartner] = useState("");
   const [selectedExports, setSelectedExports] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [importInfo, setImportInfo] = useState<ImportInfo | null>(null);
   const [message, setMessage] = useState("");
+  const [romaneioPendingAlert, setRomaneioPendingAlert] =
+    useState<RomaneioPendingAlert | null>(null);
   const [importing, setImporting] = useState(false);
   const [importingTde, setImportingTde] = useState(false);
+  const [importingRomaneios, setImportingRomaneios] = useState(false);
   const [importingPajussara, setImportingPajussara] = useState(false);
   const [importingBilled, setImportingBilled] = useState(false);
   const [pajussaraClosing, setPajussaraClosing] =
@@ -490,7 +692,37 @@ export default function Home() {
   const [scannedCtes, setScannedCtes] = useState<
     Record<string, Record<string, string>>
   >({});
+  const [optionalScanPartnerIds, setOptionalScanPartnerIds] = useState<
+    string[]
+  >([]);
   const [tdeRates, setTdeRates] = useState<TdeRateRecord[]>([]);
+  const [romaneioEntries, setRomaneioEntries] = useState<RomaneioEntry[]>([]);
+  const [romaneioImportInfo, setRomaneioImportInfo] =
+    useState<RomaneioImportInfo | null>(null);
+  const [romaneioDocumentStatuses, setRomaneioDocumentStatuses] = useState<
+    Record<string, RomaneioDocumentStatusRecord>
+  >({});
+  const [romaneioRouteLabels, setRomaneioRouteLabels] = useState<
+    Record<string, string>
+  >({});
+  const [romaneioSearch, setRomaneioSearch] = useState("");
+  const [focusedRomaneioKey, setFocusedRomaneioKey] = useState("");
+  const [romaneioView, setRomaneioView] = useState<"operation" | "retained">(
+    "operation",
+  );
+  const [openRomaneios, setOpenRomaneios] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [romaneioDocumentDrafts, setRomaneioDocumentDrafts] = useState<
+    Record<string, Record<string, RomaneioDocumentDraft>>
+  >({});
+  const [romaneioRouteDrafts, setRomaneioRouteDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [retainedScanInput, setRetainedScanInput] = useState("");
+  const [retainedResolutionDrafts, setRetainedResolutionDrafts] = useState<
+    Record<string, boolean>
+  >({});
   const [maexAdditionalSenders, setMaexAdditionalSenders] = useState<
     Record<string, MaexAdditionalSender>
   >({});
@@ -507,6 +739,7 @@ export default function Home() {
   const [manualTdeValue, setManualTdeValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const tdeInputRef = useRef<HTMLInputElement>(null);
+  const romaneioInputRef = useRef<HTMLInputElement>(null);
   const scanTxtInputRef = useRef<HTMLInputElement>(null);
   const pajussaraInputRef = useRef<HTMLInputElement>(null);
   const billedInputRef = useRef<HTMLInputElement>(null);
@@ -515,7 +748,6 @@ export default function Home() {
   const cloudSaveFailedRef = useRef(false);
   const cloudVersionsRef = useRef<Partial<Record<CloudStateKey, string>>>({});
   const skipCloudSaveRef = useRef(new Set<CloudStateKey>());
-
   useEffect(() => {
     let cancelled = false;
     const restoreSavedData = async () => {
@@ -528,13 +760,28 @@ export default function Home() {
           return;
         }
         setAuthStatus("signedIn");
-        let savedEntries: Entry[] | null = null;
+        let savedClosing:
+          | {
+              entries: Entry[];
+              referenceEntries?: RomaneioReferenceEntry[];
+            }
+          | null = null;
         let savedBilledDocuments: Record<string, BilledDocumentRecord> | null =
           null;
         try {
-          const indexedEntries = await readClosingStorage<Entry[]>();
-          if (Array.isArray(indexedEntries)) {
-            savedEntries = indexedEntries;
+          const indexedClosing = await readClosingStorage<
+            | Entry[]
+            | {
+                entries: Entry[];
+                referenceEntries?: RomaneioReferenceEntry[];
+              }
+          >();
+          if (Array.isArray(indexedClosing)) {
+            savedClosing = { entries: indexedClosing };
+          } else if (Array.isArray(indexedClosing?.entries)) {
+            savedClosing = indexedClosing;
+          }
+          if (savedClosing) {
             try {
               localStorage.removeItem(CLOSING_STORAGE_KEY);
             } catch {
@@ -545,14 +792,18 @@ export default function Home() {
           /* tenta o formato antigo logo abaixo */
         }
 
-        if (savedEntries === null) {
+        if (savedClosing === null) {
           const saved = localStorage.getItem(CLOSING_STORAGE_KEY);
           if (saved) {
             const parsed = JSON.parse(saved);
             if (Array.isArray(parsed)) {
-              savedEntries = parsed;
+              savedClosing = { entries: parsed };
+            } else if (Array.isArray(parsed?.entries)) {
+              savedClosing = parsed;
+            }
+            if (savedClosing) {
               try {
-                await writeClosingStorage(parsed);
+                await writeClosingStorage(savedClosing);
                 localStorage.removeItem(CLOSING_STORAGE_KEY);
               } catch {
                 /* mantém o formato antigo se a migração não estiver disponível */
@@ -593,6 +844,9 @@ export default function Home() {
         }
 
         const savedScans = localStorage.getItem("gmobs-scanned-ctes-v1");
+        const savedGeneralImportInfo = localStorage.getItem(
+          GENERAL_IMPORT_INFO_STORAGE_KEY,
+        );
         const savedTde = localStorage.getItem("gmobs-tde-rates-v1");
         const parsedTde = savedTde ? JSON.parse(savedTde) : null;
         const savedMaexAdditional = localStorage.getItem(
@@ -601,9 +855,27 @@ export default function Home() {
         const parsedMaexAdditional = savedMaexAdditional
           ? JSON.parse(savedMaexAdditional)
           : null;
+        const savedRomaneios = localStorage.getItem(ROMANEIO_STORAGE_KEY);
+        const parsedRomaneios = savedRomaneios
+          ? JSON.parse(savedRomaneios)
+          : null;
 
         if (cancelled) return;
-        if (savedEntries) setEntries(normalizeSavedEntries(savedEntries));
+        if (savedClosing) {
+          const normalizedEntries = normalizeSavedEntries(savedClosing.entries);
+          setEntries(normalizedEntries);
+          setRomaneioReferenceEntries(
+            normalizeRomaneioReferenceEntries(
+              savedClosing.referenceEntries,
+              normalizedEntries,
+            ),
+          );
+        }
+        if (savedGeneralImportInfo) {
+          const parsedGeneralImportInfo = JSON.parse(savedGeneralImportInfo);
+          if (parsedGeneralImportInfo && typeof parsedGeneralImportInfo === "object")
+            setImportInfo(parsedGeneralImportInfo);
+        }
         if (savedScans) setScannedCtes(JSON.parse(savedScans));
         if (savedBilledDocuments)
           setBilledDocuments(normalizeBilledDocuments(savedBilledDocuments));
@@ -625,6 +897,20 @@ export default function Home() {
           typeof parsedMaexAdditional === "object"
         )
           setMaexAdditionalSenders(parsedMaexAdditional);
+        if (Array.isArray(parsedRomaneios?.entries))
+          setRomaneioEntries(parsedRomaneios.entries);
+        if (parsedRomaneios?.importInfo)
+          setRomaneioImportInfo(parsedRomaneios.importInfo);
+        if (
+          parsedRomaneios?.documentStatuses &&
+          typeof parsedRomaneios.documentStatuses === "object"
+        )
+          setRomaneioDocumentStatuses(parsedRomaneios.documentStatuses);
+        if (
+          parsedRomaneios?.routeLabels &&
+          typeof parsedRomaneios.routeLabels === "object"
+        )
+          setRomaneioRouteLabels(parsedRomaneios.routeLabels);
       } catch {
         /* começa vazio se o armazenamento estiver inválido */
       } finally {
@@ -659,10 +945,17 @@ export default function Home() {
         if (!session.ok) throw new Error("Não foi possível validar a sessão.");
         setAuthStatus("signedIn");
 
-        const [closingRecord, scansRecord, tdeRecord, maexRecord, billedRecord] =
-          await Promise.all([
+        const [
+          closingRecord,
+          scansRecord,
+          tdeRecord,
+          maexRecord,
+          billedRecord,
+          romaneiosRecord,
+        ] = await Promise.all([
             loadCloudStateRecord<{
               entries: Entry[];
+              referenceEntries?: RomaneioReferenceEntry[];
               importInfo: ImportInfo | null;
             }>("closing"),
             loadCloudStateRecord<Record<string, Record<string, string>>>(
@@ -674,17 +967,31 @@ export default function Home() {
             }>("tde"),
             loadCloudStateRecord<Record<string, MaexAdditionalSender>>("maex"),
             loadCloudStateRecord<Record<string, BilledDocumentRecord>>("billed"),
+            loadCloudStateRecord<{
+              entries: RomaneioEntry[];
+              importInfo: RomaneioImportInfo | null;
+              documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
+              routeLabels: Record<string, string>;
+            }>("romaneios"),
           ]);
         if (cancelled) return;
 
         const closing = closingRecord?.value;
         if (closing?.entries && Array.isArray(closing.entries)) {
-          setEntries(normalizeSavedEntries(closing.entries));
+          const normalizedEntries = normalizeSavedEntries(closing.entries);
+          setEntries(normalizedEntries);
+          setRomaneioReferenceEntries(
+            normalizeRomaneioReferenceEntries(
+              closing.referenceEntries,
+              normalizedEntries,
+            ),
+          );
           setImportInfo(closing.importInfo || null);
-          cloudVersionsRef.current.closing = closingRecord.version;
+          cloudVersionsRef.current.closing = closingRecord?.version || "";
         } else {
           cloudVersionsRef.current.closing = await saveCloudState("closing", {
             entries: [],
+            referenceEntries: [],
             importInfo: null,
           });
         }
@@ -724,6 +1031,27 @@ export default function Home() {
         cloudVersionsRef.current.billed =
           billedRecord?.version || (await saveCloudState("billed", {}));
 
+        const romaneios = romaneiosRecord?.value;
+        if (Array.isArray(romaneios?.entries)) {
+          setRomaneioEntries(romaneios.entries);
+          setRomaneioImportInfo(romaneios.importInfo || null);
+          setRomaneioDocumentStatuses(romaneios.documentStatuses || {});
+          setRomaneioRouteLabels(romaneios.routeLabels || {});
+        } else {
+          setRomaneioEntries([]);
+          setRomaneioImportInfo(null);
+          setRomaneioDocumentStatuses({});
+          setRomaneioRouteLabels({});
+        }
+        cloudVersionsRef.current.romaneios =
+          romaneiosRecord?.version ||
+          (await saveCloudState("romaneios", {
+            entries: [],
+            importInfo: null,
+            documentStatuses: {},
+            routeLabels: {},
+          }));
+
         if (!cancelled) {
           cloudSaveFailedRef.current = false;
           setCloudReady(true);
@@ -744,7 +1072,7 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated || isHostedSite()) return;
     let cancelled = false;
-    void writeClosingStorage(entries)
+    void writeClosingStorage({ entries, referenceEntries: romaneioReferenceEntries })
       .then(() => {
         try {
           localStorage.removeItem(CLOSING_STORAGE_KEY);
@@ -753,7 +1081,13 @@ export default function Home() {
         }
       })
       .catch(() => {
-        if (!writeLocalStorage(CLOSING_STORAGE_KEY, entries) && !cancelled)
+        if (
+          !writeLocalStorage(CLOSING_STORAGE_KEY, {
+            entries,
+            referenceEntries: romaneioReferenceEntries,
+          }) &&
+          !cancelled
+        )
           setMessage(
             "O relatório continua aberto, mas o navegador não conseguiu salvá-lo. Não recarregue a página antes de exportar.",
           );
@@ -761,7 +1095,19 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [entries, hydrated]);
+  }, [entries, hydrated, romaneioReferenceEntries]);
+  useEffect(() => {
+    if (!hydrated || isHostedSite() || !importInfo) return;
+    if (writeLocalStorage(GENERAL_IMPORT_INFO_STORAGE_KEY, importInfo)) return;
+    const timer = window.setTimeout(
+      () =>
+        setMessage(
+          "O navegador não conseguiu salvar as informações do último relatório.",
+        ),
+      0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [hydrated, importInfo]);
   useEffect(() => {
     if (!hydrated || isHostedSite()) return;
     let cancelled = false;
@@ -836,13 +1182,53 @@ export default function Home() {
     );
     return () => window.clearTimeout(timer);
   }, [maexAdditionalSenders, hydrated]);
+  useEffect(() => {
+    if (!hydrated || isHostedSite()) return;
+    if (
+      writeLocalStorage(ROMANEIO_STORAGE_KEY, {
+        entries: romaneioEntries,
+        importInfo: romaneioImportInfo,
+        documentStatuses: romaneioDocumentStatuses,
+        routeLabels: romaneioRouteLabels,
+      })
+    )
+      return;
+    const timer = window.setTimeout(
+      () =>
+        setMessage(
+          "O navegador não conseguiu salvar a última importação de romaneios.",
+        ),
+      0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [
+    hydrated,
+    romaneioDocumentStatuses,
+    romaneioEntries,
+    romaneioImportInfo,
+    romaneioRouteLabels,
+  ]);
   const closingCloudState = useMemo(
-    () => ({ entries, importInfo }),
-    [entries, importInfo],
+    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo }),
+    [entries, importInfo, romaneioReferenceEntries],
   );
   const tdeCloudState = useMemo(
     () => ({ rates: tdeRates, importInfo: tdeImportInfo }),
     [tdeImportInfo, tdeRates],
+  );
+  const romaneiosCloudState = useMemo(
+    () => ({
+      entries: romaneioEntries,
+      importInfo: romaneioImportInfo,
+      documentStatuses: romaneioDocumentStatuses,
+      routeLabels: romaneioRouteLabels,
+    }),
+    [
+      romaneioDocumentStatuses,
+      romaneioEntries,
+      romaneioImportInfo,
+      romaneioRouteLabels,
+    ],
   );
   const markCloudSaveStart = useCallback(() => {
     if (cloudWritesRef.current === 0) cloudSaveFailedRef.current = false;
@@ -909,6 +1295,15 @@ export default function Home() {
     markCloudSaveCancel,
     markCloudSaveFinish,
   );
+  useCloudStateSync(
+    "romaneios",
+    romaneiosCloudState,
+    cloudReady,
+    skipCloudSaveRef,
+    markCloudSaveStart,
+    markCloudSaveCancel,
+    markCloudSaveFinish,
+  );
   const refreshCloudData = useCallback(async () => {
     if (
       !cloudReady ||
@@ -923,6 +1318,7 @@ export default function Home() {
       "tde",
       "maex",
       "billed",
+      "romaneios",
     ];
     try {
       const versions = await Promise.all(
@@ -942,12 +1338,22 @@ export default function Home() {
         if (key === "closing") {
           const record = await loadCloudStateRecord<{
             entries: Entry[];
+            referenceEntries?: RomaneioReferenceEntry[];
             importInfo: ImportInfo | null;
           }>(key);
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
           cloudVersionsRef.current[key] = record.version;
-          setEntries(normalizeSavedEntries(record.value.entries || []));
+          const normalizedEntries = normalizeSavedEntries(
+            record.value.entries || [],
+          );
+          setEntries(normalizedEntries);
+          setRomaneioReferenceEntries(
+            normalizeRomaneioReferenceEntries(
+              record.value.referenceEntries,
+              normalizedEntries,
+            ),
+          );
           setImportInfo(record.value.importInfo || null);
         } else if (key === "scans") {
           const record = await loadCloudStateRecord<
@@ -980,7 +1386,7 @@ export default function Home() {
           skipCloudSaveRef.current.add(key);
           cloudVersionsRef.current[key] = record.version;
           setMaexAdditionalSenders(record.value || {});
-        } else {
+        } else if (key === "billed") {
           const record = await loadCloudStateRecord<
             Record<string, BilledDocumentRecord>
           >(key);
@@ -988,6 +1394,20 @@ export default function Home() {
           skipCloudSaveRef.current.add(key);
           cloudVersionsRef.current[key] = record.version;
           setBilledDocuments(normalizeBilledDocuments(record.value || {}));
+        } else if (key === "romaneios") {
+          const record = await loadCloudStateRecord<{
+            entries: RomaneioEntry[];
+            importInfo: RomaneioImportInfo | null;
+            documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
+            routeLabels: Record<string, string>;
+          }>(key);
+          if (!record) continue;
+          skipCloudSaveRef.current.add(key);
+          cloudVersionsRef.current[key] = record.version;
+          setRomaneioEntries(record.value.entries || []);
+          setRomaneioImportInfo(record.value.importInfo || null);
+          setRomaneioDocumentStatuses(record.value.documentStatuses || {});
+          setRomaneioRouteLabels(record.value.routeLabels || {});
         }
       }
       setCloudStatus("ready");
@@ -1015,6 +1435,201 @@ export default function Home() {
     () => applyTdeRates(entries, tdeRates),
     [entries, tdeRates],
   );
+  const latestGeneralEmissionDate = useMemo(
+    () =>
+      entries.reduce((latest, entry) => {
+        const date = String(entry.date || "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return latest;
+        return !latest || date > latest ? date : latest;
+      }, ""),
+    [entries],
+  );
+  const romaneioDocumentMatches = useMemo(() => {
+    const mdes = new Map<string, RomaneioReferenceEntry[]>();
+    const ctes = new Map<string, RomaneioReferenceEntry[]>();
+    const references = [
+      ...new Map(
+        [
+          ...entriesWithTde.map(asRomaneioReferenceEntry),
+          ...romaneioReferenceEntries,
+        ].map((entry) => [entry.id, entry] as const),
+      ).values(),
+    ];
+    references.forEach((entry) => {
+      const mde = numericDocumentId(entry.mde);
+      const cte = numericDocumentId(entry.cte);
+      if (mde) mdes.set(mde, [...(mdes.get(mde) || []), entry]);
+      if (cte) ctes.set(cte, [...(ctes.get(cte) || []), entry]);
+    });
+    const matches = new Map<
+      string,
+      {
+        type: "MD-e" | "CT-e" | "Documento";
+        number: string;
+        found: boolean;
+        entries: RomaneioReferenceEntry[];
+      }
+    >();
+    romaneioEntries.forEach((row) =>
+      row.documents.forEach((document) => {
+        if (matches.has(document)) return;
+        const reference = romaneioDocumentReference(document);
+        const matchedEntries = reference
+          ? reference.type === "MD-e"
+            ? mdes.get(reference.number) || []
+            : ctes.get(reference.number) || []
+          : [];
+        matches.set(document, {
+          type: reference?.type || "Documento",
+          number: reference?.number || document,
+          found: matchedEntries.length > 0,
+          entries: matchedEntries,
+        });
+      }),
+    );
+    return matches;
+  }, [entriesWithTde, romaneioEntries, romaneioReferenceEntries]);
+  const romaneioDailyGroups = useMemo(() => {
+    const groups = new Map<string, RomaneioDailyGroup>();
+    romaneioEntries.forEach((row) => {
+      const day = row.emissionDate.slice(0, 10) || "sem-data";
+      const driverIdentity = normalizeCnpj(row.cpf) || normalized(row.driver);
+      const key = `${day}|${driverIdentity || "sem-motorista"}`;
+      const current = groups.get(key) || {
+        key,
+        day,
+        emissionDate: row.emissionDate,
+        driver: row.driver || "Motorista não informado",
+        cpf: row.cpf,
+        plates: [],
+        vehicleTypes: [],
+        romaneios: [],
+        routes: [],
+        freight: 0,
+        weight: 0,
+        deliveries: 0,
+        volumes: 0,
+        documents: [],
+        sourceFiles: [],
+      };
+      if (!current.driver && row.driver) current.driver = row.driver;
+      if (!current.cpf && row.cpf) current.cpf = row.cpf;
+      if (row.plate && !current.plates.includes(row.plate))
+        current.plates.push(row.plate);
+      if (
+        row.vehicleType &&
+        !current.vehicleTypes.includes(row.vehicleType)
+      )
+        current.vehicleTypes.push(row.vehicleType);
+      if (!current.romaneios.includes(row.romaneio))
+        current.romaneios.push(row.romaneio);
+      if (row.route && !current.routes.includes(row.route))
+        current.routes.push(row.route);
+      if (!current.sourceFiles.includes(row.sourceFile))
+        current.sourceFiles.push(row.sourceFile);
+      current.freight += row.freight;
+      current.weight += row.weight;
+      current.deliveries += row.deliveries;
+      current.volumes += row.volumes;
+
+      row.documents.forEach((document) => {
+        const documentKey = romaneioDocumentKey(document);
+        const existing = current.documents.find(
+          (candidate) => candidate.key === documentKey,
+        );
+        if (existing) {
+          if (row.route && !existing.routes.includes(row.route))
+            existing.routes.push(row.route);
+          return;
+        }
+        const match = romaneioDocumentMatches.get(document);
+        const linkedEntries = match?.entries || [];
+        const linked = linkedEntries[0];
+        const identifiers = [
+          match?.number,
+          ...linkedEntries.flatMap((entry) => [
+            numericDocumentId(entry.mde),
+            numericDocumentId(entry.cte),
+            operationalIdentifier(entry.cteKey),
+            normalizeInvoiceKey(entry.invoice),
+          ]),
+        ].filter(Boolean) as string[];
+        const grossFreight = linked?.reportedTotal ?? linked?.freight ?? 0;
+        current.documents.push({
+          key: documentKey,
+          document,
+          referenceType: match?.type || "Documento",
+          referenceNumber: match?.number || document,
+          linkedEntries,
+          sourceStatus: linked?.sourceStatus || linked?.status || "",
+          sender: linked?.sender || "",
+          recipient: linked?.recipient || "",
+          city: linked?.city || "",
+          mde: linked?.mde || "",
+          cte: linked?.cte || "",
+          invoice: linked?.invoice || "",
+          routes: row.route ? [row.route] : [],
+          grossFreight,
+          production: roundMoney(
+            grossFreight * ROMANEIO_PRODUCTION_FACTOR,
+          ),
+          identifiers: [...new Set(identifiers)],
+        });
+      });
+      groups.set(key, current);
+    });
+    return [...groups.values()].sort(
+      (a, b) =>
+        b.day.localeCompare(a.day) ||
+        a.driver.localeCompare(b.driver, "pt-BR"),
+    );
+  }, [romaneioDocumentMatches, romaneioEntries]);
+  const visibleRomaneioGroups = useMemo(() => {
+    const term = normalized(romaneioSearch);
+    return romaneioDailyGroups.filter((group) => {
+      if (!term && focusedRomaneioKey) return group.key === focusedRomaneioKey;
+      if (!term) return true;
+      return normalized(
+        [
+          group.driver,
+          group.cpf,
+          ...group.romaneios,
+          ...group.plates,
+          ...group.vehicleTypes,
+          ...group.routes,
+          ...group.documents.flatMap((document) => [
+            document.document,
+            document.mde,
+            document.cte,
+            document.invoice,
+            document.sender,
+            document.recipient,
+            document.city,
+          ]),
+        ].join(" "),
+      ).includes(term);
+    });
+  }, [focusedRomaneioKey, romaneioDailyGroups, romaneioSearch]);
+  const retainedRomaneioDocuments = useMemo(
+    () =>
+      Object.values(romaneioDocumentStatuses)
+        .filter((record) => record.situation === "retained")
+        .sort(
+          (a, b) =>
+            b.day.localeCompare(a.day) ||
+            a.driver.localeCompare(b.driver, "pt-BR"),
+        ),
+    [romaneioDocumentStatuses],
+  );
+  const currentRomaneioDocumentsByKey = useMemo(() => {
+    const documents = new Map<string, RomaneioDailyDocument>();
+    romaneioDailyGroups.forEach((group) =>
+      group.documents.forEach((document) => {
+        if (!documents.has(document.key)) documents.set(document.key, document);
+      }),
+    );
+    return documents;
+  }, [romaneioDailyGroups]);
   const manualClientOptions = useMemo(() => {
     const options = new Map<string, ManualClientOption>();
     const addOption = (
@@ -1407,8 +2022,12 @@ export default function Home() {
     );
   };
   const isScanned = (entry: Entry) => Boolean(matchedScanKey(entry));
+  const usesScanForPartner = (partnerId: string) =>
+    scanPartnerIds.has(partnerId) || optionalScanPartnerIds.includes(partnerId);
   const rowsForClosing = (partner: { id: string; rows: Entry[] }) =>
-    scanPartnerIds.has(partner.id) ? partner.rows.filter(isScanned) : partner.rows;
+    usesScanForPartner(partner.id)
+      ? partner.rows.filter(isScanned)
+      : partner.rows;
   const pendingScanKeys = (partner: { id: string; rows: Entry[] }) =>
     Object.keys(scannedCtes[partner.id] || {}).filter(
       (key) =>
@@ -1417,6 +2036,374 @@ export default function Home() {
             scanKey(entry.cteKey) === key || scanKey(entry.cte) === key,
         ),
     );
+
+  function toggleOptionalPartnerScan(partnerId: string, enabled: boolean) {
+    const partner = partners.find((item) => item.id === partnerId);
+    setOptionalScanPartnerIds((current) =>
+      enabled
+        ? [...new Set([...current, partnerId])]
+        : current.filter((id) => id !== partnerId),
+    );
+    setMessage(
+      enabled
+        ? `Bipagem opcional ativada para ${partner?.name || "esta transportadora"}. Somente documentos com OK entrarão na exportação.`
+        : `Bipagem opcional desativada para ${partner?.name || "esta transportadora"}. A exportação voltou a considerar todos os documentos.`,
+    );
+  }
+
+  function setRomaneioDraft(
+    groupKey: string,
+    documentKey: string,
+    situation: RomaneioSituation | "",
+  ) {
+    setRomaneioDocumentDrafts((current) => ({
+      ...current,
+      [groupKey]: {
+        ...(current[groupKey] || {}),
+        [documentKey]: {
+          situation,
+          reason: current[groupKey]?.[documentKey]?.reason || "",
+        },
+      },
+    }));
+  }
+
+  function setRomaneioReturnReason(
+    groupKey: string,
+    documentKey: string,
+    reason: string,
+  ) {
+    setRomaneioDocumentDrafts((current) => ({
+      ...current,
+      [groupKey]: {
+        ...(current[groupKey] || {}),
+        [documentKey]: {
+          situation:
+            current[groupKey]?.[documentKey]?.situation || "return",
+          reason,
+        },
+      },
+    }));
+  }
+
+  function releaseRomaneioDocumentToClosing(
+    documentKey: string,
+    situation: RomaneioSituation,
+    day: string,
+    savedAt: string,
+  ) {
+    const document = currentRomaneioDocumentsByKey.get(documentKey);
+    if (!document) return;
+    const operationalStatus = romaneioOperationalStatus(situation);
+    const promoted = document.linkedEntries
+      .filter((entry) =>
+        ["lt", "rm"].includes(normalized(entry.sourceStatus || entry.status)),
+      )
+      .map(
+        (entry): Entry => ({
+          ...entry,
+          status: operationalStatus,
+          deliveryDate: day || entry.deliveryDate,
+          romaneioDocumentKey: documentKey,
+          romaneioSourceStatus: entry.sourceStatus || entry.status,
+          romaneioSavedAt: savedAt,
+        }),
+      );
+    if (!promoted.length) return;
+    const promotedIds = new Set(promoted.map((entry) => entry.id));
+    setEntries((current) => [
+      ...current.filter(
+        (entry) =>
+          entry.romaneioDocumentKey !== documentKey &&
+          !promotedIds.has(entry.id),
+      ),
+      ...promoted,
+    ]);
+  }
+
+  function showPendingRomaneioAlert() {
+    setRomaneioSearch("");
+    setMessage("");
+    setRomaneioPendingAlert({ kind: "change-romaneio" });
+    playRomaneioAttentionSound();
+  }
+
+  function scanOrSearchRomaneio() {
+    const typed = romaneioSearch.trim();
+    const identifier = operationalIdentifier(typed);
+    if (!identifier) {
+      setMessage(
+        "Digite um motorista para pesquisar ou bipe um MD-e, CT-e Parceiro, chave da AK ou NF válida.",
+      );
+      return;
+    }
+
+    const unsavedGroupKeys = Object.entries(romaneioDocumentDrafts)
+      .filter(([, drafts]) =>
+        Object.values(drafts).some((draft) => draft.situation),
+      )
+      .map(([groupKey]) => groupKey);
+
+    const retained = retainedRomaneioDocuments.find((record) =>
+      record.identifiers.includes(identifier),
+    );
+    if (retained) {
+      const retainedGroup = romaneioDailyGroups.find((group) =>
+        group.documents.some((document) => document.key === retained.key),
+      );
+      if (
+        unsavedGroupKeys.length &&
+        (!retainedGroup || !unsavedGroupKeys.includes(retainedGroup.key))
+      ) {
+        showPendingRomaneioAlert();
+        return;
+      }
+      const savedAt = new Date().toISOString();
+      setRomaneioDocumentStatuses((current) => ({
+        ...current,
+        [retained.key]: {
+          ...retained,
+          situation: "delivered",
+          operationalStatus: "ET",
+          reason: "",
+          savedAt,
+        },
+      }));
+      releaseRomaneioDocumentToClosing(
+        retained.key,
+        "delivered",
+        retained.day,
+        savedAt,
+      );
+      setRetainedResolutionDrafts((current) => {
+        const next = { ...current };
+        delete next[retained.key];
+        return next;
+      });
+      setRomaneioSearch("");
+      setMessage(
+        `Documento retido localizado: ${retained.referenceType} ${retained.referenceNumber} já foi retirado do relatório de Retidos e gravado como Entregue.`,
+      );
+      return;
+    }
+
+    const matches = romaneioDailyGroups.flatMap((group) =>
+      group.documents
+        .filter((document) => document.identifiers.includes(identifier))
+        .map((document) => ({ group, document })),
+    );
+    const pendingMatch = matches.find(
+      ({ group, document }) =>
+        !romaneioDocumentStatuses[document.key] &&
+        !romaneioDocumentDrafts[group.key]?.[document.key]?.situation,
+    );
+    const match = pendingMatch || matches[0];
+    if (!match) {
+      setRomaneioSearch("");
+      setMessage(
+        `Documento não encontrado: ${typed} não foi localizado nos romaneios nem no relatório de Retidos.`,
+      );
+      return;
+    }
+
+    const { group, document } = match;
+    if (
+      unsavedGroupKeys.length &&
+      !unsavedGroupKeys.includes(group.key)
+    ) {
+      showPendingRomaneioAlert();
+      return;
+    }
+    setFocusedRomaneioKey(group.key);
+    setOpenRomaneios((current) => ({ ...current, [group.key]: true }));
+    if (!pendingMatch) {
+      setRomaneioSearch("");
+      setMessage(
+        `${document.referenceType} ${document.referenceNumber} já possui uma situação marcada. O romaneio vinculado foi aberto.`,
+      );
+      return;
+    }
+    setRomaneioDraft(group.key, document.key, "delivered");
+    setRomaneioSearch("");
+    setMessage(
+      `${document.referenceType} ${document.referenceNumber} localizado no romaneio ${group.romaneios.join(" · ")} e marcado como Entregue. Clique em Gravar conferência para confirmar.`,
+    );
+  }
+
+  function saveRomaneioGroup(
+    group: RomaneioDailyGroup,
+    allowPending = false,
+  ) {
+    const drafts = romaneioDocumentDrafts[group.key] || {};
+    const selectedDrafts = Object.entries(drafts).filter(
+      ([, draft]) => draft.situation,
+    );
+    const missingReason = selectedDrafts.some(
+      ([, draft]) =>
+        draft.situation === "return" && !draft.reason.trim(),
+    );
+    if (missingReason) {
+      setMessage("Informe o motivo de todos os documentos marcados como Retorno.");
+      return;
+    }
+    const pendingCount = group.documents.filter((document) => {
+      if (romaneioDocumentStatuses[document.key]) return false;
+      const draft = drafts[document.key];
+      if (!draft?.situation) return true;
+      return draft.situation === "return" && !draft.reason.trim();
+    }).length;
+    if (!allowPending && selectedDrafts.length && pendingCount) {
+      setMessage("");
+      setRomaneioPendingAlert({
+        kind: "save-with-pending",
+        groupKey: group.key,
+        pendingCount,
+      });
+      playRomaneioAttentionSound();
+      return;
+    }
+    const defaultRoutes = group.routes.join(" · ");
+    const routeLabel =
+      romaneioRouteDrafts[group.key] ??
+      romaneioRouteLabels[group.key] ??
+      defaultRoutes;
+    const routeChanged =
+      routeLabel.trim() !==
+      (romaneioRouteLabels[group.key] || defaultRoutes).trim();
+    if (!selectedDrafts.length && !routeChanged) {
+      setMessage("Selecione ao menos uma situação ou edite a rota antes de gravar.");
+      return;
+    }
+
+    const savedAt = new Date().toISOString();
+    if (selectedDrafts.length)
+      setRomaneioDocumentStatuses((current) => {
+        const next = { ...current };
+        selectedDrafts.forEach(([documentKey, draft]) => {
+          const document = group.documents.find(
+            (candidate) => candidate.key === documentKey,
+          );
+          if (!document || !draft.situation) return;
+          next[documentKey] = {
+            key: document.key,
+            document: document.document,
+            referenceType: document.referenceType,
+            referenceNumber: document.referenceNumber,
+            situation: draft.situation,
+            sourceStatus: document.sourceStatus,
+            operationalStatus: romaneioOperationalStatus(draft.situation),
+            reason: draft.situation === "return" ? draft.reason.trim() : "",
+            savedAt,
+            day: group.day,
+            driver: group.driver,
+            romaneios: [...group.romaneios],
+            routes: routeLabel
+              .split(/[·,;]+/)
+              .map((route) => route.trim())
+              .filter(Boolean),
+            sender: document.sender,
+            recipient: document.recipient,
+            city: document.city,
+            mde: document.mde,
+            cte: document.cte,
+            invoice: document.invoice,
+            grossFreight: document.grossFreight,
+            identifiers: [...document.identifiers],
+          };
+        });
+        return next;
+      });
+    selectedDrafts.forEach(([documentKey, draft]) => {
+      if (!draft.situation) return;
+      releaseRomaneioDocumentToClosing(
+        documentKey,
+        draft.situation,
+        group.day,
+        savedAt,
+      );
+    });
+    if (routeChanged || romaneioRouteDrafts[group.key] !== undefined)
+      setRomaneioRouteLabels((current) => ({
+        ...current,
+        [group.key]: routeLabel.trim(),
+      }));
+    setRomaneioDocumentDrafts((current) => {
+      const next = { ...current };
+      delete next[group.key];
+      return next;
+    });
+    setRomaneioRouteDrafts((current) => {
+      const next = { ...current };
+      delete next[group.key];
+      return next;
+    });
+    setMessage(
+      `${selectedDrafts.length} documento(s) gravado(s) para ${group.driver}.${routeChanged ? " A rota editada também foi salva." : ""}`,
+    );
+  }
+
+  function scanRetainedDocument() {
+    const identifier = operationalIdentifier(retainedScanInput);
+    if (!identifier) {
+      setMessage("Digite ou bipe um MD-e ou CT-e Parceiro válido.");
+      return;
+    }
+    const matching = retainedRomaneioDocuments.find((record) =>
+      record.identifiers.includes(identifier),
+    );
+    if (!matching) {
+      setMessage(
+        `${retainedScanInput.trim()} não foi encontrado no relatório de retidos.`,
+      );
+      return;
+    }
+    setRetainedResolutionDrafts((current) => ({
+      ...current,
+      [matching.key]: true,
+    }));
+    setRetainedScanInput("");
+    setMessage(
+      `${matching.referenceType} ${matching.referenceNumber} localizado. Clique em Gravar baixas para confirmar a entrega.`,
+    );
+  }
+
+  function saveRetainedResolutions() {
+    const selectedKeys = Object.keys(retainedResolutionDrafts).filter(
+      (key) => retainedResolutionDrafts[key],
+    );
+    if (!selectedKeys.length) {
+      setMessage("Selecione ou bipe ao menos um documento retido.");
+      return;
+    }
+    const savedAt = new Date().toISOString();
+    setRomaneioDocumentStatuses((current) => {
+      const next = { ...current };
+      selectedKeys.forEach((key) => {
+        if (next[key])
+          next[key] = {
+            ...next[key],
+            situation: "delivered",
+            operationalStatus: "ET",
+            reason: "",
+            savedAt,
+          };
+      });
+      return next;
+    });
+    selectedKeys.forEach((key) => {
+      const record = romaneioDocumentStatuses[key];
+      releaseRomaneioDocumentToClosing(
+        key,
+        "delivered",
+        record?.day || "",
+        savedAt,
+      );
+    });
+    setRetainedResolutionDrafts({});
+    setMessage(
+      `${selectedKeys.length} documento(s) retirado(s) dos retidos e gravado(s) como Entregue.`,
+    );
+  }
 
   const isMaexAdditional = (entry: Entry) => {
     const key = maexSenderKey(entry);
@@ -1723,11 +2710,21 @@ export default function Home() {
       product: "Fechamentos GMOBS",
       version: 1,
       exportedAt: new Date().toISOString(),
-      closing: { entries, importInfo },
+      closing: {
+        entries,
+        referenceEntries: romaneioReferenceEntries,
+        importInfo,
+      },
       scans: scannedCtes,
       tde: { rates: tdeRates, importInfo: tdeImportInfo },
       maex: maexAdditionalSenders,
       billed: billedDocuments,
+      romaneios: {
+        entries: romaneioEntries,
+        importInfo: romaneioImportInfo,
+        documentStatuses: romaneioDocumentStatuses,
+        routeLabels: romaneioRouteLabels,
+      },
     };
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(backup)], { type: "application/json" }),
@@ -1753,7 +2750,11 @@ export default function Home() {
       const backup = JSON.parse(await file.text()) as {
         product?: string;
         version?: number;
-        closing?: { entries?: Entry[]; importInfo?: ImportInfo | null };
+        closing?: {
+          entries?: Entry[];
+          referenceEntries?: RomaneioReferenceEntry[];
+          importInfo?: ImportInfo | null;
+        };
         scans?: Record<string, Record<string, string>>;
         tde?: {
           rates?: TdeRateRecord[];
@@ -1761,6 +2762,12 @@ export default function Home() {
         };
         maex?: Record<string, MaexAdditionalSender>;
         billed?: Record<string, BilledDocumentRecord>;
+        romaneios?: {
+          entries?: RomaneioEntry[];
+          importInfo?: RomaneioImportInfo | null;
+          documentStatuses?: Record<string, RomaneioDocumentStatusRecord>;
+          routeLabels?: Record<string, string>;
+        };
       };
       if (
         backup.product !== "Fechamentos GMOBS" ||
@@ -1769,13 +2776,31 @@ export default function Home() {
       )
         throw new Error("Este arquivo não é um backup válido do Fechamentos GMOBS.");
 
-      setEntries(normalizeSavedEntries(backup.closing.entries));
+      const normalizedEntries = normalizeSavedEntries(backup.closing.entries);
+      setEntries(normalizedEntries);
+      setRomaneioReferenceEntries(
+        normalizeRomaneioReferenceEntries(
+          backup.closing.referenceEntries,
+          normalizedEntries,
+        ),
+      );
+      setOptionalScanPartnerIds([]);
       setImportInfo(backup.closing.importInfo || null);
       setScannedCtes(backup.scans || {});
       setTdeRates(Array.isArray(backup.tde?.rates) ? backup.tde.rates : []);
       setTdeImportInfo(backup.tde?.importInfo || null);
       setMaexAdditionalSenders(backup.maex || {});
       setBilledDocuments(normalizeBilledDocuments(backup.billed || {}));
+      setRomaneioEntries(
+        Array.isArray(backup.romaneios?.entries)
+          ? backup.romaneios.entries
+          : [],
+      );
+      setRomaneioImportInfo(backup.romaneios?.importInfo || null);
+      setRomaneioDocumentStatuses(
+        backup.romaneios?.documentStatuses || {},
+      );
+      setRomaneioRouteLabels(backup.romaneios?.routeLabels || {});
       setSelectedExports([]);
       setMessage(
         cloudHosted
@@ -1793,6 +2818,84 @@ export default function Home() {
     }
   }
 
+  async function importRomaneios(event: ChangeEvent<HTMLInputElement>) {
+    const files = [...(event.target.files || [])];
+    event.target.value = "";
+    if (!files.length) return;
+    setImportingRomaneios(true);
+    setMessage("");
+    const additions: RomaneioEntry[] = [];
+    const errors: string[] = [];
+    const seen = new Set(romaneioEntries.map(romaneioCompleteRowKey));
+    let duplicates = 0;
+
+    for (const file of files) {
+      try {
+        const result = await readRomaneioFile(file);
+        result.rows.forEach((row) => {
+          const key = romaneioCompleteRowKey(row);
+          if (seen.has(key)) {
+            duplicates++;
+            return;
+          }
+          seen.add(key);
+          additions.push({
+            ...row,
+            id: crypto.randomUUID(),
+            sourceFile: file.name,
+          });
+        });
+      } catch (error) {
+        errors.push(
+          `${file.name}: ${error instanceof Error ? error.message : "não foi possível ler"}`,
+        );
+      }
+    }
+
+    if (additions.length) {
+      const combinedEntries = [...romaneioEntries, ...additions];
+      const distinctRomaneios = new Set(
+        combinedEntries.map((row) => `${row.filial}|${row.romaneio}`),
+      ).size;
+      const successfulFiles = files
+        .filter((file) =>
+          additions.some((entry) => entry.sourceFile === file.name),
+        )
+        .map((file) => file.name);
+      setRomaneioEntries(combinedEntries);
+      setRomaneioImportInfo({
+        files: [
+          ...new Set([
+            ...(romaneioImportInfo?.files || []),
+            ...successfulFiles,
+          ]),
+        ],
+        imported: combinedEntries.length,
+        romaneios: distinctRomaneios,
+        importedAt: new Date().toISOString(),
+        duplicates,
+      });
+      setRomaneioSearch("");
+      setRomaneioDate("");
+      setTab("romaneios");
+      setMessage(
+        `${additions.length} linha(s) nova(s) adicionada(s). Agora há ${distinctRomaneios} romaneio(s) e ${combinedEntries.length} linha(s) salvas.${duplicates ? ` ${duplicates} linha(s) completamente repetida(s) foram ignoradas.` : ""}${errors.length ? ` ${errors.length} arquivo(s) não puderam ser lidos.` : ""}`,
+      );
+    } else if (duplicates) {
+      setTab("romaneios");
+      setMessage(
+        `${duplicates} linha(s) já estavam salvas e não foram duplicadas.${errors.length ? ` ${errors.length} arquivo(s) não puderam ser lidos.` : ""}`,
+      );
+    } else {
+      setMessage(
+        errors.length
+          ? errors.slice(0, 2).join(" | ")
+          : "Não encontrei romaneios válidos nos arquivos selecionados.",
+      );
+    }
+    setImportingRomaneios(false);
+  }
+
   async function importExcel(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -1802,30 +2905,57 @@ export default function Home() {
     try {
       const result = await readClosingFile(file);
       const seen = new Set<string>();
+      const completeRows = new Set<string>();
       const tdeMap = effectiveTdeRates(tdeRates);
-      let redeliveries = 0;
-      let unidentified = 0;
-      const additions = result.rows.map((row): Entry => {
+      let duplicates = 0;
+      const uniqueReferenceRows = result.referenceRows.filter((row) => {
+        const key = completeRowKey(row);
+        if (completeRows.has(key)) {
+          if (row.eligible && (row.cte || row.invoice)) duplicates++;
+          return false;
+        }
+        completeRows.add(key);
+        return true;
+      });
+      const referenceEntries = uniqueReferenceRows.map(
+        (row): RomaneioReferenceEntry => {
         const partner = identifyPartner(row.partner);
         const key = `${partner.id}|${row.cte}|${row.invoice}`.toLowerCase();
         const repeated = seen.has(key);
         seen.add(key);
         const isRedelivery = row.isRedelivery || repeated;
-        if (isRedelivery) redeliveries++;
-        if (partner.id === "unidentified") unidentified++;
         const recipientCnpj = normalizeCnpj(row.recipientCnpj);
         const tde = recipientCnpj
           ? tdeMap.get(`${recipientCnpj}|${partner.id}`) ?? row.tde
           : row.tde;
+        const mde = numericDocumentId(row.mde);
+        const cte = numericDocumentId(row.cte);
+        const savedOperation = mde
+          ? romaneioDocumentStatuses[`MD-e|${mde}`]
+          : cte
+            ? romaneioDocumentStatuses[`CT-e|${cte}`]
+            : undefined;
+        const sourceStatus = String(row.status || "").trim();
+        const canBeReleasedByRomaneio = ["lt", "rm"].includes(
+          normalized(sourceStatus),
+        );
+        const operationalStatus =
+          canBeReleasedByRomaneio && savedOperation
+            ? savedOperation.operationalStatus ||
+              romaneioOperationalStatus(savedOperation.situation)
+            : "";
         return {
           id: crypto.randomUUID(),
           partnerId: partner.id,
           partnerName: partner.name,
           partnerRaw: row.partner,
           partnerCnpj: row.partnerCnpj,
-          status: row.status,
+          status: operationalStatus || sourceStatus,
           date: row.date,
-          deliveryDate: row.deliveryDate,
+          deliveryDate:
+            operationalStatus && savedOperation?.day
+              ? savedOperation.day
+              : row.deliveryDate,
           mde: row.mde,
           cte: row.cte,
           cteKey: row.cteKey,
@@ -1849,19 +2979,51 @@ export default function Home() {
           adjustment: row.adjustment,
           isRedelivery,
           reportedTotal: row.reportedTotal,
+          romaneioDocumentKey: operationalStatus
+            ? savedOperation?.key
+            : undefined,
+          romaneioSourceStatus: operationalStatus ? sourceStatus : undefined,
+          romaneioSavedAt: operationalStatus
+            ? savedOperation?.savedAt
+            : undefined,
+          sourceStatus,
+          sourceEligible: row.eligible && Boolean(row.cte || row.invoice),
         };
-      });
+      },
+      );
+      const additions = referenceEntries.filter(
+        (entry) => entry.sourceEligible || Boolean(entry.romaneioDocumentKey),
+      );
+      const redeliveries = additions.filter(
+        (entry) => entry.isRedelivery,
+      ).length;
+      const unidentified = additions.filter(
+        (entry) => entry.partnerId === "unidentified",
+      ).length;
+      const releasedByRomaneio = additions.filter(
+        (entry) => entry.romaneioDocumentKey,
+      ).length;
       setEntries(additions);
+      setRomaneioReferenceEntries(
+        referenceEntries.filter((entry) => !entry.sourceEligible),
+      );
+      setOptionalScanPartnerIds([]);
       setImportInfo({
         file: file.name,
         imported: additions.length,
         redeliveries,
         unidentified,
-        excluded: result.excluded,
+        excluded: Math.max(0, result.excluded - releasedByRomaneio),
+        duplicates,
+        latestEmissionDate: result.latestEmissionDate,
       });
       setSelectedExports([]);
+      const romaneioOnly = Math.max(
+        0,
+        referenceEntries.length - additions.length,
+      );
       setMessage(
-        `${additions.length} entregas, reentregas e complementos importados com sucesso.`,
+        `${additions.length} documento(s) liberado(s) para o fechamento.${romaneioOnly ? ` ${romaneioOnly} documento(s) em outros status ficaram disponíveis somente para consulta e conferência nos Romaneios.` : ""}${duplicates ? ` ${duplicates} linha(s) completamente repetida(s) foram ignoradas.` : ""}`,
       );
     } catch (error) {
       setMessage(
@@ -2077,12 +3239,18 @@ export default function Home() {
       setAuthStatus("signedOut");
       setCloudReady(false);
       setEntries([]);
+      setRomaneioReferenceEntries([]);
+      setOptionalScanPartnerIds([]);
       setImportInfo(null);
       setScannedCtes({});
       setTdeRates([]);
       setTdeImportInfo(null);
       setMaexAdditionalSenders({});
       setBilledDocuments({});
+      setRomaneioEntries([]);
+      setRomaneioImportInfo(null);
+      setRomaneioDocumentStatuses({});
+      setRomaneioRouteLabels({});
       cloudVersionsRef.current = {};
     }
   }
@@ -2102,8 +3270,16 @@ export default function Home() {
         saveCloudState("tde", tdeCloudState),
         saveCloudState("maex", maexAdditionalSenders),
         saveCloudState("billed", billedDocuments),
+        saveCloudState("romaneios", romaneiosCloudState),
       ]);
-      (["closing", "scans", "tde", "maex", "billed"] as CloudStateKey[])
+      ([
+        "closing",
+        "scans",
+        "tde",
+        "maex",
+        "billed",
+        "romaneios",
+      ] as CloudStateKey[])
         .forEach((key, index) => {
           cloudVersionsRef.current[key] = versions[index];
         });
@@ -2213,8 +3389,9 @@ export default function Home() {
         {(
           [
             ["import", "1", "Importar"],
-            ["preview", "2", "Prévia"],
-            ["export", "3", "Exportar"],
+            ["romaneios", "2", "Romaneios"],
+            ["preview", "3", "Prévia"],
+            ["export", "4", "Exportar"],
           ] as const
         ).map(([id, number, label]) => (
           <button
@@ -2235,11 +3412,11 @@ export default function Home() {
           <div className="import-view">
             <div className="intro">
               <small>PASSO 1</small>
-              <h2>Importe o relatório, a tabela de TDE e o histórico</h2>
+              <h2>Importe os relatórios e dados de apoio</h2>
               <p>
                 O relatório traz as entregas. A tabela de TDE procura o CNPJ do
-                destinatário, enquanto os fechamentos antigos impedem que um
-                documento já faturado seja enviado novamente.
+                destinatário, os fechamentos antigos evitam duplicidade e os
+                romaneios ficam organizados em uma tela separada.
               </p>
             </div>
             <div className="import-grid">
@@ -2272,6 +3449,22 @@ export default function Home() {
                   </strong>
                   <small>Excel .xls, .xlsx ou .csv</small>
                 </button>
+                {entries.length > 0 && (
+                  <div className="general-date-summary">
+                    <div>
+                      <small>ÚLTIMA DATA DE EMISSÃO IMPORTADA</small>
+                      <strong>
+                        {importInfo?.latestEmissionDate || latestGeneralEmissionDate
+                          ? formatRomaneioDay(
+                              importInfo?.latestEmissionDate ||
+                                latestGeneralEmissionDate,
+                            )
+                          : "Não encontrada"}
+                      </strong>
+                    </div>
+                    <p>Maior data localizada na coluna F do relatório geral.</p>
+                  </div>
+                )}
                 {importInfo && (
                   <div className="import-summary">
                     <div>
@@ -2294,6 +3487,10 @@ export default function Home() {
                       <div>
                         <dt>Sem parceira</dt>
                         <dd>{importInfo.unidentified}</dd>
+                      </div>
+                      <div>
+                        <dt>Duplicadas ignoradas</dt>
+                        <dd>{importInfo.duplicates || 0}</dd>
                       </div>
                     </dl>
                   </div>
@@ -2403,6 +3600,55 @@ export default function Home() {
                   </div>
                 )}
               </section>
+
+              <section className="import-card romaneio-import-card">
+                <div className="import-card-title">
+                  <span>4</span>
+                  <div>
+                    <strong>Relatórios de romaneios</strong>
+                    <small>Motoristas, veículos, rotas e documentos</small>
+                  </div>
+                </div>
+                <input
+                  ref={romaneioInputRef}
+                  hidden
+                  multiple
+                  type="file"
+                  accept=".xls,.xlsx,.csv"
+                  onChange={importRomaneios}
+                />
+                <button
+                  type="button"
+                  className="upload compact"
+                  disabled={importingRomaneios}
+                  onClick={() => romaneioInputRef.current?.click()}
+                >
+                  <span>⇧</span>
+                  <strong>
+                    {importingRomaneios
+                      ? "Lendo os romaneios..."
+                      : "Selecionar romaneios"}
+                  </strong>
+                  <small>Selecione um ou vários relatórios</small>
+                </button>
+                {romaneioImportInfo && (
+                  <div className="romaneio-file-summary">
+                    <small>ROMANEIOS ATIVOS</small>
+                    <strong>
+                      {romaneioImportInfo.files.length === 1
+                        ? romaneioImportInfo.files[0]
+                        : `${romaneioImportInfo.files.length} arquivos`}
+                    </strong>
+                    <p>
+                      {romaneioImportInfo.romaneios} romaneios ·{" "}
+                      {romaneioImportInfo.imported} linhas de rota
+                      {romaneioImportInfo.duplicates
+                        ? ` · ${romaneioImportInfo.duplicates} repetidas ignoradas`
+                        : ""}
+                    </p>
+                  </div>
+                )}
+              </section>
             </div>
 
             <section className="cloud-backup">
@@ -2410,8 +3656,8 @@ export default function Home() {
                 <small>BACKUP E TROCA DE COMPUTADOR</small>
                 <h3>Leve todos os dados com segurança</h3>
                 <p>
-                  O backup inclui relatório, bipagens, TDE, remetentes da Maex e
-                  documentos já enviados ao faturamento.
+                  O backup inclui relatório, romaneios, bipagens, TDE,
+                  remetentes da Maex e documentos já enviados ao faturamento.
                 </p>
               </div>
               <input
@@ -2585,7 +3831,284 @@ export default function Home() {
             </section>
           </div>
         )}
-        {tab !== "import" && (
+        {tab === "romaneios" && (
+          <div className="romaneio-view">
+            <div className="romaneio-heading">
+              <div>
+                <small>CONTROLE OPERACIONAL</small>
+                <h2>Conferência diária por motorista</h2>
+                <p>
+                  Os romaneios do mesmo motorista são agrupados por dia. A
+                  produção usa o frete localizado no relatório geral, com
+                  desconto de 12%.
+                </p>
+              </div>
+              <input
+                ref={romaneioInputRef}
+                hidden
+                multiple
+                type="file"
+                accept=".xls,.xlsx,.csv"
+                onChange={importRomaneios}
+              />
+              <button
+                type="button"
+                className="primary"
+                disabled={importingRomaneios}
+                onClick={() => romaneioInputRef.current?.click()}
+              >
+                {importingRomaneios ? "Lendo..." : "Importar outros relatórios"}
+              </button>
+            </div>
+
+            <div className="romaneio-subtabs">
+              <button
+                type="button"
+                className={romaneioView === "operation" ? "active" : ""}
+                onClick={() => setRomaneioView("operation")}
+              >
+                Operação por motorista
+              </button>
+              <button
+                type="button"
+                className={romaneioView === "retained" ? "active" : ""}
+                onClick={() => setRomaneioView("retained")}
+              >
+                Relatório de Retidos
+                <b>{retainedRomaneioDocuments.length}</b>
+              </button>
+            </div>
+
+            {romaneioView === "operation" ? (
+              <>
+                <form
+                  className="romaneio-scan romaneio-global-scan"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    scanOrSearchRomaneio();
+                  }}
+                >
+                  <div>
+                    <small>PROCURAR E CONFERIR</small>
+                  <strong>Bipe ou digite MD-e, CT-e Parceiro, chave da AK ou NF</strong>
+                    <p>
+                      A primeira leitura abre o romaneio e prepara o documento
+                      como Entregue. Também é possível procurar por motorista,
+                      rota ou romaneio.
+                    </p>
+                  </div>
+                  <input
+                    type="search"
+                    value={romaneioSearch}
+                    placeholder="MD-e, CT-e Parceiro, chave AK, NF, motorista ou romaneio"
+                    onChange={(event) => setRomaneioSearch(event.target.value)}
+                  />
+                  <button
+                    className="primary"
+                    disabled={!romaneioSearch.trim()}
+                  >
+                    Localizar / marcar Entregue
+                  </button>
+                  {focusedRomaneioKey && !romaneioSearch.trim() && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => setFocusedRomaneioKey("")}
+                    >
+                      Mostrar todos
+                    </button>
+                  )}
+                </form>
+
+                {!romaneioDailyGroups.length ? (
+                  <div className="empty romaneio-empty">
+                    <span>▤</span>
+                    <h3>Nenhum romaneio importado</h3>
+                    <p>Use o campo da aba Importar para selecionar o relatório.</p>
+                  </div>
+                ) : !visibleRomaneioGroups.length ? (
+                  <div className="empty romaneio-empty">
+                    <span>⌕</span>
+                    <h3>Nenhum resultado encontrado</h3>
+                    <p>Altere a procura ou faça uma nova leitura.</p>
+                  </div>
+                ) : (
+                  <div className="romaneio-list daily-list">
+                    {visibleRomaneioGroups.map((group) => {
+                      const drafts = romaneioDocumentDrafts[group.key] || {};
+                      const pendingDocuments = group.documents.filter(
+                        (document) => {
+                          if (romaneioDocumentStatuses[document.key]) return false;
+                          const draft = drafts[document.key];
+                          if (!draft?.situation) return true;
+                          return (
+                            draft.situation === "return" &&
+                            !draft.reason.trim()
+                          );
+                        },
+                      );
+                      const savedProduction = group.documents.reduce(
+                        (sum, document) => {
+                          const situation =
+                            romaneioDocumentStatuses[document.key]?.situation;
+                          return sum +
+                            (situation === "delivered" || situation === "retained"
+                              ? document.production
+                              : 0);
+                        },
+                        0,
+                      );
+                      const routeLabel =
+                        romaneioRouteDrafts[group.key] ??
+                        romaneioRouteLabels[group.key] ??
+                        group.routes.join(" · ");
+                      const draftCount = Object.values(drafts).filter(
+                        (draft) => draft.situation,
+                      ).length;
+                      const hasInvalidReturn = Object.values(drafts).some(
+                        (draft) =>
+                          draft.situation === "return" && !draft.reason.trim(),
+                      );
+                      return (
+                        <details
+                          className="romaneio-card daily-card"
+                          key={group.key}
+                          open={Boolean(openRomaneios[group.key])}
+                          onToggle={(event) => {
+                            const isOpen = event.currentTarget.open;
+                            setOpenRomaneios((current) =>
+                              current[group.key] === isOpen
+                                ? current
+                                : { ...current, [group.key]: isOpen },
+                            );
+                          }}
+                        >
+                          <summary>
+                            <span className="romaneio-number">
+                              <small>EMISSÃO</small>
+                              <strong>{formatRomaneioDay(group.day)}</strong>
+                            </span>
+                            <span>
+                              <small>MOTORISTA</small>
+                              <strong>{group.driver}</strong>
+                              <em>{group.plates.join(", ") || "Sem placa"} · {group.vehicleTypes.join(", ") || "Veículo não informado"}</em>
+                            </span>
+                            <span>
+                              <small>Nº ROMANEIO</small>
+                              <strong>{group.romaneios.join(" · ")}</strong>
+                            </span>
+                            <span>
+                              <small>EM ROTA</small>
+                              <strong>{routeLabel || "Sem rota"}</strong>
+                            </span>
+                            <span className={pendingDocuments.length ? "waiting" : "linked"}>
+                              <small>PENDENTES</small>
+                              <strong>{pendingDocuments.length} de {group.documents.length}</strong>
+                            </span>
+                            <span className="daily-production">
+                              <small>PRODUÇÃO</small>
+                              <strong>{money(savedProduction)}</strong>
+                            </span>
+                            <b aria-hidden="true">⌄</b>
+                          </summary>
+                          {openRomaneios[group.key] && (
+                            <div className="romaneio-detail daily-detail">
+                              <div className="romaneio-detail-info daily-info">
+                                <span><small>Nº ROMANEIO</small><strong>{group.romaneios.join(" · ")}</strong></span>
+                                <span><small>EMISSÃO</small><strong>{formatRomaneioDay(group.day)}</strong></span>
+                                <span><small>MOTORISTA</small><strong>{group.driver}</strong></span>
+                                <span className="route-edit"><small>EM ROTA — PODE EDITAR</small><input value={routeLabel} onChange={(event) => setRomaneioRouteDrafts((current) => ({...current, [group.key]: event.target.value}))} /></span>
+                                <span><small>QUANTIDADE DE ENTREGAS</small><strong>{group.deliveries.toLocaleString("pt-BR")}</strong></span>
+                                <span><small>PESO TOTAL</small><strong>{group.weight.toLocaleString("pt-BR")} kg</strong></span>
+                                <span><small>FRETE TOTAL DO ROMANEIO</small><strong>{money(group.freight)}</strong></span>
+                                <span className="production"><small>PRODUÇÃO GRAVADA (-12%)</small><strong>{money(savedProduction)}</strong></span>
+                              </div>
+
+                              {pendingDocuments.length ? (
+                                <div className="daily-document-list">
+                                  <div className="daily-document-head">
+                                    <span>DOCUMENTO</span><span>REMETENTE</span><span>DESTINATÁRIO / CIDADE</span><span>FRETE DO RELATÓRIO / PRODUÇÃO</span><span>SITUAÇÃO</span>
+                                  </div>
+                                  {pendingDocuments.map((document) => {
+                                    const draft = drafts[document.key] || {situation: "", reason: ""};
+                                    return (
+                                      <div className="daily-document-row" key={document.key}>
+                                        <span className="document-id">
+                                          <strong>{document.referenceType} {document.referenceNumber}</strong>
+                                          <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}{document.sourceStatus ? ` · Origem ${document.sourceStatus}` : ""}</small>
+                                        </span>
+                                        <span><strong>{document.sender || "Aguardando relatório"}</strong></span>
+                                        <span><strong>{document.recipient || "Aguardando relatório"}</strong><small>{document.city || "Cidade não localizada"}</small></span>
+                                        <span className="document-values"><strong>{document.grossFreight ? money(document.grossFreight) : "Sem frete"}</strong><small>{document.grossFreight ? `${money(document.production)} após -12%` : "PROCV pendente"}</small></span>
+                                        <span className="document-situation">
+                                          <select value={draft.situation} onChange={(event) => setRomaneioDraft(group.key, document.key, event.target.value as RomaneioSituation | "")}>
+                                            <option value="">Selecione...</option>
+                                            <option value="delivered">Entregue (ET)</option>
+                                            <option value="back">Volta (OC)</option>
+                                            <option value="return">Retorno (OC)</option>
+                                            <option value="retained">Retido (OC)</option>
+                                          </select>
+                                          {draft.situation === "return" && (
+                                            <input className="return-reason" required value={draft.reason} placeholder="Motivo obrigatório" onChange={(event) => setRomaneioReturnReason(group.key, document.key, event.target.value)} />
+                                          )}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="daily-complete"><span>✓</span><div><strong>{draftCount ? "Documentos conferidos aguardando gravação" : "Todos os documentos foram gravados"}</strong><small>{draftCount ? "Clique em Gravar conferência para confirmar as situações e atualizar a produção." : "A produção e as situações continuam salvas."}</small></div></div>
+                              )}
+
+                              <div className="romaneio-save-bar">
+                                <span><strong>{draftCount} alteração(ões) aguardando gravação</strong><small>{hasInvalidReturn ? "Informe o motivo obrigatório do Retorno." : "Entregues e Retidos entram na produção."}</small></span>
+                                <button type="button" className="primary" disabled={hasInvalidReturn || (!draftCount && romaneioRouteDrafts[group.key] === undefined)} onClick={() => saveRomaneioGroup(group)}>Gravar conferência</button>
+                              </div>
+                              <p className="romaneio-source">Arquivo(s): {group.sourceFiles.join(", ")}</p>
+                            </div>
+                          )}
+                        </details>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="retained-view">
+                <div className="retained-heading">
+                  <div><small>RELATÓRIO SEPARADO</small><h3>Documentos Retidos</h3><p>Ao bipar ou digitar um documento retido, ele será preparado para baixa como Entregue.</p></div>
+                  <b>{retainedRomaneioDocuments.length} retido(s)</b>
+                </div>
+                <form className="retained-scan" onSubmit={(event) => {event.preventDefault(); scanRetainedDocument();}}>
+                  <input value={retainedScanInput} placeholder="Bipe ou digite o MD-e ou CT-e Parceiro" inputMode="numeric" onChange={(event) => setRetainedScanInput(event.target.value)} />
+                  <button className="primary" disabled={!retainedScanInput.trim()}>Localizar retido</button>
+                </form>
+                {retainedRomaneioDocuments.length ? (
+                  <div className="retained-list">
+                    {retainedRomaneioDocuments.map((record) => {
+                      const currentDocument = currentRomaneioDocumentsByKey.get(record.key);
+                      const grossFreight = currentDocument?.grossFreight || record.grossFreight;
+                      return (
+                        <label className={retainedResolutionDrafts[record.key] ? "selected" : ""} key={record.key}>
+                          <input type="checkbox" checked={Boolean(retainedResolutionDrafts[record.key])} onChange={(event) => setRetainedResolutionDrafts((current) => ({...current, [record.key]: event.target.checked}))} />
+                          <span className="document-id"><strong>{record.referenceType} {record.referenceNumber}</strong><small>{record.romaneios.join(" · ")} · {formatRomaneioDay(record.day)}</small></span>
+                          <span><strong>{record.driver}</strong><small>{record.routes.join(" · ") || "Sem rota"}</small></span>
+                          <span><strong>{currentDocument?.sender || record.sender || "Remetente não localizado"}</strong><small>{currentDocument?.recipient || record.recipient || "Destinatário não localizado"} · {currentDocument?.city || record.city || "Sem cidade"}</small></span>
+                          <span className="document-values"><strong>{grossFreight ? money(grossFreight) : "Sem frete"}</strong><small>{grossFreight ? `${money(roundMoney(grossFreight * ROMANEIO_PRODUCTION_FACTOR))} de produção` : "PROCV pendente"}</small></span>
+                          <b>{retainedResolutionDrafts[record.key] ? "Baixar como entregue" : romaneioSituationLabel[record.situation]}</b>
+                        </label>
+                      );
+                    })}
+                    <div className="romaneio-save-bar retained-save"><span><strong>{Object.values(retainedResolutionDrafts).filter(Boolean).length} baixa(s) selecionada(s)</strong><small>É obrigatório gravar para retirar do relatório de Retidos.</small></span><button type="button" className="primary" disabled={!Object.values(retainedResolutionDrafts).some(Boolean)} onClick={saveRetainedResolutions}>Gravar baixas</button></div>
+                  </div>
+                ) : (
+                  <div className="empty romaneio-empty"><span>✓</span><h3>Nenhum documento retido</h3><p>Os documentos marcados como Retido aparecerão aqui automaticamente.</p></div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {(tab === "preview" || tab === "export") && (
           <>
             <div className="toolbar">
               <div>
@@ -2663,8 +4186,30 @@ export default function Home() {
                         <small>FECHAMENTO DA PARCEIRA</small>
                         <h3>{active.name}</h3>
                       </div>
+                      {!scanPartnerIds.has(active.id) && (
+                        <div className="optional-scan-toggle">
+                          <input
+                            id={`optional-scan-${active.id}`}
+                            type="checkbox"
+                            aria-label="Exportar apenas documentos bipados"
+                            checked={optionalScanPartnerIds.includes(active.id)}
+                            onChange={(event) =>
+                              toggleOptionalPartnerScan(
+                                active.id,
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          <label htmlFor={`optional-scan-${active.id}`}>
+                            <strong>Exportar apenas documentos bipados</strong>
+                            <small>
+                              Desmarcado: exporta normalmente, sem exigir bipagem.
+                            </small>
+                          </label>
+                        </div>
+                      )}
                     </div>
-                    {scanPartnerIds.has(active.id) && (
+                    {usesScanForPartner(active.id) && (
                       <div className="scan-panel">
                         <div className="scan-heading">
                           <div>
@@ -3234,6 +4779,59 @@ export default function Home() {
               </div>
             )}
           </>
+        )}
+        {romaneioPendingAlert && (
+          <div className="romaneio-alert-overlay">
+            <div
+              className="romaneio-alert-dialog"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="romaneio-alert-title"
+            >
+              <span className="romaneio-alert-icon" aria-hidden="true">
+                !
+              </span>
+              <div className="romaneio-alert-copy">
+                <small>ATENÇÃO — CONFERÊNCIA PENDENTE</small>
+                <h2 id="romaneio-alert-title">
+                  {romaneioPendingAlert.kind === "change-romaneio"
+                    ? "Grave o romaneio antes de continuar"
+                    : `Ainda faltam ${romaneioPendingAlert.pendingCount} documento(s)`}
+                </h2>
+                <p>
+                  {romaneioPendingAlert.kind === "change-romaneio"
+                    ? "Você tentou bipar um documento de outro romaneio. As marcações atuais ainda não foram gravadas."
+                    : "Esses documentos ainda não receberam uma situação. Confira a lista ou confirme que deseja fazer uma gravação parcial."}
+                </p>
+              </div>
+              <div className="romaneio-alert-actions">
+                <button
+                  type="button"
+                  className="primary"
+                  autoFocus
+                  onClick={() => setRomaneioPendingAlert(null)}
+                >
+                  Voltar e conferir
+                </button>
+                {romaneioPendingAlert.kind === "save-with-pending" && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      const alert = romaneioPendingAlert;
+                      const group = romaneioDailyGroups.find(
+                        (candidate) => candidate.key === alert.groupKey,
+                      );
+                      setRomaneioPendingAlert(null);
+                      if (group) saveRomaneioGroup(group, true);
+                    }}
+                  >
+                    Gravar mesmo assim
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         )}
         {message && (
           <button className="message" onClick={() => setMessage("")}>

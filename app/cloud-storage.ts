@@ -1,4 +1,10 @@
-export type CloudStateKey = "closing" | "scans" | "tde" | "maex" | "billed";
+export type CloudStateKey =
+  | "closing"
+  | "scans"
+  | "tde"
+  | "maex"
+  | "billed"
+  | "romaneios";
 export type CloudStateRecord<T> = { value: T; version: string };
 
 type CloudEncoding = "gzip-base64" | "json";
