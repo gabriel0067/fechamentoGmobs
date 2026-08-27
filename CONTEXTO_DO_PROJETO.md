@@ -99,7 +99,9 @@ O frete de cada documento não é obtido dividindo o frete total da linha do rom
 
 Ao bipar ou digitar MD-e, CT-e Parceiro, chave da AK ou NF no campo global, o sistema localiza e abre automaticamente o painel diário vinculado. A própria primeira leitura já prepara o documento como Entregue, e as próximas leituras continuam localizando e marcando documentos. A lista também permite selecionar `Entregue`, `Volta`, `Retorno` ou `Retido`; Retorno exige motivo. Nenhuma alteração comum do painel é definitiva antes do botão `Gravar conferência`. Depois de gravados, os documentos deixam a lista de pendências. Entregues e Retidos somam produção; Volta e Retorno não somam. O valor total da produção considera somente situações já gravadas.
 
-Para facilitar a conferência, um documento bipado ou com situação manual completa desaparece da lista visível assim que fica preparado; ele continua contado na faixa de alterações aguardando gravação. Um Retorno ainda sem motivo permanece visível até o preenchimento obrigatório. Se houver qualquer situação não gravada e o usuário tentar bipar um documento pertencente a outro painel diário, a leitura é bloqueada e aparece no centro da tela um alerta forte, com fundo escurecido e dois sinais sonoros curtos, pedindo para usar `Gravar conferência` primeiro. Ao tentar gravar uma conferência parcial, o mesmo alerta informa quantos documentos continuam sem situação e oferece `Voltar e conferir` ou `Gravar mesmo assim`. Assim, a operação chama atenção sem impedir conscientemente uma gravação parcial necessária.
+Para facilitar a conferência, um documento bipado ou com situação manual completa desaparece da lista visível assim que fica preparado; ele continua contado na faixa de alterações aguardando gravação. Toda leitura válida toca um bipe curto de confirmação. Um Retorno ainda sem motivo permanece visível até o preenchimento obrigatório. Leituras inválidas, documentos não encontrados e tentativas de gravar sem situação ou sem o motivo obrigatório tocam um alerta sonoro distinto. Se houver qualquer situação não gravada e o usuário tentar bipar um documento pertencente a outro painel diário, a leitura é bloqueada e aparece no centro da tela um alerta forte, com fundo escurecido e dois sinais sonoros curtos, pedindo para usar `Gravar conferência` primeiro. Ao tentar gravar uma conferência parcial, o mesmo alerta informa quantos documentos continuam sem situação e oferece `Voltar e conferir` ou `Gravar mesmo assim`. Assim, a operação chama atenção sem impedir conscientemente uma gravação parcial necessária.
+
+Além de Entregue, Volta, Retorno e Retido, a conferência oferece `Motorista não trouxe o documento`. Volta, Retorno, Retido e essa nova situação exigem confirmação em um alerta central antes de serem preparadas. A falta fica persistida por documento e motorista, aparece como aviso nos painéis dos romaneios posteriores do mesmo motorista e, ao completar três dias corridos desde o dia do romaneio original, passa automaticamente a integrar o Relatório de Retidos até receber baixa. A falta não libera documentos `LT` ou `RM` para o fechamento.
 
 Documentos que chegam do relatório geral com status `LT` ou `RM` ficam disponíveis para consulta no Romaneio, mas permanecem fora do fechamento enquanto não houver conferência gravada. Depois de `Gravar conferência`, Entregue/Bipado converte o documento em `ET`; Volta, Retorno e Retido convertem em `OC`. A data operacional passa a ser o dia do romaneio e o documento convertido fica liberado para o fechamento. Essa conversão também é reaplicada automaticamente quando o relatório geral for importado novamente, porque a situação gravada do Romaneio é persistente.
 
@@ -142,12 +144,13 @@ O resumo da importação mostra quantidade importada, reentregas, registros fora
 
 ### 4. Prévia do fechamento
 
-A tela possui quatro etapas:
+A tela possui três menus principais:
 
-1. **Importar**: seleção do relatório geral.
-2. **Romaneios**: consulta independente de rotas e documentos vinculados ao relatório geral.
-3. **Prévia**: filtro por período e visão por transportadora.
-4. **Exportar**: seleção das transportadoras e geração do fechamento.
+1. **Importar**: seleção do relatório geral, TDE, históricos e romaneios.
+2. **Romaneios**: reúne os submenus `Ticagem`, para a operação diária e Retidos, e `Fechamento`, para o relatório quinzenal dos motoristas.
+3. **Fechamento parceiros**: reúne os submenus `Prévia` e `Exportar` do fechamento das transportadoras.
+
+No submenu `Romaneios > Fechamento`, o período é livre e aceita data inicial e final. A lista mostra todos os motoristas com romaneio no intervalo, inclusive aqueles sem entregas gravadas, e permite selecionar um ou vários nomes. O fechamento considera somente documentos cuja situação `Entregue` já foi gravada; Volta, Retorno, Retido e `Motorista não trouxe o documento` permanecem no histórico operacional, mas não entram nas notas nem no frete entregue desse relatório. A exportação gera um Excel separado por motorista, com cabeçalho contendo nome, CPF, veículos e período; cada linha diária mostra data, cidades atendidas, quantidade de NFs únicas e soma do frete do relatório geral. A última linha totaliza notas e frete.
 
 Na prévia são exibidos:
 

@@ -85,6 +85,23 @@ export type ImportedRomaneioRow = {
   checkers: string;
 };
 
+export type DriverClosingDay = {
+  date: string;
+  cities: string[];
+  invoiceCount: number;
+  freight: number;
+};
+
+export type DriverClosingExport = {
+  driver: string;
+  cpf: string;
+  plates: string[];
+  vehicleTypes: string[];
+  periodFrom: string;
+  periodTo: string;
+  days: DriverClosingDay[];
+};
+
 const aliases: Record<keyof ImportedRow, string[]> = {
   partner: [
     "parceiro",
@@ -1582,6 +1599,142 @@ export function exportMaexAdditionalXlsx(
   XLSX.writeFile(
     workbook,
     `Fechamento Adicional Maex - ${period.replace(/[^a-zA-Z0-9À-ÿ]+/g, " ").trim()}.xlsx`,
+    { compression: true },
+  );
+}
+
+export function exportDriverClosingXlsx(report: DriverClosingExport) {
+  const totalInvoices = report.days.reduce(
+    (sum, day) => sum + day.invoiceCount,
+    0,
+  );
+  const totalFreight = report.days.reduce((sum, day) => sum + day.freight, 0);
+  const period = [report.periodFrom, report.periodTo]
+    .filter(Boolean)
+    .map((date) => date.split("-").reverse().join("/"))
+    .join(" a ") || "Todo o período";
+  const headerRow = 7;
+  const dataStartRow = headerRow + 1;
+  const totalRow = dataStartRow + report.days.length;
+  const data = [
+    ["FECHAMENTO DE ROMANEIOS POR MOTORISTA", "", "", ""],
+    ["Motorista:", report.driver, "", ""],
+    ["CPF:", report.cpf || "Não informado", "", ""],
+    ["Veículo(s):", [...report.plates, ...report.vehicleTypes].filter(Boolean).join(" · ") || "Não informado", "", ""],
+    ["Período:", period, "", ""],
+    ["", "", "", ""],
+    ["DATA", "CIDADES ATENDIDAS", "NOTAS ENTREGUES", "VALOR TOTAL DO FRETE"],
+    ...report.days.map((day) => [
+      new Date(`${day.date}T12:00:00`),
+      day.cities.join(" · ") || "Não informada",
+      day.invoiceCount,
+      day.freight,
+    ]),
+    ["TOTAL", "", totalInvoices, totalFreight],
+  ];
+  const sheet = XLSX.utils.aoa_to_sheet(data);
+  sheet["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
+    ...Array.from({ length: 4 }, (_, index) => ({
+      s: { r: index + 1, c: 1 },
+      e: { r: index + 1, c: 3 },
+    })),
+  ];
+  sheet["!cols"] = [{ wch: 14 }, { wch: 55 }, { wch: 18 }, { wch: 23 }];
+  sheet["!rows"] = [{ hpt: 28 }, ...Array.from({ length: 5 }, () => ({ hpt: 20 }))];
+  sheet["!freeze"] = { xSplit: 0, ySplit: headerRow };
+  sheet["!autofilter"] = {
+    ref: `A${headerRow}:D${Math.max(headerRow, totalRow - 1)}`,
+  };
+
+  for (let row = 0; row < data.length; row++) {
+    for (let column = 0; column < 4; column++) {
+      const address = XLSX.utils.encode_cell({ r: row, c: column });
+      const cell = sheet[address] || (sheet[address] = { t: "s", v: "" });
+      cell.s = {
+        fill: { patternType: "solid", fgColor: { rgb: "FFFFFF" } },
+        font: { name: "Calibri", color: { rgb: "202B24" }, sz: 11 },
+        alignment: { vertical: "center" },
+      };
+    }
+  }
+
+  const title = sheet.A1;
+  title.s = {
+    fill: { patternType: "solid", fgColor: { rgb: "146C43" } },
+    font: { name: "Calibri", color: { rgb: "FFFFFF" }, bold: true, sz: 16 },
+    alignment: { horizontal: "center", vertical: "center" },
+  };
+  for (let row = 1; row <= 4; row++) {
+    const label = sheet[XLSX.utils.encode_cell({ r: row, c: 0 })];
+    label.s = {
+      fill: { patternType: "solid", fgColor: { rgb: "E6F2EB" } },
+      font: { name: "Calibri", color: { rgb: "175B3B" }, bold: true },
+      alignment: { vertical: "center" },
+    };
+    const value = sheet[XLSX.utils.encode_cell({ r: row, c: 1 })];
+    value.s = {
+      fill: { patternType: "solid", fgColor: { rgb: "FFFFFF" } },
+      font: { name: "Calibri", color: { rgb: "202B24" }, bold: true },
+      alignment: { vertical: "center" },
+    };
+  }
+  for (let column = 0; column < 4; column++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r: headerRow - 1, c: column })];
+    cell.s = {
+      fill: { patternType: "solid", fgColor: { rgb: "17231C" } },
+      font: { name: "Calibri", color: { rgb: "FFFFFF" }, bold: true },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    };
+  }
+  report.days.forEach((_, index) => {
+    const row = dataStartRow - 1 + index;
+    for (let column = 0; column < 4; column++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })];
+      cell.s = {
+        fill: {
+          patternType: "solid",
+          fgColor: { rgb: index % 2 ? "F3F8F5" : "FFFFFF" },
+        },
+        font: { name: "Calibri", color: { rgb: "202B24" } },
+        alignment: {
+          horizontal: column === 1 ? "left" : "center",
+          vertical: "center",
+          wrapText: column === 1,
+        },
+        border: { bottom: { style: "thin", color: { rgb: "D9E3DD" } } },
+      };
+    }
+    const dateCell = sheet[XLSX.utils.encode_cell({ r: row, c: 0 })];
+    dateCell.z = "dd/mm/yyyy";
+    dateCell.s.numFmt = "dd/mm/yyyy";
+    const countCell = sheet[XLSX.utils.encode_cell({ r: row, c: 2 })];
+    countCell.z = "0";
+    countCell.s.numFmt = "0";
+    const freightCell = sheet[XLSX.utils.encode_cell({ r: row, c: 3 })];
+    freightCell.z = "R$ #,##0.00";
+    freightCell.s.numFmt = "R$ #,##0.00";
+  });
+  for (let column = 0; column < 4; column++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r: totalRow - 1, c: column })];
+    cell.s = {
+      fill: { patternType: "solid", fgColor: { rgb: "FFE36D" } },
+      font: { name: "Calibri", color: { rgb: "17231C" }, bold: true, sz: 12 },
+      alignment: { horizontal: column < 2 ? "left" : "center", vertical: "center" },
+    };
+  }
+  sheet[XLSX.utils.encode_cell({ r: totalRow - 1, c: 2 })].z = "0";
+  sheet[XLSX.utils.encode_cell({ r: totalRow - 1, c: 3 })].z = "R$ #,##0.00";
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Fechamento");
+  const safeDriver = report.driver
+    .replace(/[^a-zA-Z0-9À-ÿ]+/g, " ")
+    .trim()
+    .slice(0, 80);
+  XLSX.writeFile(
+    workbook,
+    `Fechamento Motorista - ${safeDriver || "Sem nome"} - ${period.replace(/[^a-zA-Z0-9À-ÿ]+/g, " ").trim()}.xlsx`,
     { compression: true },
   );
 }

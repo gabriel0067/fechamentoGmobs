@@ -1728,6 +1728,116 @@ button {
   background: #ad6d27;
   color: white;
 }
+.romaneio-main-subtabs,
+.partner-closing-subtabs {
+  background: #dfe9e3;
+}
+.romaneio-main-subtabs button.active,
+.partner-closing-subtabs button.active {
+  background: #146c43;
+  color: white;
+}
+.romaneio-inner-subtabs {
+  margin-top: -10px;
+}
+.driver-closing-view {
+  display: grid;
+  gap: 20px;
+}
+.driver-closing-toolbar p {
+  max-width: 650px;
+  margin: 5px 0 0;
+  color: #65707b;
+  line-height: 1.45;
+}
+.driver-closing-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.driver-closing-summary > span {
+  display: grid;
+  gap: 5px;
+  padding: 15px;
+  border: 1px solid #dce5df;
+  border-radius: 11px;
+  background: #f3f8f5;
+}
+.driver-closing-summary small,
+.driver-closing-list label > span small {
+  color: #718078;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+}
+.driver-closing-summary strong {
+  color: #146c43;
+  font-size: 21px;
+}
+.driver-selection-head {
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e4e9e6;
+}
+.driver-closing-list {
+  display: grid;
+  gap: 8px;
+}
+.driver-closing-list label {
+  display: grid;
+  grid-template-columns: auto auto minmax(220px, 1fr) repeat(3, minmax(90px, auto));
+  align-items: center;
+  gap: 13px;
+  padding: 13px 15px;
+  border: 1px solid #dfe6e2;
+  border-radius: 11px;
+  cursor: pointer;
+}
+.driver-closing-list label.selected {
+  border-color: #6fab8b;
+  background: #f0f8f4;
+}
+.driver-closing-list input {
+  width: 18px;
+  height: 18px;
+  accent-color: #146c43;
+}
+.driver-avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: #dfece5;
+  color: #146c43;
+  font-size: 11px;
+  font-weight: 900;
+}
+.driver-closing-list label > div,
+.driver-closing-list label > span:not(.driver-avatar) {
+  display: grid;
+  gap: 3px;
+}
+.driver-closing-list label > div small {
+  color: #758078;
+}
+.driver-closing-list label > span:not(.driver-avatar) {
+  text-align: right;
+}
+.driver-closing-export {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #dfe5e1;
+}
+.driver-closing-export > div {
+  display: grid;
+  gap: 4px;
+}
+.driver-closing-export small {
+  color: #6d7871;
+}
 .romaneio-metrics.daily {
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
@@ -1884,6 +1994,25 @@ button {
 .document-situation .return-reason {
   border-color: #d7a7a2;
   background: #fff8f7;
+}
+.romaneio-missing-warning {
+  display: grid;
+  gap: 5px;
+  padding: 14px 16px;
+  border: 2px solid #e19a20;
+  border-radius: 11px;
+  background: #fff4d6;
+  color: #6b3d00;
+  box-shadow: 0 6px 18px #8a57001a;
+}
+.romaneio-missing-warning strong {
+  font-size: 13px;
+}
+.romaneio-missing-warning span {
+  font-weight: 800;
+}
+.romaneio-missing-warning small {
+  color: #805313;
 }
 .romaneio-save-bar {
   display: flex;
@@ -2190,21 +2319,43 @@ button {
 }
 .message {
   position: fixed;
+  z-index: 120;
   right: 24px;
-  bottom: 24px;
+  top: 24px;
+  max-width: min(620px, calc(100vw - 48px));
   display: flex;
   gap: 18px;
   align-items: center;
   border: 0;
   border-radius: 11px;
-  background: #17221c;
   color: white;
-  padding: 14px 17px;
-  box-shadow: 0 8px 25px #0003;
+  padding: 16px 18px;
+  font-weight: 800;
+  line-height: 1.4;
+  box-shadow: 0 12px 34px #0006;
+  animation: message-in 180ms ease-out;
+}
+.message-info {
+  background: #087443;
+  border: 2px solid #b7f5d5;
+}
+.message-error {
+  background: #b42318;
+  border: 2px solid #ffb4aa;
 }
 .message span {
   font-size: 18px;
-  color: #b9c3bd;
+  color: white;
+}
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @media (max-width: 560px) {
   .romaneio-alert-dialog {
@@ -2325,6 +2476,23 @@ button {
   .romaneio-subtabs button {
     flex: 1;
     justify-content: center;
+  }
+  .driver-closing-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .driver-closing-list label {
+    grid-template-columns: auto auto minmax(0, 1fr);
+  }
+  .driver-closing-list label > span:not(.driver-avatar) {
+    grid-column: 3;
+    text-align: left;
+  }
+  .driver-closing-export {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .driver-closing-export .primary {
+    width: 100%;
   }
   .romaneio-filters {
     grid-template-columns: 1fr;
