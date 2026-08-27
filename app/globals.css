@@ -1838,6 +1838,114 @@ button {
 .driver-closing-export small {
   color: #6d7871;
 }
+.driver-closing-preview {
+  display: grid;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid #dfe5e1;
+}
+.driver-closing-preview-head,
+.driver-pdf-preview-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.driver-closing-preview-head {
+  padding: 14px;
+  border: 1px solid #cfded5;
+  border-radius: 8px;
+  background: #f3f8f5;
+}
+.driver-closing-preview-head small,
+.driver-pdf-preview-title small {
+  color: #64776c;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+}
+.driver-closing-preview-head h3 {
+  margin: 3px 0;
+  color: #17231c;
+}
+.driver-closing-preview-head p {
+  margin: 0;
+  color: #64776c;
+}
+.driver-pdf-preview-card {
+  overflow: hidden;
+  border: 1px solid #dfe6e2;
+  border-radius: 8px;
+  background: #fff;
+}
+.driver-pdf-preview-title {
+  padding: 13px 15px;
+  border-bottom: 1px solid #e5ebe7;
+  background: #fbfcfb;
+}
+.driver-pdf-preview-title > div {
+  display: grid;
+  gap: 3px;
+}
+.driver-pdf-preview-title strong {
+  color: #17231c;
+}
+.driver-pdf-preview-title > span {
+  display: grid;
+  gap: 3px;
+  text-align: right;
+}
+.driver-pdf-preview-title b {
+  color: #146c43;
+}
+.driver-pdf-days {
+  display: grid;
+}
+.driver-pdf-day-head,
+.driver-pdf-day-row {
+  display: grid;
+  grid-template-columns:
+    92px minmax(220px, 1.5fr) 72px 120px minmax(220px, 1.4fr);
+  gap: 10px;
+  align-items: center;
+}
+.driver-pdf-day-head {
+  padding: 10px 12px;
+  background: #17231c;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.driver-pdf-day-row {
+  padding: 10px 12px;
+  border-top: 1px solid #edf0ee;
+}
+.driver-pdf-day-row:nth-child(odd) {
+  background: #f7faf8;
+}
+.driver-pdf-day-row input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #cfd9d3;
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #fff;
+  color: #1d2922;
+}
+.driver-pdf-day-row input:focus {
+  outline: 2px solid rgba(20, 108, 67, 0.18);
+  border-color: #8fbaa3;
+}
+.driver-pdf-day-row span {
+  min-width: 0;
+}
+.driver-pdf-empty {
+  margin: 0;
+  padding: 15px;
+  color: #6d7871;
+}
 .romaneio-metrics.daily {
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
@@ -1867,6 +1975,182 @@ button {
   border-radius: 9px;
   background: #e8f5ed;
   color: #146c43;
+}
+.romaneio-bulk-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid #cbdcd2;
+  border-radius: 8px;
+  background: #f7fbf8;
+}
+.romaneio-bulk-actions button {
+  border: 1px solid #146c43;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fff;
+  color: #146c43;
+  font-weight: 850;
+}
+.romaneio-bulk-actions small {
+  color: #687970;
+}
+.romaneio-group-note {
+  display: grid;
+  gap: 6px;
+}
+.manual-romaneio-freight {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(120px, 180px) minmax(120px, 180px) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 13px;
+  border: 1px solid #cfded5;
+  border-radius: 8px;
+  background: #f7fbf8;
+}
+.manual-romaneio-freight > div {
+  display: grid;
+  gap: 3px;
+}
+.manual-romaneio-freight > div p {
+  margin: 0;
+  color: #64776c;
+  font-size: 11px;
+}
+.manual-romaneio-freight label {
+  display: grid;
+  gap: 5px;
+  color: #4f6157;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+.manual-romaneio-freight input,
+.pickup-quantity-field input {
+  min-width: 0;
+  border: 1px solid #cfd9d3;
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: #fff;
+  color: #1d2922;
+}
+.manual-romaneio-freight > button {
+  border: 1px solid #146c43;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #146c43;
+  color: #fff;
+  font-weight: 850;
+}
+.manual-romaneio-freight-list {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 7px;
+}
+.manual-romaneio-freight-list span {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(180px, 1.4fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid #dfe6e2;
+  border-radius: 7px;
+  background: #fff;
+}
+.manual-romaneio-freight-list button {
+  border: 0;
+  background: transparent;
+  color: #a34828;
+  font-weight: 850;
+}
+.romaneio-group-note small,
+.romaneio-full-note small,
+.manual-romaneio-freight small {
+  color: #6b7a72;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+.romaneio-group-note textarea {
+  min-height: 78px;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #cfd9d3;
+  border-radius: 8px;
+  padding: 10px 11px;
+  background: #fff;
+  color: #1d2922;
+  font: inherit;
+}
+.romaneio-full-view,
+.romaneio-full-list {
+  display: grid;
+  gap: 14px;
+}
+.romaneio-full-card summary {
+  grid-template-columns:
+    100px minmax(180px, 1.2fr) minmax(150px, 1fr) 115px 125px 22px;
+}
+.romaneio-full-note {
+  display: grid;
+  gap: 5px;
+  padding: 12px 14px;
+  border: 1px solid #dfe6e2;
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+.romaneio-full-note p {
+  margin: 0;
+  color: #1d2922;
+}
+.status-open,
+.status-closed {
+  justify-self: start;
+  border-radius: 999px;
+  padding: 7px 11px;
+  font-size: 11px;
+}
+.status-open {
+  background: #fff4de;
+  color: #9a5c15;
+}
+.status-closed {
+  background: #e7f5ed;
+  color: #146c43;
+}
+.pickup-quantity-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: #415248;
+  font-size: 12px;
+  font-weight: 800;
+}
+.driver-discount-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px;
+  gap: 12px;
+  margin-top: 12px;
+}
+.driver-discount-fields label {
+  display: grid;
+  gap: 6px;
+  color: #415248;
+  font-size: 12px;
+  font-weight: 800;
+}
+.driver-discount-fields input {
+  min-width: 0;
+  border: 1px solid #c7d6cd;
+  border-radius: 7px;
+  padding: 10px 11px;
+  background: #fff;
+  color: #17231c;
+  font: inherit;
+  font-weight: 700;
 }
 .romaneio-detail-info.daily-info {
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2417,6 +2701,31 @@ button {
   .romaneio-documents > div {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .driver-pdf-day-head {
+    display: none;
+  }
+  .driver-pdf-day-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .driver-pdf-day-row input:last-child {
+    grid-column: 1 / -1;
+  }
+  .driver-discount-fields {
+    grid-template-columns: 1fr;
+  }
+  .manual-romaneio-freight {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .manual-romaneio-freight > div,
+  .manual-romaneio-freight-list {
+    grid-column: 1 / -1;
+  }
+  .romaneio-full-card summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .romaneio-full-card summary > b {
+    display: none;
+  }
 }
 @media (max-width: 760px) {
   .shell {
@@ -2493,6 +2802,43 @@ button {
   }
   .driver-closing-export .primary {
     width: 100%;
+  }
+  .driver-closing-preview-head,
+  .driver-pdf-preview-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .driver-closing-preview-head .primary {
+    width: 100%;
+  }
+  .driver-pdf-preview-title > span {
+    text-align: left;
+  }
+  .driver-pdf-day-row {
+    grid-template-columns: 1fr;
+  }
+  .driver-pdf-day-row input:last-child {
+    grid-column: auto;
+  }
+  .romaneio-bulk-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .romaneio-bulk-actions button {
+    width: 100%;
+  }
+  .manual-romaneio-freight {
+    grid-template-columns: 1fr;
+  }
+  .manual-romaneio-freight > div,
+  .manual-romaneio-freight-list {
+    grid-column: auto;
+  }
+  .manual-romaneio-freight-list span {
+    grid-template-columns: 1fr;
+  }
+  .romaneio-full-card summary {
+    grid-template-columns: 1fr;
   }
   .romaneio-filters {
     grid-template-columns: 1fr;

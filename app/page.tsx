@@ -19,7 +19,7 @@ import {
 import {
   commissionTotal,
   exportClosingXlsx,
-  exportDriverClosingXlsx,
+  exportDriverClosingPdf,
   exportMaexAdditionalXlsx,
   exportPajussaraMissingXlsx,
   normalizeCnpj,
@@ -31,6 +31,8 @@ import {
   readTdeFile,
   type ImportedRomaneioRow,
   type DriverClosingDay,
+  type DriverClosingDiscount,
+  type DriverClosingExport,
   type PajussaraClosingDocument,
 } from "./excel";
 import {
@@ -123,6 +125,12 @@ type RomaneioEntry = ImportedRomaneioRow & {
   id: string;
   sourceFile: string;
 };
+type RomaneioImportedTotals = {
+  freight: number;
+  weight: number;
+  deliveries: number;
+  volumes: number;
+};
 type RomaneioImportInfo = {
   files: string[];
   imported: number;
@@ -135,6 +143,7 @@ type RomaneioSituation =
   | "back"
   | "return"
   | "retained"
+  | "not-followed"
   | "driver-missing";
 type RomaneioDocumentStatusRecord = {
   key: string;
@@ -158,6 +167,7 @@ type RomaneioDocumentStatusRecord = {
   invoice: string;
   grossFreight: number;
   identifiers: string[];
+  observation?: string;
 };
 type RomaneioDocumentDraft = {
   situation: RomaneioSituation | "";
@@ -166,6 +176,20 @@ type RomaneioDocumentDraft = {
 type RomaneioPendingAlert =
   | { kind: "change-romaneio" }
   | { kind: "save-with-pending"; groupKey: string; pendingCount: number };
+type RomaneioMarkAllConfirmation = {
+  groupKey: string;
+  pendingCount: number;
+};
+type RomaneioPickupConfirmation = {
+  groupKey: string;
+  allowPending: boolean;
+  quantity: string;
+};
+type ManualRomaneioFreight = {
+  id: string;
+  invoice: string;
+  grossFreight: number;
+};
 type RomaneioSituationConfirmation = {
   groupKey: string;
   documentKey: string;
@@ -204,6 +228,7 @@ type RomaneioDailyGroup = {
   weight: number;
   deliveries: number;
   volumes: number;
+  importedTotalsByRomaneio: Record<string, RomaneioImportedTotals>;
   documents: RomaneioDailyDocument[];
   sourceFiles: string[];
 };
@@ -216,6 +241,26 @@ type DriverClosingSummary = {
   days: DriverClosingDay[];
   totalInvoices: number;
   totalFreight: number;
+};
+type DriverClosingDayEdit = {
+  cityText: string;
+  observation: string;
+};
+type DriverClosingPreviewReport = DriverClosingExport & {
+  key: string;
+};
+type DriverClosingDiscountPlan = {
+  id: string;
+  driverKey: string;
+  driver: string;
+  totalAmount: number;
+  installments: number;
+  nextInstallment: number;
+  createdAt: string;
+};
+type DriverClosingDiscountPrompt = {
+  amount: string;
+  installments: string;
 };
 type MaexAdditionalSender = {
   name: string;
@@ -246,6 +291,8 @@ type BilledDocumentRecord = {
 };
 const ROMANEIO_STORAGE_KEY = "gmobs-romaneios-v1";
 const GENERAL_IMPORT_INFO_STORAGE_KEY = "gmobs-general-import-info-v1";
+const driverClosingDayEditKey = (driverKey: string, date: string) =>
+  `${driverKey}|${date}`;
 
 const money = (value: number) =>
   value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -365,7 +412,8 @@ const operationalIdentifier = (value?: string) => {
   return digits.replace(/^0+/, "") || (digits ? "0" : "");
 };
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
-const ROMANEIO_PRODUCTION_FACTOR = 0.88;
+const ROMANEIO_PRODUCTION_FACTOR = 0.87;
+const MANUAL_ROMANEIO_FREIGHT_FACTOR = 0.32 * ROMANEIO_PRODUCTION_FACTOR;
 const romaneioDaysElapsed = (day: string) => {
   const parsed = new Date(`${day}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return 0;
@@ -378,6 +426,7 @@ const romaneioSituationLabel: Record<RomaneioSituation, string> = {
   back: "Volta (OC)",
   return: "Retorno (OC)",
   retained: "Retido (OC)",
+  "not-followed": "Não seguiu (OC)",
   "driver-missing": "Motorista não trouxe o documento",
 };
 const romaneioOperationalStatus = (
@@ -585,6 +634,8 @@ const parseMoney = (value: string) => {
   const parsed = Number(normalizedValue.replace(/[^0-9.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 };
+const manualFreightProduction = (grossFreight: number) =>
+  roundMoney(grossFreight * MANUAL_ROMANEIO_FREIGHT_FACTOR);
 const parseCnpjList = (value: string) => {
   const candidates =
     value.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{12,14}/g) ||
@@ -718,6 +769,10 @@ export default function Home() {
     useState<RomaneioPendingAlert | null>(null);
   const [romaneioSituationConfirmation, setRomaneioSituationConfirmation] =
     useState<RomaneioSituationConfirmation | null>(null);
+  const [romaneioMarkAllConfirmation, setRomaneioMarkAllConfirmation] =
+    useState<RomaneioMarkAllConfirmation | null>(null);
+  const [romaneioPickupConfirmation, setRomaneioPickupConfirmation] =
+    useState<RomaneioPickupConfirmation | null>(null);
   const [importing, setImporting] = useState(false);
   const [importingTde, setImportingTde] = useState(false);
   const [importingRomaneios, setImportingRomaneios] = useState(false);
@@ -760,19 +815,41 @@ export default function Home() {
   const [romaneioRouteLabels, setRomaneioRouteLabels] = useState<
     Record<string, string>
   >({});
+  const [romaneioGroupNotes, setRomaneioGroupNotes] = useState<
+    Record<string, string>
+  >({});
+  const [manualRomaneioFreights, setManualRomaneioFreights] = useState<
+    Record<string, ManualRomaneioFreight[]>
+  >({});
+  const [manualRomaneioFreightDrafts, setManualRomaneioFreightDrafts] =
+    useState<Record<string, { invoice: string; grossFreight: string }>>({});
+  const [romaneioPickupQuantities, setRomaneioPickupQuantities] = useState<
+    Record<string, number>
+  >({});
+  const [driverClosingDiscountPlans, setDriverClosingDiscountPlans] = useState<
+    Record<string, DriverClosingDiscountPlan[]>
+  >({});
+  const [driverClosingDiscountPrompt, setDriverClosingDiscountPrompt] =
+    useState<DriverClosingDiscountPrompt | null>(null);
   const [romaneioSearch, setRomaneioSearch] = useState("");
+  const [romaneioFullSearch, setRomaneioFullSearch] = useState("");
   const [focusedRomaneioKey, setFocusedRomaneioKey] = useState("");
   const [romaneioView, setRomaneioView] = useState<"operation" | "retained">(
     "operation",
   );
-  const [romaneioSection, setRomaneioSection] = useState<"checking" | "closing">(
-    "checking",
-  );
+  const [romaneioSection, setRomaneioSection] = useState<
+    "checking" | "closing" | "full"
+  >("checking");
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
   const [driverClosingTo, setDriverClosingTo] = useState("");
   const [selectedDriverClosings, setSelectedDriverClosings] = useState<
     string[]
   >([]);
+  const [driverClosingPreviewOpen, setDriverClosingPreviewOpen] =
+    useState(false);
+  const [driverClosingDayEdits, setDriverClosingDayEdits] = useState<
+    Record<string, DriverClosingDayEdit>
+  >({});
   const [openRomaneios, setOpenRomaneios] = useState<Record<string, boolean>>(
     {},
   );
@@ -982,6 +1059,26 @@ export default function Home() {
           typeof parsedRomaneios.routeLabels === "object"
         )
           setRomaneioRouteLabels(parsedRomaneios.routeLabels);
+        if (
+          parsedRomaneios?.groupNotes &&
+          typeof parsedRomaneios.groupNotes === "object"
+        )
+          setRomaneioGroupNotes(parsedRomaneios.groupNotes);
+        if (
+          parsedRomaneios?.manualFreights &&
+          typeof parsedRomaneios.manualFreights === "object"
+        )
+          setManualRomaneioFreights(parsedRomaneios.manualFreights);
+        if (
+          parsedRomaneios?.pickupQuantities &&
+          typeof parsedRomaneios.pickupQuantities === "object"
+        )
+          setRomaneioPickupQuantities(parsedRomaneios.pickupQuantities);
+        if (
+          parsedRomaneios?.driverDiscountPlans &&
+          typeof parsedRomaneios.driverDiscountPlans === "object"
+        )
+          setDriverClosingDiscountPlans(parsedRomaneios.driverDiscountPlans);
       } catch {
         /* começa vazio se o armazenamento estiver inválido */
       } finally {
@@ -1043,6 +1140,10 @@ export default function Home() {
               importInfo: RomaneioImportInfo | null;
               documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
               routeLabels: Record<string, string>;
+              groupNotes?: Record<string, string>;
+              manualFreights?: Record<string, ManualRomaneioFreight[]>;
+              pickupQuantities?: Record<string, number>;
+              driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
             }>("romaneios"),
           ]);
         if (cancelled) return;
@@ -1108,11 +1209,19 @@ export default function Home() {
           setRomaneioImportInfo(romaneios.importInfo || null);
           setRomaneioDocumentStatuses(romaneios.documentStatuses || {});
           setRomaneioRouteLabels(romaneios.routeLabels || {});
+          setRomaneioGroupNotes(romaneios.groupNotes || {});
+          setManualRomaneioFreights(romaneios.manualFreights || {});
+          setRomaneioPickupQuantities(romaneios.pickupQuantities || {});
+          setDriverClosingDiscountPlans(romaneios.driverDiscountPlans || {});
         } else {
           setRomaneioEntries([]);
           setRomaneioImportInfo(null);
           setRomaneioDocumentStatuses({});
           setRomaneioRouteLabels({});
+          setRomaneioGroupNotes({});
+          setManualRomaneioFreights({});
+          setRomaneioPickupQuantities({});
+          setDriverClosingDiscountPlans({});
         }
         cloudVersionsRef.current.romaneios =
           romaneiosRecord?.version ||
@@ -1121,6 +1230,10 @@ export default function Home() {
             importInfo: null,
             documentStatuses: {},
             routeLabels: {},
+            groupNotes: {},
+            manualFreights: {},
+            pickupQuantities: {},
+            driverDiscountPlans: {},
           }));
 
         if (!cancelled) {
@@ -1261,6 +1374,10 @@ export default function Home() {
         importInfo: romaneioImportInfo,
         documentStatuses: romaneioDocumentStatuses,
         routeLabels: romaneioRouteLabels,
+        groupNotes: romaneioGroupNotes,
+        manualFreights: manualRomaneioFreights,
+        pickupQuantities: romaneioPickupQuantities,
+        driverDiscountPlans: driverClosingDiscountPlans,
       })
     )
       return;
@@ -1274,9 +1391,13 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [
     hydrated,
+    driverClosingDiscountPlans,
+    manualRomaneioFreights,
     romaneioDocumentStatuses,
     romaneioEntries,
+    romaneioGroupNotes,
     romaneioImportInfo,
+    romaneioPickupQuantities,
     romaneioRouteLabels,
   ]);
   const closingCloudState = useMemo(
@@ -1293,11 +1414,19 @@ export default function Home() {
       importInfo: romaneioImportInfo,
       documentStatuses: romaneioDocumentStatuses,
       routeLabels: romaneioRouteLabels,
+      groupNotes: romaneioGroupNotes,
+      manualFreights: manualRomaneioFreights,
+      pickupQuantities: romaneioPickupQuantities,
+      driverDiscountPlans: driverClosingDiscountPlans,
     }),
     [
+      driverClosingDiscountPlans,
+      manualRomaneioFreights,
       romaneioDocumentStatuses,
       romaneioEntries,
+      romaneioGroupNotes,
       romaneioImportInfo,
+      romaneioPickupQuantities,
       romaneioRouteLabels,
     ],
   );
@@ -1471,6 +1600,10 @@ export default function Home() {
             importInfo: RomaneioImportInfo | null;
             documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
             routeLabels: Record<string, string>;
+            groupNotes?: Record<string, string>;
+            manualFreights?: Record<string, ManualRomaneioFreight[]>;
+            pickupQuantities?: Record<string, number>;
+            driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
           }>(key);
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
@@ -1479,6 +1612,10 @@ export default function Home() {
           setRomaneioImportInfo(record.value.importInfo || null);
           setRomaneioDocumentStatuses(record.value.documentStatuses || {});
           setRomaneioRouteLabels(record.value.routeLabels || {});
+          setRomaneioGroupNotes(record.value.groupNotes || {});
+          setManualRomaneioFreights(record.value.manualFreights || {});
+          setRomaneioPickupQuantities(record.value.pickupQuantities || {});
+          setDriverClosingDiscountPlans(record.value.driverDiscountPlans || {});
         }
       }
       setCloudStatus("ready");
@@ -1580,6 +1717,7 @@ export default function Home() {
         weight: 0,
         deliveries: 0,
         volumes: 0,
+        importedTotalsByRomaneio: {},
         documents: [],
         sourceFiles: [],
       };
@@ -1598,10 +1736,14 @@ export default function Home() {
         current.routes.push(row.route);
       if (!current.sourceFiles.includes(row.sourceFile))
         current.sourceFiles.push(row.sourceFile);
-      current.freight += row.freight;
-      current.weight += row.weight;
-      current.deliveries += row.deliveries;
-      current.volumes += row.volumes;
+      const romaneioTotalKey = normalized(row.romaneio) || row.id;
+      const previousTotal = current.importedTotalsByRomaneio[romaneioTotalKey];
+      current.importedTotalsByRomaneio[romaneioTotalKey] = {
+        freight: Math.max(previousTotal?.freight || 0, row.freight),
+        weight: Math.max(previousTotal?.weight || 0, row.weight),
+        deliveries: Math.max(previousTotal?.deliveries || 0, row.deliveries),
+        volumes: Math.max(previousTotal?.volumes || 0, row.volumes),
+      };
 
       row.documents.forEach((document) => {
         const documentKey = romaneioDocumentKey(document);
@@ -1615,7 +1757,15 @@ export default function Home() {
         }
         const match = romaneioDocumentMatches.get(document);
         const linkedEntries = match?.entries || [];
-        const linked = linkedEntries[0];
+        const linked =
+          linkedEntries.find(
+            (entry) =>
+              entry.sender ||
+              entry.recipient ||
+              entry.city ||
+              entry.reportedTotal ||
+              entry.freight,
+          ) || linkedEntries[0];
         const identifiers = [
           match?.number,
           ...linkedEntries.flatMap((entry) => [
@@ -1635,7 +1785,7 @@ export default function Home() {
           sourceStatus: linked?.sourceStatus || linked?.status || "",
           sender: linked?.sender || "",
           recipient: linked?.recipient || "",
-          city: linked?.city || "",
+          city: linked?.city || row.route || "",
           mde: linked?.mde || "",
           cte: linked?.cte || "",
           invoice: linked?.invoice || "",
@@ -1649,7 +1799,22 @@ export default function Home() {
       });
       groups.set(key, current);
     });
-    return [...groups.values()].sort(
+    return [...groups.values()]
+      .map((group) => {
+        const totals = Object.values(group.importedTotalsByRomaneio);
+        return {
+          ...group,
+          freight: roundMoney(
+            totals.reduce((sum, total) => sum + total.freight, 0),
+          ),
+          weight: roundMoney(
+            totals.reduce((sum, total) => sum + total.weight, 0),
+          ),
+          deliveries: totals.reduce((sum, total) => sum + total.deliveries, 0),
+          volumes: totals.reduce((sum, total) => sum + total.volumes, 0),
+        };
+      })
+      .sort(
       (a, b) =>
         b.day.localeCompare(a.day) ||
         a.driver.localeCompare(b.driver, "pt-BR"),
@@ -1681,6 +1846,43 @@ export default function Home() {
       ).includes(term);
     });
   }, [focusedRomaneioKey, romaneioDailyGroups, romaneioSearch]);
+  const visibleFullRomaneioGroups = useMemo(() => {
+    const term = normalized(romaneioFullSearch);
+    if (!term) return romaneioDailyGroups;
+    return romaneioDailyGroups.filter((group) =>
+      normalized(
+        [
+          group.driver,
+          group.cpf,
+          group.day,
+          formatRomaneioDay(group.day),
+          ...group.romaneios,
+          ...group.plates,
+          ...group.vehicleTypes,
+          ...group.routes,
+          romaneioRouteLabels[group.key],
+          romaneioGroupNotes[group.key],
+          ...group.documents.flatMap((document) => [
+            document.document,
+            document.referenceNumber,
+            document.sender,
+            document.recipient,
+            document.city,
+            document.invoice,
+            romaneioSituationLabel[
+              romaneioDocumentStatuses[document.key]?.situation || "delivered"
+            ],
+          ]),
+        ].join(" "),
+      ).includes(term),
+    );
+  }, [
+    romaneioDailyGroups,
+    romaneioDocumentStatuses,
+    romaneioFullSearch,
+    romaneioGroupNotes,
+    romaneioRouteLabels,
+  ]);
   const retainedRomaneioDocuments = useMemo(
     () =>
       Object.values(romaneioDocumentStatuses)
@@ -1707,6 +1909,73 @@ export default function Home() {
       });
     return records;
   }, [romaneioDocumentStatuses]);
+  const savedRomaneioProduction = useCallback(
+    (group: RomaneioDailyGroup) => {
+      const manualProduction = (manualRomaneioFreights[group.key] || []).reduce(
+        (sum, item) => sum + manualFreightProduction(item.grossFreight),
+        0,
+      );
+      const payableDocuments = group.documents.filter((document) => {
+        const situation = romaneioDocumentStatuses[document.key]?.situation;
+        return situation === "delivered" || situation === "retained";
+      });
+      const documentProduction = payableDocuments.reduce(
+        (sum, document) => sum + document.production,
+        0,
+      );
+      if (documentProduction > 0)
+        return roundMoney(documentProduction + manualProduction);
+      return payableDocuments.length
+        ? roundMoney(group.freight * ROMANEIO_PRODUCTION_FACTOR + manualProduction)
+        : roundMoney(manualProduction);
+    },
+    [manualRomaneioFreights, romaneioDocumentStatuses],
+  );
+  const romaneioOperationalDocumentCount = useCallback(
+    (group: RomaneioDailyGroup) =>
+      group.documents.length +
+      (manualRomaneioFreights[group.key]?.length || 0) +
+      (romaneioPickupQuantities[group.key] || 0),
+    [manualRomaneioFreights, romaneioPickupQuantities],
+  );
+  const driverClosingProductionForGroup = useCallback(
+    (group: RomaneioDailyGroup) => {
+      const deliveredDocuments = group.documents.filter(
+        (document) =>
+          romaneioDocumentStatuses[document.key]?.situation === "delivered",
+      );
+      const manualProduction = (manualRomaneioFreights[group.key] || []).reduce(
+        (sum, item) => sum + manualFreightProduction(item.grossFreight),
+        0,
+      );
+      const documentProduction = deliveredDocuments.reduce(
+        (sum, document) => sum + document.production,
+        0,
+      );
+      if (documentProduction > 0)
+        return roundMoney(documentProduction + manualProduction);
+      return deliveredDocuments.length
+        ? roundMoney(group.freight * ROMANEIO_PRODUCTION_FACTOR + manualProduction)
+        : roundMoney(manualProduction);
+    },
+    [manualRomaneioFreights, romaneioDocumentStatuses],
+  );
+  const currentDriverClosingDiscounts = useCallback(
+    (
+      driverKey: string,
+      plans: Record<string, DriverClosingDiscountPlan[]> =
+        driverClosingDiscountPlans,
+    ): DriverClosingDiscount[] =>
+      (plans[driverKey] || [])
+        .filter((plan) => plan.nextInstallment <= plan.installments)
+        .map((plan) => ({
+          description: "DESCONTO",
+          amount: roundMoney(plan.totalAmount / plan.installments),
+          installment: plan.nextInstallment,
+          installments: plan.installments,
+        })),
+    [driverClosingDiscountPlans],
+  );
   const driverClosingSummaries = useMemo<DriverClosingSummary[]>(() => {
     const withinPeriod = (day: string) =>
       (!driverClosingFrom || day >= driverClosingFrom) &&
@@ -1721,7 +1990,13 @@ export default function Home() {
         vehicleTypes: Set<string>;
         days: Map<
           string,
-          { cities: Set<string>; invoices: Set<string>; freight: number }
+          {
+            cities: Set<string>;
+            invoices: Set<string>;
+            freight: number;
+            romaneios: Set<string>;
+            observations: Set<string>;
+          }
         >;
       }
     >();
@@ -1744,26 +2019,49 @@ export default function Home() {
           .forEach((vehicle) => current.vehicleTypes.add(vehicle));
         drivers.set(key, current);
       });
-    Object.values(romaneioDocumentStatuses)
-      .filter(
-        (record) =>
-          record.situation === "delivered" && withinPeriod(record.day),
-      )
-      .forEach((record) => {
-        const driverKey = normalized(record.driver) || "motorista-nao-informado";
+    romaneioDailyGroups
+      .filter((group) => withinPeriod(group.day))
+      .forEach((group) => {
+        const countedDocuments = group.documents.filter((document) => {
+          const situation = romaneioDocumentStatuses[document.key]?.situation;
+          return situation === "delivered" || situation === "return";
+        });
+        const manualCount = manualRomaneioFreights[group.key]?.length || 0;
+        const pickupCount = romaneioPickupQuantities[group.key] || 0;
+        if (!countedDocuments.length && !manualCount && !pickupCount) return;
+        const driverKey = normalized(group.driver) || "motorista-nao-informado";
         const driver = drivers.get(driverKey);
         if (!driver) return;
-        const day = driver.days.get(record.day) || {
+        const day = driver.days.get(group.day) || {
           cities: new Set<string>(),
           invoices: new Set<string>(),
           freight: 0,
+          romaneios: new Set<string>(),
+          observations: new Set<string>(),
         };
-        if (record.city) day.cities.add(record.city);
-        day.invoices.add(
-          normalizeInvoiceKey(record.invoice) || `documento:${record.key}`,
+        const routeLabel =
+          romaneioRouteLabels[group.key] || group.routes.join(" · ");
+        const groupNote = (romaneioGroupNotes[group.key] || "").trim();
+        group.romaneios.forEach((romaneio) => day.romaneios.add(romaneio));
+        if (groupNote) day.observations.add(groupNote);
+        countedDocuments.forEach((document) => {
+          if (document.city) day.cities.add(document.city);
+          day.invoices.add(
+            normalizeInvoiceKey(document.invoice) || `documento:${document.key}`,
+          );
+        });
+        (manualRomaneioFreights[group.key] || []).forEach((item) =>
+          day.invoices.add(
+            normalizeInvoiceKey(item.invoice) || `manual:${item.id}`,
+          ),
         );
-        day.freight = roundMoney(day.freight + (record.grossFreight || 0));
-        driver.days.set(record.day, day);
+        if (!day.cities.size && routeLabel) day.cities.add(routeLabel);
+        day.freight = roundMoney(
+          day.freight + driverClosingProductionForGroup(group),
+        );
+        for (let index = 0; index < (romaneioPickupQuantities[group.key] || 0); index++)
+          day.invoices.add(`coleta:${group.key}:${index}`);
+        driver.days.set(group.day, day);
       });
     return [...drivers.values()]
       .map((driver) => {
@@ -1774,6 +2072,8 @@ export default function Home() {
               cities: [...day.cities].sort((a, b) =>
                 a.localeCompare(b, "pt-BR"),
               ),
+              romaneios: [...day.romaneios].sort(),
+              observation: [...day.observations].join(" · "),
               invoiceCount: day.invoices.size,
               freight: day.freight,
             }),
@@ -1793,7 +2093,56 @@ export default function Home() {
         };
       })
       .sort((a, b) => a.driver.localeCompare(b.driver, "pt-BR"));
-  }, [driverClosingFrom, driverClosingTo, romaneioDailyGroups, romaneioDocumentStatuses]);
+  }, [
+    driverClosingFrom,
+    driverClosingTo,
+    romaneioDailyGroups,
+    romaneioDocumentStatuses,
+    romaneioGroupNotes,
+    romaneioRouteLabels,
+    manualRomaneioFreights,
+    romaneioPickupQuantities,
+    driverClosingProductionForGroup,
+  ]);
+  const selectedDriverClosingReports = useMemo(
+    () =>
+      driverClosingSummaries
+        .filter((driver) => selectedDriverClosings.includes(driver.key))
+        .map(
+          (driver): DriverClosingPreviewReport => ({
+            key: driver.key,
+            driver: driver.driver,
+            cpf: driver.cpf,
+            plates: driver.plates,
+            vehicleTypes: driver.vehicleTypes,
+            periodFrom: driverClosingFrom,
+            periodTo: driverClosingTo,
+            discounts: currentDriverClosingDiscounts(driver.key),
+            days: driver.days.map((day) => {
+              const edit =
+                driverClosingDayEdits[
+                  driverClosingDayEditKey(driver.key, day.date)
+                ];
+              return {
+                ...day,
+                cityText:
+                  edit?.cityText !== undefined
+                    ? edit.cityText
+                    : day.cities.join(" · "),
+                observation: edit?.observation || "",
+              };
+            }),
+          }),
+        ),
+    [
+      driverClosingDayEdits,
+      driverClosingFrom,
+      driverClosingSummaries,
+      driverClosingTo,
+      currentDriverClosingDiscounts,
+      selectedDriverClosings,
+    ],
+  );
   const currentRomaneioDocumentsByKey = useMemo(() => {
     const documents = new Map<string, RomaneioDailyDocument>();
     romaneioDailyGroups.forEach((group) =>
@@ -2277,6 +2626,85 @@ export default function Home() {
     }));
   }
 
+  function requestMarkAllRomaneioDelivered(group: RomaneioDailyGroup) {
+    const drafts = romaneioDocumentDrafts[group.key] || {};
+    const pendingCount = group.documents.filter((document) => {
+      if (romaneioDocumentStatuses[document.key]) return false;
+      const draft = drafts[document.key];
+      return !draft?.situation;
+    }).length;
+    if (!pendingCount) {
+      setMessageIsError(true);
+      setMessage("Este romaneio não possui documentos pendentes para marcar.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    setRomaneioMarkAllConfirmation({ groupKey: group.key, pendingCount });
+    playRomaneioAttentionSound();
+  }
+
+  function markAllRomaneioDelivered(groupKey: string) {
+    const group = romaneioDailyGroups.find((item) => item.key === groupKey);
+    if (!group) return;
+    setRomaneioDocumentDrafts((current) => {
+      const currentDrafts = current[group.key] || {};
+      const nextDrafts = { ...currentDrafts };
+      group.documents.forEach((document) => {
+        if (romaneioDocumentStatuses[document.key]) return;
+        if (nextDrafts[document.key]?.situation) return;
+        nextDrafts[document.key] = { situation: "delivered", reason: "" };
+      });
+      return { ...current, [group.key]: nextDrafts };
+    });
+    setRomaneioMarkAllConfirmation(null);
+    setMessageIsError(false);
+    setMessage(
+      `Documentos pendentes de ${group.driver} preparados como Entregue. Clique em Gravar conferência para confirmar.`,
+    );
+    playRomaneioSuccessSound();
+  }
+
+  function addManualRomaneioFreight(groupKey: string) {
+    const draft = manualRomaneioFreightDrafts[groupKey] || {
+      invoice: "",
+      grossFreight: "",
+    };
+    const invoice = draft.invoice.trim();
+    const grossFreight = parseMoney(draft.grossFreight);
+    if (!invoice) {
+      setMessageIsError(true);
+      setMessage("Informe a nota fiscal manual.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    if (!grossFreight || grossFreight <= 0) {
+      setMessageIsError(true);
+      setMessage("Informe um valor bruto de frete válido para a nota manual.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    setManualRomaneioFreights((current) => ({
+      ...current,
+      [groupKey]: [
+        ...(current[groupKey] || []),
+        { id: crypto.randomUUID(), invoice, grossFreight },
+      ],
+    }));
+    setManualRomaneioFreightDrafts((current) => ({
+      ...current,
+      [groupKey]: { invoice: "", grossFreight: "" },
+    }));
+    setMessageIsError(false);
+    setMessage("Nota fiscal manual adicionada ao romaneio.");
+  }
+
+  function removeManualRomaneioFreight(groupKey: string, id: string) {
+    setManualRomaneioFreights((current) => ({
+      ...current,
+      [groupKey]: (current[groupKey] || []).filter((item) => item.id !== id),
+    }));
+  }
+
   function releaseRomaneioDocumentToClosing(
     documentKey: string,
     situation: RomaneioSituation,
@@ -2434,6 +2862,8 @@ export default function Home() {
   function saveRomaneioGroup(
     group: RomaneioDailyGroup,
     allowPending = false,
+    pickupConfirmed = false,
+    pickupQuantityOverride?: number,
   ) {
     const drafts = romaneioDocumentDrafts[group.key] || {};
     const selectedDrafts = Object.entries(drafts).filter(
@@ -2473,9 +2903,28 @@ export default function Home() {
     const routeChanged =
       routeLabel.trim() !==
       (romaneioRouteLabels[group.key] || defaultRoutes).trim();
-    if (!selectedDrafts.length && !routeChanged) {
+    const note = (romaneioGroupNotes[group.key] || "").trim();
+    const existingSavedNote = Object.values(romaneioDocumentStatuses).find(
+      (record) => record.day === group.day && record.driver === group.driver,
+    )?.observation;
+    const noteChanged = note !== (existingSavedNote || "");
+    const pickupChanged =
+      pickupQuantityOverride !== undefined &&
+      pickupQuantityOverride !== (romaneioPickupQuantities[group.key] || 0);
+    if (!pickupConfirmed) {
+      setRomaneioPickupConfirmation({
+        groupKey: group.key,
+        allowPending,
+        quantity: String(romaneioPickupQuantities[group.key] || ""),
+      });
+      playRomaneioAttentionSound();
+      return;
+    }
+    if (!selectedDrafts.length && !routeChanged && !noteChanged && !pickupChanged) {
       setMessageIsError(true);
-      setMessage("Selecione ao menos uma situação ou edite a rota antes de gravar.");
+      setMessage(
+        "Selecione ao menos uma situação, edite a rota, escreva uma observação ou informe coleta antes de gravar.",
+      );
       playRomaneioAttentionSound();
       return;
     }
@@ -2514,7 +2963,17 @@ export default function Home() {
             invoice: document.invoice,
             grossFreight: document.grossFreight,
             identifiers: [...document.identifiers],
+            observation: note,
           };
+        });
+        return next;
+      });
+    if (!selectedDrafts.length && noteChanged)
+      setRomaneioDocumentStatuses((current) => {
+        const next = { ...current };
+        Object.values(next).forEach((record) => {
+          if (record.day === group.day && record.driver === group.driver)
+            next[record.key] = { ...record, observation: note };
         });
         return next;
       });
@@ -2543,7 +3002,7 @@ export default function Home() {
       return next;
     });
     setMessage(
-      `${selectedDrafts.length} documento(s) gravado(s) para ${group.driver}.${routeChanged ? " A rota editada também foi salva." : ""}`,
+      `${selectedDrafts.length} documento(s) gravado(s) para ${group.driver}.${routeChanged ? " A rota editada também foi salva." : ""}${noteChanged ? " A observação também foi salva." : ""}${pickupChanged ? " A coleta também foi salva." : ""}`,
     );
     setMessageIsError(false);
   }
@@ -2938,6 +3397,10 @@ export default function Home() {
         importInfo: romaneioImportInfo,
         documentStatuses: romaneioDocumentStatuses,
         routeLabels: romaneioRouteLabels,
+        groupNotes: romaneioGroupNotes,
+        manualFreights: manualRomaneioFreights,
+        pickupQuantities: romaneioPickupQuantities,
+        driverDiscountPlans: driverClosingDiscountPlans,
       },
     };
     const url = URL.createObjectURL(
@@ -2981,6 +3444,10 @@ export default function Home() {
           importInfo?: RomaneioImportInfo | null;
           documentStatuses?: Record<string, RomaneioDocumentStatusRecord>;
           routeLabels?: Record<string, string>;
+          groupNotes?: Record<string, string>;
+          manualFreights?: Record<string, ManualRomaneioFreight[]>;
+          pickupQuantities?: Record<string, number>;
+          driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
         };
       };
       if (
@@ -3015,6 +3482,12 @@ export default function Home() {
         backup.romaneios?.documentStatuses || {},
       );
       setRomaneioRouteLabels(backup.romaneios?.routeLabels || {});
+      setRomaneioGroupNotes(backup.romaneios?.groupNotes || {});
+      setManualRomaneioFreights(backup.romaneios?.manualFreights || {});
+      setRomaneioPickupQuantities(backup.romaneios?.pickupQuantities || {});
+      setDriverClosingDiscountPlans(
+        backup.romaneios?.driverDiscountPlans || {},
+      );
       setSelectedExports([]);
       setMessage(
         cloudHosted
@@ -3304,30 +3777,119 @@ export default function Home() {
     );
   }
 
+  function openDriverClosingPreview() {
+    if (!selectedDriverClosingReports.length) {
+      setMessageIsError(true);
+      setMessage("Selecione ao menos um motorista para abrir a prévia.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    setDriverClosingPreviewOpen(true);
+    setMessageIsError(false);
+    setMessage("Prévia aberta. Confira cidades e observações antes de baixar o PDF.");
+  }
+
+  function updateDriverClosingDayEdit(
+    driverKey: string,
+    date: string,
+    field: keyof DriverClosingDayEdit,
+    value: string,
+  ) {
+    setDriverClosingDayEdits((current) => ({
+      ...current,
+      [driverClosingDayEditKey(driverKey, date)]: {
+        cityText:
+          field === "cityText"
+            ? value
+            : current[driverClosingDayEditKey(driverKey, date)]?.cityText ??
+              driverClosingSummaries
+                .find((driver) => driver.key === driverKey)
+                ?.days.find((day) => day.date === date)
+                ?.cities.join(" · ") ??
+              "",
+        observation:
+          field === "observation"
+            ? value
+            : current[driverClosingDayEditKey(driverKey, date)]?.observation ??
+              "",
+      },
+    }));
+  }
+
   function exportSelectedDriverClosings() {
-    const chosen = driverClosingSummaries.filter((driver) =>
-      selectedDriverClosings.includes(driver.key),
-    );
-    if (!chosen.length) {
+    if (!selectedDriverClosingReports.length) {
       setMessageIsError(true);
       setMessage("Selecione ao menos um motorista para exportar.");
       playRomaneioAttentionSound();
       return;
     }
-    chosen.forEach((driver) =>
-      exportDriverClosingXlsx({
-        driver: driver.driver,
-        cpf: driver.cpf,
-        plates: driver.plates,
-        vehicleTypes: driver.vehicleTypes,
-        periodFrom: driverClosingFrom,
-        periodTo: driverClosingTo,
-        days: driver.days,
-      }),
-    );
+    setDriverClosingDiscountPrompt({ amount: "", installments: "1" });
+    playRomaneioAttentionSound();
+  }
+
+  function finishDriverClosingExport(withDiscount: boolean) {
+    if (!selectedDriverClosingReports.length) {
+      setDriverClosingDiscountPrompt(null);
+      return;
+    }
+    const discountAmount = withDiscount
+      ? parseMoney(driverClosingDiscountPrompt?.amount || "")
+      : 0;
+    const installments = withDiscount
+      ? Math.max(
+          1,
+          Math.floor(Number(driverClosingDiscountPrompt?.installments || 1)),
+        )
+      : 1;
+    if (withDiscount && discountAmount <= 0) {
+      setMessageIsError(true);
+      setMessage("Informe o valor do desconto antes de gerar o PDF.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    const safeInstallments = Number.isFinite(installments) ? installments : 1;
+    const installmentAmount = roundMoney(discountAmount / safeInstallments);
+    const reports = selectedDriverClosingReports.map((driver) => {
+      const discounts = [...(driver.discounts || [])];
+      if (withDiscount) {
+        discounts.push({
+          description: "DESCONTO",
+          amount: installmentAmount,
+          installment: 1,
+          installments: safeInstallments,
+        });
+      }
+      return { ...driver, discounts };
+    });
+    reports.forEach((driver) => exportDriverClosingPdf(driver));
+    setDriverClosingDiscountPlans((current) => {
+      const next = { ...current };
+      selectedDriverClosingReports.forEach((driver) => {
+        const advanced = (next[driver.key] || [])
+          .map((plan) => ({
+            ...plan,
+            nextInstallment: plan.nextInstallment + 1,
+          }))
+          .filter((plan) => plan.nextInstallment <= plan.installments);
+        if (withDiscount && safeInstallments > 1) {
+          advanced.push({
+            id: crypto.randomUUID(),
+            driverKey: driver.key,
+            driver: driver.driver,
+            totalAmount: discountAmount,
+            installments: safeInstallments,
+            nextInstallment: 2,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        next[driver.key] = advanced;
+      });
+      return next;
+    });
+    setDriverClosingDiscountPrompt(null);
     setMessageIsError(false);
     setMessage(
-      `${chosen.length} fechamento(s) de motorista exportado(s) em arquivos separados.`,
+      `${selectedDriverClosingReports.length} fechamento(s) em PDF gerado(s) em arquivos separados.${withDiscount ? " O desconto foi aplicado e as parcelas futuras ficaram salvas." : ""}`,
     );
   }
 
@@ -4087,7 +4649,7 @@ export default function Home() {
                 <p>
                   Os romaneios do mesmo motorista são agrupados por dia. A
                   produção usa o frete localizado no relatório geral, com
-                  desconto de 12%.
+                  desconto de 13%.
                 </p>
               </div>
               <input
@@ -4122,6 +4684,13 @@ export default function Home() {
                 onClick={() => setRomaneioSection("closing")}
               >
                 Fechamento
+              </button>
+              <button
+                type="button"
+                className={romaneioSection === "full" ? "active" : ""}
+                onClick={() => setRomaneioSection("full")}
+              >
+                Romaneio completo
               </button>
             </div>
 
@@ -4216,17 +4785,9 @@ export default function Home() {
                           );
                         },
                       );
-                      const savedProduction = group.documents.reduce(
-                        (sum, document) => {
-                          const situation =
-                            romaneioDocumentStatuses[document.key]?.situation;
-                          return sum +
-                            (situation === "delivered" || situation === "retained"
-                              ? document.production
-                              : 0);
-                        },
-                        0,
-                      );
+                      const savedProduction = savedRomaneioProduction(group);
+                      const operationalDocumentCount =
+                        romaneioOperationalDocumentCount(group);
                       const routeLabel =
                         romaneioRouteDrafts[group.key] ??
                         romaneioRouteLabels[group.key] ??
@@ -4272,7 +4833,7 @@ export default function Home() {
                             </span>
                             <span className={pendingDocuments.length ? "waiting" : "linked"}>
                               <small>PENDENTES</small>
-                              <strong>{pendingDocuments.length} de {group.documents.length}</strong>
+                              <strong>{pendingDocuments.length} de {operationalDocumentCount}</strong>
                             </span>
                             <span className="daily-production">
                               <small>PRODUÇÃO</small>
@@ -4287,10 +4848,17 @@ export default function Home() {
                                 <span><small>EMISSÃO</small><strong>{formatRomaneioDay(group.day)}</strong></span>
                                 <span><small>MOTORISTA</small><strong>{group.driver}</strong></span>
                                 <span className="route-edit"><small>EM ROTA — PODE EDITAR</small><input value={routeLabel} onChange={(event) => setRomaneioRouteDrafts((current) => ({...current, [group.key]: event.target.value}))} /></span>
-                                <span><small>QUANTIDADE DE ENTREGAS</small><strong>{group.deliveries.toLocaleString("pt-BR")}</strong></span>
+                                <span><small>QUANTIDADE DE ENTREGAS</small><strong>{operationalDocumentCount.toLocaleString("pt-BR")}</strong></span>
                                 <span><small>PESO TOTAL</small><strong>{group.weight.toLocaleString("pt-BR")} kg</strong></span>
                                 <span><small>FRETE TOTAL DO ROMANEIO</small><strong>{money(group.freight)}</strong></span>
-                                <span className="production"><small>PRODUÇÃO GRAVADA (-12%)</small><strong>{money(savedProduction)}</strong></span>
+                                <span className="production"><small>PRODUÇÃO GRAVADA (-13%)</small><strong>{money(savedProduction)}</strong></span>
+                              </div>
+
+                              <div className="romaneio-bulk-actions">
+                                <button type="button" onClick={() => requestMarkAllRomaneioDelivered(group)}>
+                                  Marcar todos como Entregue
+                                </button>
+                                <small>Use apenas quando todos os documentos pendentes deste romaneio foram realmente entregues.</small>
                               </div>
 
                               {previousMissingDocuments.length > 0 && (
@@ -4320,7 +4888,7 @@ export default function Home() {
                                         </span>
                                         <span><strong>{document.sender || "Aguardando relatório"}</strong></span>
                                         <span><strong>{document.recipient || "Aguardando relatório"}</strong><small>{document.city || "Cidade não localizada"}</small></span>
-                                        <span className="document-values"><strong>{document.grossFreight ? money(document.grossFreight) : "Sem frete"}</strong><small>{document.grossFreight ? `${money(document.production)} após -12%` : "PROCV pendente"}</small></span>
+                                        <span className="document-values"><strong>{document.grossFreight ? money(document.grossFreight) : "Sem frete"}</strong><small>{document.grossFreight ? `${money(document.production)} após -13%` : "PROCV pendente"}</small></span>
                                         <span className="document-situation">
                                           <select value={draft.situation} onChange={(event) => requestRomaneioSituation(group.key, document, event.target.value as RomaneioSituation | "")}>
                                             <option value="">Selecione...</option>
@@ -4328,6 +4896,7 @@ export default function Home() {
                                             <option value="back">Volta (OC)</option>
                                             <option value="return">Retorno (OC)</option>
                                             <option value="retained">Retido (OC)</option>
+                                            <option value="not-followed">Não seguiu (OC)</option>
                                             <option value="driver-missing">Motorista não trouxe o documento</option>
                                           </select>
                                           {draft.situation === "return" && (
@@ -4342,6 +4911,79 @@ export default function Home() {
                                 <div className="daily-complete"><span>✓</span><div><strong>{draftCount ? "Documentos conferidos aguardando gravação" : "Todos os documentos foram gravados"}</strong><small>{draftCount ? "Clique em Gravar conferência para confirmar as situações e atualizar a produção." : "A produção e as situações continuam salvas."}</small></div></div>
                               )}
 
+                              <div className="manual-romaneio-freight">
+                                <div>
+                                  <small>NOTA MANUAL</small>
+                                  <strong>Adicionar NF e frete bruto</strong>
+                                  <p>O sistema soma 32% do frete bruto com desconto de 13% antes de entrar na produção.</p>
+                                </div>
+                                <label>
+                                  Nota fiscal
+                                  <input
+                                    value={manualRomaneioFreightDrafts[group.key]?.invoice || ""}
+                                    placeholder="NF"
+                                    onChange={(event) =>
+                                      setManualRomaneioFreightDrafts((current) => ({
+                                        ...current,
+                                        [group.key]: {
+                                          invoice: event.target.value,
+                                          grossFreight:
+                                            current[group.key]?.grossFreight || "",
+                                        },
+                                      }))
+                                    }
+                                  />
+                                </label>
+                                <label>
+                                  Frete bruto
+                                  <input
+                                    inputMode="decimal"
+                                    value={manualRomaneioFreightDrafts[group.key]?.grossFreight || ""}
+                                    placeholder="R$ 0,00"
+                                    onChange={(event) =>
+                                      setManualRomaneioFreightDrafts((current) => ({
+                                        ...current,
+                                        [group.key]: {
+                                          invoice: current[group.key]?.invoice || "",
+                                          grossFreight: event.target.value,
+                                        },
+                                      }))
+                                    }
+                                  />
+                                </label>
+                                <button type="button" onClick={() => addManualRomaneioFreight(group.key)}>
+                                  Adicionar nota
+                                </button>
+                                {manualRomaneioFreights[group.key]?.length ? (
+                                  <div className="manual-romaneio-freight-list">
+                                    {manualRomaneioFreights[group.key].map((item) => (
+                                      <span key={item.id}>
+                                        <b>NF {item.invoice}</b>
+                                        <small>
+                                          {money(item.grossFreight)} bruto · {money(manualFreightProduction(item.grossFreight))} na produção
+                                        </small>
+                                        <button type="button" onClick={() => removeManualRomaneioFreight(group.key, item.id)}>
+                                          Remover
+                                        </button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+
+                              <label className="romaneio-group-note">
+                                <small>OBSERVAÇÃO DA CONFERÊNCIA</small>
+                                <textarea
+                                  value={romaneioGroupNotes[group.key] || ""}
+                                  placeholder="Escreva uma observação geral deste dia, se necessário"
+                                  onChange={(event) =>
+                                    setRomaneioGroupNotes((current) => ({
+                                      ...current,
+                                      [group.key]: event.target.value,
+                                    }))
+                                  }
+                                />
+                              </label>
                               <div className="romaneio-save-bar">
                                 <span><strong>{draftCount} alteração(ões) aguardando gravação</strong><small>{hasInvalidReturn ? "Informe o motivo obrigatório do Retorno." : "Entregues e Retidos entram na produção."}</small></span>
                                 <button type="button" className="primary" onClick={() => saveRomaneioGroup(group)}>Gravar conferência</button>
@@ -4370,13 +5012,26 @@ export default function Home() {
                     {retainedRomaneioDocuments.map((record) => {
                       const currentDocument = currentRomaneioDocumentsByKey.get(record.key);
                       const grossFreight = currentDocument?.grossFreight || record.grossFreight;
+                      const sender =
+                        currentDocument?.sender ||
+                        record.sender ||
+                        "Aguardando relatório geral";
+                      const recipient =
+                        currentDocument?.recipient ||
+                        record.recipient ||
+                        "Aguardando relatório geral";
+                      const city =
+                        currentDocument?.city ||
+                        record.city ||
+                        record.routes.join(" · ") ||
+                        "Sem cidade";
                       return (
                         <label className={retainedResolutionDrafts[record.key] ? "selected" : ""} key={record.key}>
                           <input type="checkbox" checked={Boolean(retainedResolutionDrafts[record.key])} onChange={(event) => setRetainedResolutionDrafts((current) => ({...current, [record.key]: event.target.checked}))} />
                           <span className="document-id"><strong>{record.referenceType} {record.referenceNumber}</strong><small>{record.romaneios.join(" · ")} · {formatRomaneioDay(record.day)}</small></span>
                           <span><strong>{record.driver}</strong><small>{record.routes.join(" · ") || "Sem rota"}</small></span>
-                          <span><strong>{currentDocument?.sender || record.sender || "Remetente não localizado"}</strong><small>{currentDocument?.recipient || record.recipient || "Destinatário não localizado"} · {currentDocument?.city || record.city || "Sem cidade"}</small></span>
-                          <span className="document-values"><strong>{grossFreight ? money(grossFreight) : "Sem frete"}</strong><small>{grossFreight ? `${money(roundMoney(grossFreight * ROMANEIO_PRODUCTION_FACTOR))} de produção` : "PROCV pendente"}</small></span>
+                          <span><strong>{sender}</strong><small>{recipient} · {city}</small></span>
+                          <span className="document-values"><strong>{grossFreight ? money(grossFreight) : "Sem frete"}</strong><small>{grossFreight ? `${money(roundMoney(grossFreight * ROMANEIO_PRODUCTION_FACTOR))} após -13%` : "PROCV pendente"}</small></span>
                           <b>{retainedResolutionDrafts[record.key] ? "Baixar como entregue" : romaneioSituationLabel[record.situation]}</b>
                         </label>
                       );
@@ -4389,6 +5044,138 @@ export default function Home() {
               </div>
             )}
               </>
+            ) : romaneioSection === "full" ? (
+              <div className="romaneio-full-view">
+                <div className="toolbar driver-closing-toolbar">
+                  <div>
+                    <small>CONSULTA DE ROMANEIOS</small>
+                    <h2>Romaneio completo</h2>
+                    <p>Consulte por motorista, data ou número do romaneio e veja a situação atual de cada documento.</p>
+                  </div>
+                  <label>
+                    Procurar
+                    <input
+                      type="search"
+                      value={romaneioFullSearch}
+                      placeholder="Motorista, data, nº romaneio, cidade ou documento"
+                      onChange={(event) => setRomaneioFullSearch(event.target.value)}
+                    />
+                  </label>
+                </div>
+                {!visibleFullRomaneioGroups.length ? (
+                  <div className="empty romaneio-empty">
+                    <span>⌕</span>
+                    <h3>Nenhum romaneio encontrado</h3>
+                    <p>Altere a busca ou importe os relatórios de romaneio.</p>
+                  </div>
+                ) : (
+                  <div className="romaneio-full-list">
+                    {visibleFullRomaneioGroups.map((group) => {
+                      const routeLabel =
+                        romaneioRouteLabels[group.key] ||
+                        group.routes.join(" · ") ||
+                        "Sem rota";
+                      const savedProduction = savedRomaneioProduction(group);
+                      const operationalDocumentCount =
+                        romaneioOperationalDocumentCount(group);
+                      const pendingCount = group.documents.filter(
+                        (document) => !romaneioDocumentStatuses[document.key],
+                      ).length;
+                      return (
+                        <details className="romaneio-card romaneio-full-card" key={group.key}>
+                          <summary>
+                            <span>
+                              <small>EMISSÃO</small>
+                              <strong>{formatRomaneioDay(group.day)}</strong>
+                            </span>
+                            <span>
+                              <small>MOTORISTA</small>
+                              <strong>{group.driver}</strong>
+                              <em>{group.plates.join(", ") || "Sem placa"}</em>
+                            </span>
+                            <span>
+                              <small>Nº ROMANEIO</small>
+                              <strong>{group.romaneios.join(" · ")}</strong>
+                            </span>
+                            <span>
+                              <small>SITUAÇÃO</small>
+                              <strong>{pendingCount ? `${pendingCount} aberto(s)` : "Conferido"}</strong>
+                            </span>
+                            <span className="daily-production">
+                              <small>PRODUÇÃO</small>
+                              <strong>{money(savedProduction)}</strong>
+                            </span>
+                            <b aria-hidden="true">⌄</b>
+                          </summary>
+                          <div className="romaneio-detail daily-detail">
+                            <div className="romaneio-detail-info daily-info">
+                              <span><small>Nº ROMANEIO</small><strong>{group.romaneios.join(" · ")}</strong></span>
+                              <span><small>EMISSÃO</small><strong>{formatRomaneioDay(group.day)}</strong></span>
+                              <span><small>MOTORISTA</small><strong>{group.driver}</strong></span>
+                              <span><small>EM ROTA</small><strong>{routeLabel}</strong></span>
+                              <span><small>ENTREGAS</small><strong>{operationalDocumentCount.toLocaleString("pt-BR")}</strong></span>
+                              <span><small>PESO TOTAL</small><strong>{group.weight.toLocaleString("pt-BR")} kg</strong></span>
+                              <span><small>FRETE TOTAL DO ROMANEIO</small><strong>{money(group.freight)}</strong></span>
+                              <span className="production"><small>PRODUÇÃO GRAVADA (-13%)</small><strong>{money(savedProduction)}</strong></span>
+                            </div>
+                            {romaneioGroupNotes[group.key] && (
+                              <div className="romaneio-full-note">
+                                <small>OBSERVAÇÃO DA CONFERÊNCIA</small>
+                                <p>{romaneioGroupNotes[group.key]}</p>
+                              </div>
+                            )}
+                            {(manualRomaneioFreights[group.key]?.length ||
+                              romaneioPickupQuantities[group.key]) && (
+                              <div className="romaneio-full-note">
+                                <small>AJUSTES MANUAIS</small>
+                                <p>
+                                  {(manualRomaneioFreights[group.key] || [])
+                                    .map(
+                                      (item) =>
+                                        `NF ${item.invoice}: ${money(
+                                          manualFreightProduction(
+                                            item.grossFreight,
+                                          ),
+                                        )}`,
+                                    )
+                                    .join(" · ") || "Sem nota manual"}
+                                  {romaneioPickupQuantities[group.key]
+                                    ? ` · ${romaneioPickupQuantities[group.key]} coleta(s)`
+                                    : ""}
+                                </p>
+                              </div>
+                            )}
+                            <div className="daily-document-list">
+                              <div className="daily-document-head">
+                                <span>DOCUMENTO</span><span>REMETENTE</span><span>DESTINATÁRIO / CIDADE</span><span>FRETE / PRODUÇÃO</span><span>SITUAÇÃO</span>
+                              </div>
+                              {group.documents.map((document) => {
+                                const saved = romaneioDocumentStatuses[document.key];
+                                const city = document.city || routeLabel;
+                                return (
+                                  <div className="daily-document-row" key={document.key}>
+                                    <span className="document-id">
+                                      <strong>{document.referenceType} {document.referenceNumber}</strong>
+                                      <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}</small>
+                                    </span>
+                                    <span><strong>{document.sender || saved?.sender || "Aguardando relatório geral"}</strong></span>
+                                    <span><strong>{document.recipient || saved?.recipient || "Aguardando relatório geral"}</strong><small>{city || saved?.city || "Sem cidade"}</small></span>
+                                    <span className="document-values"><strong>{document.grossFreight ? money(document.grossFreight) : "Sem frete individual"}</strong><small>{document.grossFreight ? `${money(document.production)} após -13%` : "Usa frete total quando gravado"}</small></span>
+                                    <b className={saved ? "status-closed" : "status-open"}>
+                                      {saved ? romaneioSituationLabel[saved.situation] : "Aberto"}
+                                    </b>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <p className="romaneio-source">Arquivo(s): {group.sourceFiles.join(", ")}</p>
+                          </div>
+                        </details>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="driver-closing-view">
                 <div className="toolbar driver-closing-toolbar">
@@ -4410,7 +5197,7 @@ export default function Home() {
                   <span><small>MOTORISTAS NO PERÍODO</small><strong>{driverClosingSummaries.length}</strong></span>
                   <span><small>SELECIONADOS</small><strong>{driverClosingSummaries.filter((driver) => selectedDriverClosings.includes(driver.key)).length}</strong></span>
                   <span><small>NOTAS ENTREGUES</small><strong>{driverClosingSummaries.reduce((sum, driver) => sum + driver.totalInvoices, 0).toLocaleString("pt-BR")}</strong></span>
-                  <span><small>FRETE ENTREGUE</small><strong>{money(driverClosingSummaries.reduce((sum, driver) => sum + driver.totalFreight, 0))}</strong></span>
+                  <span><small>PRODUÇÃO GRAVADA</small><strong>{money(driverClosingSummaries.reduce((sum, driver) => sum + driver.totalFreight, 0))}</strong></span>
                 </div>
                 <div className="selection-head driver-selection-head">
                   <p>{selectedDriverClosings.length} motorista(s) marcado(s)</p>
@@ -4439,7 +5226,7 @@ export default function Home() {
                         </div>
                         <span><small>DIAS</small><strong>{driver.days.length}</strong></span>
                         <span><small>NOTAS</small><strong>{driver.totalInvoices}</strong></span>
-                        <span><small>FRETE</small><strong>{money(driver.totalFreight)}</strong></span>
+                        <span><small>PRODUÇÃO</small><strong>{money(driver.totalFreight)}</strong></span>
                       </label>
                     ))}
                   </div>
@@ -4447,9 +5234,86 @@ export default function Home() {
                   <div className="empty romaneio-empty"><span>□</span><h3>Nenhum motorista no período</h3><p>Altere as datas ou importe os relatórios de romaneio correspondentes.</p></div>
                 )}
                 <div className="driver-closing-export">
-                  <div><strong>Um Excel por motorista</strong><small>O arquivo traz uma linha por dia, cidades, notas, frete e os totais finais.</small></div>
-                  <button type="button" className="primary" onClick={exportSelectedDriverClosings}>Exportar selecionados</button>
+                  <div><strong>Prévia antes do PDF</strong><small>Confira os dias, ajuste cidades e inclua observações antes de gerar um arquivo PDF por motorista.</small></div>
+                  <button type="button" className="primary" onClick={openDriverClosingPreview}>Abrir prévia</button>
                 </div>
+                {driverClosingPreviewOpen && (
+                  <div className="driver-closing-preview">
+                    <div className="driver-closing-preview-head">
+                      <div>
+                        <small>PRÉVIA DO PDF</small>
+                        <h3>Conferir fechamento de motorista</h3>
+                        <p>As alterações feitas aqui valem para o PDF gerado agora e não mudam os dados originais dos romaneios.</p>
+                      </div>
+                      <button type="button" className="primary" onClick={exportSelectedDriverClosings}>Baixar PDF(s)</button>
+                    </div>
+                    {selectedDriverClosingReports.map((report) => {
+                      return (
+                        <section key={report.key} className="driver-pdf-preview-card">
+                          <div className="driver-pdf-preview-title">
+                            <div>
+                              <strong>{report.driver || "Motorista não informado"}</strong>
+                              <small>{report.cpf || "CPF não informado"} · {report.plates.join(", ") || "Sem placa"}</small>
+                            </div>
+                            <span><small>TOTAL</small><b>{money(report.days.reduce((sum, day) => sum + day.freight, 0))}</b></span>
+                          </div>
+                          {report.days.length ? (
+                            <div className="driver-pdf-days">
+                              <div className="driver-pdf-day-head">
+                                <span>Data</span>
+                                <span>Cidade do dia</span>
+                                <span>Notas</span>
+                                <span>Produção</span>
+                                <span>Observação</span>
+                              </div>
+                              {report.days.map((day) => {
+                                const editKey = driverClosingDayEditKey(
+                                  report.key,
+                                  day.date,
+                                );
+                                const edit = driverClosingDayEdits[editKey];
+                                return (
+                                  <div className="driver-pdf-day-row" key={day.date}>
+                                    <span><strong>{formatRomaneioDay(day.date)}</strong></span>
+                                    <input
+                                      value={edit?.cityText ?? day.cityText ?? day.cities.join(" · ")}
+                                      onChange={(event) =>
+                                        updateDriverClosingDayEdit(
+                                          report.key,
+                                          day.date,
+                                          "cityText",
+                                          event.target.value,
+                                        )
+                                      }
+                                      aria-label={`Cidade de ${formatRomaneioDay(day.date)}`}
+                                    />
+                                    <span><strong>{day.invoiceCount}</strong></span>
+                                    <span><strong>{money(day.freight)}</strong></span>
+                                    <input
+                                      value={edit?.observation ?? day.observation ?? ""}
+                                      onChange={(event) =>
+                                        updateDriverClosingDayEdit(
+                                          report.key,
+                                          day.date,
+                                          "observation",
+                                          event.target.value,
+                                        )
+                                      }
+                                      placeholder="Observação do dia"
+                                      aria-label={`Observação de ${formatRomaneioDay(day.date)}`}
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="driver-pdf-empty">Nenhum dia entregue gravado para este motorista no período.</p>
+                          )}
+                        </section>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -5164,6 +6028,201 @@ export default function Home() {
                   }}
                 >
                   Sim, confirmar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {romaneioMarkAllConfirmation && (
+          <div className="romaneio-alert-overlay">
+            <div
+              className="romaneio-alert-dialog situation-confirmation"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="mark-all-confirmation-title"
+            >
+              <span className="romaneio-alert-icon" aria-hidden="true">!</span>
+              <div className="romaneio-alert-copy">
+                <small>CONFIRMAÇÃO OBRIGATÓRIA</small>
+                <h2 id="mark-all-confirmation-title">Marcar todos como Entregue?</h2>
+                <p>
+                  Esta ação vai preparar <strong>{romaneioMarkAllConfirmation.pendingCount} documento(s)</strong> pendente(s) deste romaneio como <strong>Entregue (ET)</strong>. A gravação definitiva ainda acontece no botão Gravar conferência.
+                </p>
+              </div>
+              <div className="romaneio-alert-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setRomaneioMarkAllConfirmation(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() =>
+                    markAllRomaneioDelivered(
+                      romaneioMarkAllConfirmation.groupKey,
+                    )
+                  }
+                >
+                  Sim, marcar todos
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {driverClosingDiscountPrompt && (
+          <div className="romaneio-alert-overlay">
+            <div
+              className="romaneio-alert-dialog driver-discount-dialog"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="driver-discount-title"
+            >
+              <span className="romaneio-alert-icon" aria-hidden="true">!</span>
+              <div className="romaneio-alert-copy">
+                <small>ANTES DE EXPORTAR</small>
+                <h2 id="driver-discount-title">Houve desconto?</h2>
+                <p>
+                  Se houver desconto para o fechamento selecionado, informe o valor total e em quantas vezes será descontado.
+                </p>
+                <div className="driver-discount-fields">
+                  <label>
+                    Valor do desconto
+                    <input
+                      inputMode="decimal"
+                      value={driverClosingDiscountPrompt.amount}
+                      placeholder="R$ 0,00"
+                      onChange={(event) =>
+                        setDriverClosingDiscountPrompt((current) =>
+                          current
+                            ? { ...current, amount: event.target.value }
+                            : current,
+                        )
+                      }
+                    />
+                  </label>
+                  <label>
+                    Quantas vezes
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={driverClosingDiscountPrompt.installments}
+                      onChange={(event) =>
+                        setDriverClosingDiscountPrompt((current) =>
+                          current
+                            ? { ...current, installments: event.target.value }
+                            : current,
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+              <div className="romaneio-alert-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => finishDriverClosingExport(false)}
+                >
+                  Não houve desconto
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => finishDriverClosingExport(true)}
+                >
+                  Aplicar e gerar PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {romaneioPickupConfirmation && (
+          <div className="romaneio-alert-overlay">
+            <div
+              className="romaneio-alert-dialog pickup-confirmation"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="pickup-confirmation-title"
+            >
+              <span className="romaneio-alert-icon" aria-hidden="true">?</span>
+              <div className="romaneio-alert-copy">
+                <small>ANTES DE GRAVAR</small>
+                <h2 id="pickup-confirmation-title">Houve coleta?</h2>
+                <p>
+                  Se houve coleta neste romaneio, informe a quantidade. Ela será somada à quantidade de documentos no fechamento.
+                </p>
+                <label className="pickup-quantity-field">
+                  Quantidade de coletas
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={romaneioPickupConfirmation.quantity}
+                    placeholder="0"
+                    onChange={(event) =>
+                      setRomaneioPickupConfirmation((current) =>
+                        current
+                          ? { ...current, quantity: event.target.value }
+                          : current,
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <div className="romaneio-alert-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    const confirmation = romaneioPickupConfirmation;
+                    if (!confirmation) return;
+                    setRomaneioPickupQuantities((current) => ({
+                      ...current,
+                      [confirmation.groupKey]: 0,
+                    }));
+                    setRomaneioPickupConfirmation(null);
+                    const group = romaneioDailyGroups.find(
+                      (candidate) => candidate.key === confirmation.groupKey,
+                    );
+                    if (group)
+                      saveRomaneioGroup(group, confirmation.allowPending, true, 0);
+                  }}
+                >
+                  Não houve coleta
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => {
+                    const confirmation = romaneioPickupConfirmation;
+                    if (!confirmation) return;
+                    const quantity = Math.max(
+                      0,
+                      Math.floor(Number(confirmation.quantity || 0)),
+                    );
+                    const safeQuantity = Number.isFinite(quantity) ? quantity : 0;
+                    setRomaneioPickupQuantities((current) => ({
+                      ...current,
+                      [confirmation.groupKey]: safeQuantity,
+                    }));
+                    setRomaneioPickupConfirmation(null);
+                    const group = romaneioDailyGroups.find(
+                      (candidate) => candidate.key === confirmation.groupKey,
+                    );
+                    if (group)
+                      saveRomaneioGroup(
+                        group,
+                        confirmation.allowPending,
+                        true,
+                        safeQuantity,
+                      );
+                  }}
+                >
+                  Confirmar e gravar
                 </button>
               </div>
             </div>
