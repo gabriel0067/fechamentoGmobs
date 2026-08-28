@@ -14,6 +14,11 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
+  vars: {
+    GMOBS_LOGIN_USER: process.env.GMOBS_LOGIN_USER,
+    GMOBS_LOGIN_PASSWORD: process.env.GMOBS_LOGIN_PASSWORD,
+    GMOBS_SESSION_SECRET: process.env.GMOBS_SESSION_SECRET,
+  },
   d1_databases: d1
     ? [
         {

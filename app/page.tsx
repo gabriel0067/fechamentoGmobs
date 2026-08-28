@@ -196,6 +196,11 @@ type RomaneioSituationConfirmation = {
   situation: Exclude<RomaneioSituation, "delivered">;
   reference: string;
 };
+type RomaneioBatchSituationConfirmation = {
+  groupKey: string;
+  documentKeys: string[];
+  situation: RomaneioSituation;
+};
 type RomaneioDailyDocument = {
   key: string;
   document: string;
@@ -411,7 +416,20 @@ const operationalIdentifier = (value?: string) => {
   const digits = text.replace(/\D/g, "");
   return digits.replace(/^0+/, "") || (digits ? "0" : "");
 };
+const cteNumberFromAccessKey = (value?: string) => {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length !== 44) return "";
+  return digits.slice(25, 34).replace(/^0+/, "") || "0";
+};
+const operationalIdentifiers = (value?: string) =>
+  [
+    operationalIdentifier(value),
+    cteNumberFromAccessKey(value),
+  ].filter(Boolean);
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const newId = () =>
+  globalThis.crypto?.randomUUID?.() ||
+  `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 const ROMANEIO_PRODUCTION_FACTOR = 0.87;
 const MANUAL_ROMANEIO_FREIGHT_FACTOR = 0.32 * ROMANEIO_PRODUCTION_FACTOR;
 const romaneioDaysElapsed = (day: string) => {
@@ -436,19 +454,20 @@ const playRomaneioSuccessSound = () => {
   try {
     const context = new AudioContext();
     const start = context.currentTime;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = "square";
-    oscillator.frequency.setValueAtTime(1250, start);
-    oscillator.frequency.exponentialRampToValueAtTime(1750, start + 0.1);
-    gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.24, start + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start(start);
-    oscillator.stop(start + 0.19);
-    window.setTimeout(() => void context.close(), 450);
+    [0, 0.13, 0.26].forEach((offset, index) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "square";
+      oscillator.frequency.setValueAtTime([880, 1320, 1760][index], start + offset);
+      gain.gain.setValueAtTime(0.0001, start + offset);
+      gain.gain.exponentialRampToValueAtTime(0.34, start + offset + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.11);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(start + offset);
+      oscillator.stop(start + offset + 0.12);
+    });
+    window.setTimeout(() => void context.close(), 650);
   } catch {
     /* a confirmação visual continua funcionando quando o navegador bloqueia áudio */
   }
@@ -457,20 +476,27 @@ const playRomaneioAttentionSound = () => {
   try {
     const context = new AudioContext();
     const start = context.currentTime;
-    [0, 0.2, 0.4].forEach((offset) => {
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = "square";
-      oscillator.frequency.setValueAtTime(620, start + offset);
-      gain.gain.setValueAtTime(0.0001, start + offset);
-      gain.gain.exponentialRampToValueAtTime(0.3, start + offset + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.17);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start(start + offset);
-      oscillator.stop(start + offset + 0.18);
+    const master = context.createGain();
+    master.gain.setValueAtTime(0.95, start);
+    master.connect(context.destination);
+    [0, 0.22, 0.44, 0.66, 0.88, 1.1].forEach((offset, index) => {
+      [0, 0.04].forEach((detuneOffset) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "sawtooth";
+        oscillator.frequency.setValueAtTime(index % 2 ? 1120 : 430, start + offset);
+        oscillator.frequency.linearRampToValueAtTime(index % 2 ? 430 : 1120, start + offset + 0.18);
+        oscillator.detune.setValueAtTime(detuneOffset ? 18 : -18, start + offset);
+        gain.gain.setValueAtTime(0.0001, start + offset);
+        gain.gain.exponentialRampToValueAtTime(0.48, start + offset + 0.018);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.2);
+        oscillator.connect(gain);
+        gain.connect(master);
+        oscillator.start(start + offset);
+        oscillator.stop(start + offset + 0.21);
+      });
     });
-    window.setTimeout(() => void context.close(), 900);
+    window.setTimeout(() => void context.close(), 1700);
   } catch {
     /* o alerta visual continua funcionando quando o navegador bloqueia áudio */
   }
@@ -769,6 +795,10 @@ export default function Home() {
     useState<RomaneioPendingAlert | null>(null);
   const [romaneioSituationConfirmation, setRomaneioSituationConfirmation] =
     useState<RomaneioSituationConfirmation | null>(null);
+  const [
+    romaneioBatchSituationConfirmation,
+    setRomaneioBatchSituationConfirmation,
+  ] = useState<RomaneioBatchSituationConfirmation | null>(null);
   const [romaneioMarkAllConfirmation, setRomaneioMarkAllConfirmation] =
     useState<RomaneioMarkAllConfirmation | null>(null);
   const [romaneioPickupConfirmation, setRomaneioPickupConfirmation] =
@@ -856,6 +886,8 @@ export default function Home() {
   const [romaneioDocumentDrafts, setRomaneioDocumentDrafts] = useState<
     Record<string, Record<string, RomaneioDocumentDraft>>
   >({});
+  const [selectedRomaneioDocumentKeys, setSelectedRomaneioDocumentKeys] =
+    useState<Record<string, string[]>>({});
   const [romaneioRouteDrafts, setRomaneioRouteDrafts] = useState<
     Record<string, string>
   >({});
@@ -1666,8 +1698,10 @@ export default function Home() {
     references.forEach((entry) => {
       const mde = numericDocumentId(entry.mde);
       const cte = numericDocumentId(entry.cte);
+      const cteFromKey = cteNumberFromAccessKey(entry.cteKey);
       if (mde) mdes.set(mde, [...(mdes.get(mde) || []), entry]);
       if (cte) ctes.set(cte, [...(ctes.get(cte) || []), entry]);
+      if (cteFromKey) ctes.set(cteFromKey, [...(ctes.get(cteFromKey) || []), entry]);
     });
     const matches = new Map<
       string,
@@ -1739,10 +1773,10 @@ export default function Home() {
       const romaneioTotalKey = normalized(row.romaneio) || row.id;
       const previousTotal = current.importedTotalsByRomaneio[romaneioTotalKey];
       current.importedTotalsByRomaneio[romaneioTotalKey] = {
-        freight: Math.max(previousTotal?.freight || 0, row.freight),
-        weight: Math.max(previousTotal?.weight || 0, row.weight),
-        deliveries: Math.max(previousTotal?.deliveries || 0, row.deliveries),
-        volumes: Math.max(previousTotal?.volumes || 0, row.volumes),
+        freight: roundMoney((previousTotal?.freight || 0) + row.freight),
+        weight: roundMoney((previousTotal?.weight || 0) + row.weight),
+        deliveries: (previousTotal?.deliveries || 0) + row.deliveries,
+        volumes: (previousTotal?.volumes || 0) + row.volumes,
       };
 
       row.documents.forEach((document) => {
@@ -1772,6 +1806,7 @@ export default function Home() {
             numericDocumentId(entry.mde),
             numericDocumentId(entry.cte),
             operationalIdentifier(entry.cteKey),
+            cteNumberFromAccessKey(entry.cteKey),
             normalizeInvoiceKey(entry.invoice),
           ]),
         ].filter(Boolean) as string[];
@@ -2608,6 +2643,102 @@ export default function Home() {
     playRomaneioAttentionSound();
   }
 
+  function toggleRomaneioDocumentSelection(
+    groupKey: string,
+    documentKey: string,
+    checked: boolean,
+  ) {
+    setSelectedRomaneioDocumentKeys((current) => {
+      const selected = current[groupKey] || [];
+      return {
+        ...current,
+        [groupKey]: checked
+          ? [...new Set([...selected, documentKey])]
+          : selected.filter((key) => key !== documentKey),
+      };
+    });
+  }
+
+  function requestBatchRomaneioSituation(
+    group: RomaneioDailyGroup,
+    situation: RomaneioSituation | "",
+  ) {
+    if (!situation) return;
+    const selected = selectedRomaneioDocumentKeys[group.key] || [];
+    if (!selected.length) {
+      setMessageIsError(true);
+      setMessage("Selecione ao menos um documento para lançar a ocorrência.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    if (situation === "delivered") {
+      setRomaneioDocumentDrafts((current) => {
+        const currentDrafts = current[group.key] || {};
+        const nextDrafts = { ...currentDrafts };
+        selected.forEach((documentKey) => {
+          nextDrafts[documentKey] = { situation: "delivered", reason: "" };
+        });
+        return { ...current, [group.key]: nextDrafts };
+      });
+      setSelectedRomaneioDocumentKeys((current) => ({
+        ...current,
+        [group.key]: [],
+      }));
+      setMessageIsError(false);
+      setMessage(`${selected.length} documento(s) marcados como Entregue.`);
+      playRomaneioSuccessSound();
+      return;
+    }
+    setRomaneioBatchSituationConfirmation({
+      groupKey: group.key,
+      documentKeys: selected,
+      situation,
+    });
+    playRomaneioAttentionSound();
+  }
+
+  function confirmBatchRomaneioSituation() {
+    const confirmation = romaneioBatchSituationConfirmation;
+    if (!confirmation) return;
+    setRomaneioDocumentDrafts((current) => {
+      const currentDrafts = current[confirmation.groupKey] || {};
+      const nextDrafts = { ...currentDrafts };
+      confirmation.documentKeys.forEach((documentKey) => {
+        nextDrafts[documentKey] = {
+          situation: confirmation.situation,
+          reason:
+            confirmation.situation === "return"
+              ? currentDrafts[documentKey]?.reason || ""
+              : "",
+        };
+      });
+      return { ...current, [confirmation.groupKey]: nextDrafts };
+    });
+    setSelectedRomaneioDocumentKeys((current) => ({
+      ...current,
+      [confirmation.groupKey]: [],
+    }));
+    setRomaneioBatchSituationConfirmation(null);
+    setMessageIsError(false);
+    setMessage(
+      `${confirmation.documentKeys.length} documento(s) preparados como ${romaneioSituationLabel[confirmation.situation]}.`,
+    );
+  }
+
+  function undoRomaneioDocumentStatus(documentKey: string) {
+    setRomaneioDocumentStatuses((current) => {
+      const next = { ...current };
+      delete next[documentKey];
+      return next;
+    });
+    setEntries((current) =>
+      current.filter((entry) => entry.romaneioDocumentKey !== documentKey),
+    );
+    setMessageIsError(false);
+    setMessage("Situação desfeita. O documento voltou para conferência.");
+    playRomaneioAttentionSound();
+  }
+
   function setRomaneioReturnReason(
     groupKey: string,
     documentKey: string,
@@ -2687,7 +2818,7 @@ export default function Home() {
       ...current,
       [groupKey]: [
         ...(current[groupKey] || []),
-        { id: crypto.randomUUID(), invoice, grossFreight },
+        { id: newId(), invoice, grossFreight },
       ],
     }));
     setManualRomaneioFreightDrafts((current) => ({
@@ -2749,8 +2880,8 @@ export default function Home() {
 
   function scanOrSearchRomaneio() {
     const typed = romaneioSearch.trim();
-    const identifier = operationalIdentifier(typed);
-    if (!identifier) {
+    const typedIdentifiers = operationalIdentifiers(typed);
+    if (!typedIdentifiers.length) {
       setMessageIsError(true);
       setMessage(
         "Digite um motorista para pesquisar ou bipe um MD-e, CT-e Parceiro, chave da AK ou NF válida.",
@@ -2766,7 +2897,7 @@ export default function Home() {
       .map(([groupKey]) => groupKey);
 
     const retained = retainedRomaneioDocuments.find((record) =>
-      record.identifiers.includes(identifier),
+      typedIdentifiers.some((item) => record.identifiers.includes(item)),
     );
     if (retained) {
       const retainedGroup = romaneioDailyGroups.find((group) =>
@@ -2812,7 +2943,9 @@ export default function Home() {
 
     const matches = romaneioDailyGroups.flatMap((group) =>
       group.documents
-        .filter((document) => document.identifiers.includes(identifier))
+        .filter((document) =>
+          typedIdentifiers.some((item) => document.identifiers.includes(item)),
+        )
         .map((document) => ({ group, document })),
     );
     const pendingMatch = matches.find(
@@ -2885,7 +3018,7 @@ export default function Home() {
       if (!draft?.situation) return true;
       return draft.situation === "return" && !draft.reason.trim();
     }).length;
-    if (!allowPending && selectedDrafts.length && pendingCount) {
+    if (pendingCount) {
       setMessage("");
       setRomaneioPendingAlert({
         kind: "save-with-pending",
@@ -3008,15 +3141,15 @@ export default function Home() {
   }
 
   function scanRetainedDocument() {
-    const identifier = operationalIdentifier(retainedScanInput);
-    if (!identifier) {
+    const typedIdentifiers = operationalIdentifiers(retainedScanInput);
+    if (!typedIdentifiers.length) {
       setMessageIsError(true);
       setMessage("Digite ou bipe um MD-e ou CT-e Parceiro válido.");
       playRomaneioAttentionSound();
       return;
     }
     const matching = retainedRomaneioDocuments.find((record) =>
-      record.identifiers.includes(identifier),
+      typedIdentifiers.some((item) => record.identifiers.includes(item)),
     );
     if (!matching) {
       setMessageIsError(true);
@@ -3528,7 +3661,7 @@ export default function Home() {
           seen.add(key);
           additions.push({
             ...row,
-            id: crypto.randomUUID(),
+            id: newId(),
             sourceFile: file.name,
           });
         });
@@ -3631,7 +3764,7 @@ export default function Home() {
               romaneioOperationalStatus(savedOperation.situation)
             : "";
         return {
-          id: crypto.randomUUID(),
+          id: newId(),
           partnerId: partner.id,
           partnerName: partner.name,
           partnerRaw: row.partner,
@@ -3873,7 +4006,7 @@ export default function Home() {
           .filter((plan) => plan.nextInstallment <= plan.installments);
         if (withDiscount && safeInstallments > 1) {
           advanced.push({
-            id: crypto.randomUUID(),
+            id: newId(),
             driverKey: driver.key,
             driver: driver.driver,
             totalAmount: discountAmount,
@@ -4642,33 +4775,14 @@ export default function Home() {
         )}
         {tab === "romaneios" && (
           <div className="romaneio-view">
-            <div className="romaneio-heading">
-              <div>
-                <small>CONTROLE OPERACIONAL</small>
-                <h2>Conferência diária por motorista</h2>
-                <p>
-                  Os romaneios do mesmo motorista são agrupados por dia. A
-                  produção usa o frete localizado no relatório geral, com
-                  desconto de 13%.
-                </p>
-              </div>
-              <input
-                ref={romaneioInputRef}
-                hidden
-                multiple
-                type="file"
-                accept=".xls,.xlsx,.csv"
-                onChange={importRomaneios}
-              />
-              <button
-                type="button"
-                className="primary"
-                disabled={importingRomaneios}
-                onClick={() => romaneioInputRef.current?.click()}
-              >
-                {importingRomaneios ? "Lendo..." : "Importar outros relatórios"}
-              </button>
-            </div>
+            <input
+              ref={romaneioInputRef}
+              hidden
+              multiple
+              type="file"
+              accept=".xls,.xlsx,.csv"
+              onChange={importRomaneios}
+            />
 
             <div className="romaneio-subtabs romaneio-main-subtabs">
               <button
@@ -4779,10 +4893,7 @@ export default function Home() {
                           if (romaneioDocumentStatuses[document.key]) return false;
                           const draft = drafts[document.key];
                           if (!draft?.situation) return true;
-                          return (
-                            draft.situation === "return" &&
-                            !draft.reason.trim()
-                          );
+                          return draft.situation === "return";
                         },
                       );
                       const savedProduction = savedRomaneioProduction(group);
@@ -4795,6 +4906,8 @@ export default function Home() {
                       const draftCount = Object.values(drafts).filter(
                         (draft) => draft.situation,
                       ).length;
+                      const selectedDocumentKeys =
+                        selectedRomaneioDocumentKeys[group.key] || [];
                       const hasInvalidReturn = Object.values(drafts).some(
                         (draft) =>
                           draft.situation === "return" && !draft.reason.trim(),
@@ -4874,39 +4987,105 @@ export default function Home() {
                               )}
 
                               {pendingDocuments.length ? (
-                                <div className="daily-document-list">
-                                  <div className="daily-document-head">
-                                    <span>DOCUMENTO</span><span>REMETENTE</span><span>DESTINATÁRIO / CIDADE</span><span>FRETE DO RELATÓRIO / PRODUÇÃO</span><span>SITUAÇÃO</span>
+                                <>
+                                  <div className="romaneio-batch-actions">
+                                    <label>
+                                      <input
+                                        type="checkbox"
+                                        checked={
+                                          pendingDocuments.length > 0 &&
+                                          selectedDocumentKeys.length ===
+                                            pendingDocuments.length
+                                        }
+                                        onChange={(event) =>
+                                          setSelectedRomaneioDocumentKeys(
+                                            (current) => ({
+                                              ...current,
+                                              [group.key]: event.target.checked
+                                                ? pendingDocuments.map(
+                                                    (document) => document.key,
+                                                  )
+                                                : [],
+                                            }),
+                                          )
+                                        }
+                                      />
+                                      Selecionar todos visíveis
+                                    </label>
+                                    <select
+                                      value=""
+                                      onChange={(event) => {
+                                        requestBatchRomaneioSituation(
+                                          group,
+                                          event.target.value as
+                                            | RomaneioSituation
+                                            | "",
+                                        );
+                                        event.currentTarget.value = "";
+                                      }}
+                                    >
+                                      <option value="">Lançar ocorrência nos selecionados...</option>
+                                      <option value="delivered">Entregue (ET)</option>
+                                      <option value="back">Volta (OC)</option>
+                                      <option value="return">Retorno (OC)</option>
+                                      <option value="retained">Retido (OC)</option>
+                                      <option value="not-followed">Não seguiu (OC)</option>
+                                      <option value="driver-missing">Motorista não trouxe o documento</option>
+                                    </select>
+                                    <small>
+                                      {selectedDocumentKeys.length} selecionado(s)
+                                    </small>
                                   </div>
-                                  {pendingDocuments.map((document) => {
-                                    const draft = drafts[document.key] || {situation: "", reason: ""};
-                                    return (
-                                      <div className="daily-document-row" key={document.key}>
-                                        <span className="document-id">
-                                          <strong>{document.referenceType} {document.referenceNumber}</strong>
-                                          <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}{document.sourceStatus ? ` · Origem ${document.sourceStatus}` : ""}</small>
-                                        </span>
-                                        <span><strong>{document.sender || "Aguardando relatório"}</strong></span>
-                                        <span><strong>{document.recipient || "Aguardando relatório"}</strong><small>{document.city || "Cidade não localizada"}</small></span>
-                                        <span className="document-values"><strong>{document.grossFreight ? money(document.grossFreight) : "Sem frete"}</strong><small>{document.grossFreight ? `${money(document.production)} após -13%` : "PROCV pendente"}</small></span>
-                                        <span className="document-situation">
-                                          <select value={draft.situation} onChange={(event) => requestRomaneioSituation(group.key, document, event.target.value as RomaneioSituation | "")}>
-                                            <option value="">Selecione...</option>
-                                            <option value="delivered">Entregue (ET)</option>
-                                            <option value="back">Volta (OC)</option>
-                                            <option value="return">Retorno (OC)</option>
-                                            <option value="retained">Retido (OC)</option>
-                                            <option value="not-followed">Não seguiu (OC)</option>
-                                            <option value="driver-missing">Motorista não trouxe o documento</option>
-                                          </select>
-                                          {draft.situation === "return" && (
-                                            <input className="return-reason" required value={draft.reason} placeholder="Motivo obrigatório" onChange={(event) => setRomaneioReturnReason(group.key, document.key, event.target.value)} />
-                                          )}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                                  <div className="daily-document-list">
+                                    <div className="daily-document-head">
+                                      <span>DOCUMENTO</span><span>REMETENTE</span><span>DESTINATÁRIO / CIDADE</span><span>FRETE DO RELATÓRIO / PRODUÇÃO</span><span>SITUAÇÃO</span>
+                                    </div>
+                                    {pendingDocuments.map((document) => {
+                                      const draft = drafts[document.key] || {situation: "", reason: ""};
+                                      return (
+                                        <div className="daily-document-row" key={document.key}>
+                                          <span className="document-id">
+                                            <label className="romaneio-row-check">
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedDocumentKeys.includes(
+                                                  document.key,
+                                                )}
+                                                onChange={(event) =>
+                                                  toggleRomaneioDocumentSelection(
+                                                    group.key,
+                                                    document.key,
+                                                    event.target.checked,
+                                                  )
+                                                }
+                                              />
+                                              <span>Selecionar</span>
+                                            </label>
+                                            <strong>{document.referenceType} {document.referenceNumber}</strong>
+                                            <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}{document.sourceStatus ? ` · Origem ${document.sourceStatus}` : ""}</small>
+                                          </span>
+                                          <span><strong>{document.sender || "Aguardando relatório"}</strong></span>
+                                          <span><strong>{document.recipient || "Aguardando relatório"}</strong><small>{document.city || "Cidade não localizada"}</small></span>
+                                          <span className="document-values"><strong>{document.grossFreight ? money(document.grossFreight) : "Sem frete"}</strong><small>{document.grossFreight ? `${money(document.production)} após -13%` : "PROCV pendente"}</small></span>
+                                          <span className="document-situation">
+                                            <select value={draft.situation} onChange={(event) => requestRomaneioSituation(group.key, document, event.target.value as RomaneioSituation | "")}>
+                                              <option value="">Selecione...</option>
+                                              <option value="delivered">Entregue (ET)</option>
+                                              <option value="back">Volta (OC)</option>
+                                              <option value="return">Retorno (OC)</option>
+                                              <option value="retained">Retido (OC)</option>
+                                              <option value="not-followed">Não seguiu (OC)</option>
+                                              <option value="driver-missing">Motorista não trouxe o documento</option>
+                                            </select>
+                                            {draft.situation === "return" && (
+                                              <input className="return-reason" required value={draft.reason} placeholder="Motivo obrigatório" onChange={(event) => setRomaneioReturnReason(group.key, document.key, event.target.value)} />
+                                            )}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </>
                               ) : (
                                 <div className="daily-complete"><span>✓</span><div><strong>{draftCount ? "Documentos conferidos aguardando gravação" : "Todos os documentos foram gravados"}</strong><small>{draftCount ? "Clique em Gravar conferência para confirmar as situações e atualizar a produção." : "A produção e as situações continuam salvas."}</small></div></div>
                               )}
@@ -5161,9 +5340,22 @@ export default function Home() {
                                     <span><strong>{document.sender || saved?.sender || "Aguardando relatório geral"}</strong></span>
                                     <span><strong>{document.recipient || saved?.recipient || "Aguardando relatório geral"}</strong><small>{city || saved?.city || "Sem cidade"}</small></span>
                                     <span className="document-values"><strong>{document.grossFreight ? money(document.grossFreight) : "Sem frete individual"}</strong><small>{document.grossFreight ? `${money(document.production)} após -13%` : "Usa frete total quando gravado"}</small></span>
-                                    <b className={saved ? "status-closed" : "status-open"}>
-                                      {saved ? romaneioSituationLabel[saved.situation] : "Aberto"}
-                                    </b>
+                                    <span className="document-saved-status">
+                                      <b className={saved ? "status-closed" : "status-open"}>
+                                        {saved ? romaneioSituationLabel[saved.situation] : "Aberto"}
+                                      </b>
+                                      {saved?.reason ? <small>Motivo: {saved.reason}</small> : null}
+                                      {saved ? (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            undoRomaneioDocumentStatus(document.key)
+                                          }
+                                        >
+                                          Desfazer
+                                        </button>
+                                      ) : null}
+                                    </span>
                                   </div>
                                 );
                               })}
@@ -6033,6 +6225,41 @@ export default function Home() {
             </div>
           </div>
         )}
+        {romaneioBatchSituationConfirmation && (
+          <div className="romaneio-alert-overlay">
+            <div
+              className="romaneio-alert-dialog situation-confirmation"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="batch-situation-confirmation-title"
+            >
+              <span className="romaneio-alert-icon" aria-hidden="true">!</span>
+              <div className="romaneio-alert-copy">
+                <small>CONFIRMAÇÃO OBRIGATÓRIA</small>
+                <h2 id="batch-situation-confirmation-title">Lançar ocorrência em lote?</h2>
+                <p>
+                  Você está marcando <strong>{romaneioBatchSituationConfirmation.documentKeys.length} documento(s)</strong> como <strong>{romaneioSituationLabel[romaneioBatchSituationConfirmation.situation]}</strong>.
+                </p>
+              </div>
+              <div className="romaneio-alert-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setRomaneioBatchSituationConfirmation(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={confirmBatchRomaneioSituation}
+                >
+                  Sim, lançar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {romaneioMarkAllConfirmation && (
           <div className="romaneio-alert-overlay">
             <div
@@ -6249,7 +6476,7 @@ export default function Home() {
                 <p>
                   {romaneioPendingAlert.kind === "change-romaneio"
                     ? "Você tentou bipar um documento de outro romaneio. As marcações atuais ainda não foram gravadas."
-                    : "Esses documentos ainda não receberam uma situação. Confira a lista ou confirme que deseja fazer uma gravação parcial."}
+                    : "Esses documentos ainda não receberam uma situação. Todos precisam estar como Entregue ou com ocorrência antes de gravar."}
                 </p>
               </div>
               <div className="romaneio-alert-actions">
@@ -6260,22 +6487,6 @@ export default function Home() {
                 >
                   Voltar e conferir
                 </button>
-                {romaneioPendingAlert.kind === "save-with-pending" && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => {
-                      const alert = romaneioPendingAlert;
-                      const group = romaneioDailyGroups.find(
-                        (candidate) => candidate.key === alert.groupKey,
-                      );
-                      setRomaneioPendingAlert(null);
-                      if (group) saveRomaneioGroup(group, true);
-                    }}
-                  >
-                    Gravar mesmo assim
-                  </button>
-                )}
               </div>
             </div>
           </div>

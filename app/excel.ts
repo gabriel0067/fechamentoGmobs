@@ -151,7 +151,7 @@ const aliases: Record<keyof ImportedRow, string[]> = {
     "data emissão",
   ],
   deliveryDate: ["data entrega", "dt entrega"],
-  mde: ["mde", "documento"],
+  mde: ["mde", "md e", "documento", "documento original"],
   cte: [
     "cte",
     "ct e",
@@ -162,7 +162,7 @@ const aliases: Record<keyof ImportedRow, string[]> = {
     "numero cte",
     "n cte",
   ],
-  cteKey: ["chave ct e parceiro", "chave cte parceiro"],
+  cteKey: ["chave ct e parceiro", "chave cte parceiro", "chave ct e", "chave cte"],
   invoice: [
     "nf",
     "nota fiscal",
@@ -436,10 +436,28 @@ export async function readClosingFile(file: File) {
       const destinatario = headerAt("CNPJ Destinatario");
       const redespacho = headerAt("CNPJ Redespacho");
       const documentoMde = headerAt("Documento");
+      const documentoOriginal = headerAt("Documento Original");
       const cteParceiro = headerAt("CT-e Parceiro");
-      const chaveCteParceiro = headerAt("Chave CT-e Parceiro");
+      const chaveCteParceiro =
+        headerAt("Chave CT-e Parceiro") >= 0
+          ? headerAt("Chave CT-e Parceiro")
+          : headerAt("Chave CT-e");
       const valorDoFrete = headerAt("Valor do Frete");
-      if (documentoMde >= 0) map.mde = documentoMde;
+      const tipoDocumento = headerAt("Tipo");
+      const isDocsCteReport =
+        tipoDocumento >= 0 &&
+        rows
+          .slice(i + 1, i + 8)
+          .some((row) => normalize(row[tipoDocumento]).includes("ct e"));
+      if (documentoMde >= 0) {
+        if (isDocsCteReport) {
+          map.cte = documentoMde;
+          map.mde = documentoOriginal >= 0 ? documentoOriginal : undefined;
+        } else {
+          map.mde = documentoMde;
+        }
+      }
+      if (documentoOriginal >= 0) map.mde = documentoOriginal;
       if (remetente >= 0) map.sender = remetente + 1;
       if (remetente >= 0) map.senderCnpj = remetente;
       if (destinatario >= 0) {

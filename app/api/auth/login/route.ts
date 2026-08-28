@@ -15,9 +15,10 @@ export async function POST(request: Request) {
         { status: 401 },
       );
     }
+    const secureCookie = new URL(request.url).protocol === "https:";
     return Response.json(
       { authenticated: true },
-      { headers: { "set-cookie": await createSessionCookie() } },
+      { headers: { "set-cookie": await createSessionCookie(secureCookie) } },
     );
   } catch (error) {
     console.error("Falha ao iniciar sessão no GMOBS", error);

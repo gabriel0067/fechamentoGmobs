@@ -79,7 +79,7 @@ export async function validateCredentials(username: string, password: string) {
   return validUser && validPassword;
 }
 
-export async function createSessionCookie() {
+export async function createSessionCookie(secure = true) {
   const { username, secret } = authEnv();
   const payload = toBase64Url(
     encoder.encode(
@@ -87,11 +87,11 @@ export async function createSessionCookie() {
     ),
   );
   const signature = toBase64Url(await hmac(payload, secret));
-  return `${SESSION_COOKIE}=${payload}.${signature}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_SECONDS}`;
+  return `${SESSION_COOKIE}=${payload}.${signature}; Path=/; HttpOnly;${secure ? " Secure;" : ""} SameSite=Strict; Max-Age=${SESSION_SECONDS}`;
 }
 
-export function clearSessionCookie() {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+export function clearSessionCookie(secure = true) {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly;${secure ? " Secure;" : ""} SameSite=Strict; Max-Age=0`;
 }
 
 export async function authenticatedUsername(request: Request) {

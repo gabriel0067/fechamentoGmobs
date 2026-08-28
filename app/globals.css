@@ -1997,6 +1997,56 @@ button {
 .romaneio-bulk-actions small {
   color: #687970;
 }
+.romaneio-batch-actions {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 320px) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #d5e2da;
+  border-radius: 8px;
+  background: #ffffff;
+}
+.romaneio-batch-actions label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #2f4338;
+  font-size: 12px;
+  font-weight: 850;
+}
+.romaneio-batch-actions input,
+.romaneio-row-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #146c43;
+}
+.romaneio-batch-actions select {
+  min-width: 0;
+  border: 1px solid #cbd8d0;
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: #fff;
+  color: #1d2922;
+  font-weight: 750;
+}
+.romaneio-batch-actions small {
+  color: #687970;
+  font-weight: 800;
+}
+.romaneio-row-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  color: #52675b;
+  font-size: 9px;
+  font-weight: 850;
+}
+.romaneio-row-check span {
+  overflow: visible;
+  text-overflow: clip;
+}
 .romaneio-group-note {
   display: grid;
   gap: 6px;
@@ -2119,6 +2169,28 @@ button {
 }
 .status-closed {
   background: #e7f5ed;
+  color: #146c43;
+}
+.document-saved-status {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+}
+.document-saved-status small {
+  max-width: 100%;
+  white-space: normal;
+}
+.document-saved-status button {
+  border: 1px solid #b9c9c0;
+  border-radius: 7px;
+  padding: 6px 9px;
+  background: white;
+  color: #526158;
+  font-size: 10px;
+  font-weight: 850;
+}
+.document-saved-status button:hover {
+  border-color: #146c43;
   color: #146c43;
 }
 .pickup-quantity-field {
