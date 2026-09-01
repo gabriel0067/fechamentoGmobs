@@ -207,6 +207,7 @@ type RomaneioDailyDocument = {
   referenceType: "MD-e" | "CT-e" | "Documento";
   referenceNumber: string;
   linkedEntries: RomaneioReferenceEntry[];
+  linkWarning: string;
   sourceStatus: string;
   sender: string;
   recipient: string;
@@ -719,6 +720,46 @@ const completeRowKey = (row: object) =>
         typeof value === "string" ? value.trim() : value,
       ]),
   );
+const romaneioReferenceMergeKey = (entry: RomaneioReferenceEntry) =>
+  [
+    numericDocumentId(entry.mde),
+    numericDocumentId(entry.cte),
+    scanKey(entry.cteKey),
+    normalizeInvoiceKey(entry.invoice),
+    normalized(entry.sender),
+    normalized(entry.recipient),
+  ].join("|");
+const romaneioReferenceScore = (entry: RomaneioReferenceEntry) =>
+  [
+    entry.sender,
+    entry.recipient,
+    entry.city,
+    entry.mde,
+    entry.cte,
+    entry.cteKey,
+    entry.invoice,
+  ].filter(Boolean).length +
+  (entry.reportedTotal || entry.freight ? 2 : 0);
+const romaneioReferenceIdentifiers = (entry: RomaneioReferenceEntry) =>
+  [
+    numericDocumentId(entry.mde),
+    numericDocumentId(entry.cte),
+    operationalIdentifier(entry.cteKey),
+    cteNumberFromAccessKey(entry.cteKey),
+    normalizeInvoiceKey(entry.invoice),
+  ].filter(Boolean);
+const expandRomaneioScanIdentifiers = (
+  identifiers: string[],
+  references: RomaneioReferenceEntry[],
+) => {
+  const expanded = new Set(identifiers);
+  references.forEach((entry) => {
+    const entryIdentifiers = romaneioReferenceIdentifiers(entry);
+    if (!entryIdentifiers.some((identifier) => expanded.has(identifier))) return;
+    entryIdentifiers.forEach((identifier) => expanded.add(identifier));
+  });
+  return [...expanded];
+};
 const romaneioCompleteRowKey = (
   row: ImportedRomaneioRow & Partial<Pick<RomaneioEntry, "id" | "sourceFile">>,
 ) =>
@@ -1714,14 +1755,15 @@ export default function Home() {
     >();
     romaneioEntries.forEach((row) =>
       row.documents.forEach((document) => {
-        if (matches.has(document)) return;
+        const documentKey = romaneioDocumentKey(document);
+        if (matches.has(documentKey)) return;
         const reference = romaneioDocumentReference(document);
         const matchedEntries = reference
           ? reference.type === "MD-e"
             ? mdes.get(reference.number) || []
             : ctes.get(reference.number) || []
           : [];
-        matches.set(document, {
+        matches.set(documentKey, {
           type: reference?.type || "Documento",
           number: reference?.number || document,
           found: matchedEntries.length > 0,
@@ -1789,7 +1831,7 @@ export default function Home() {
             existing.routes.push(row.route);
           return;
         }
-        const match = romaneioDocumentMatches.get(document);
+        const match = romaneioDocumentMatches.get(documentKey);
         const linkedEntries = match?.entries || [];
         const linked =
           linkedEntries.find(
@@ -1811,12 +1853,18 @@ export default function Home() {
           ]),
         ].filter(Boolean) as string[];
         const grossFreight = linked?.reportedTotal ?? linked?.freight ?? 0;
+        const linkWarning = linkedEntries.length
+          ? linked?.sender || linked?.recipient || linked?.city || grossFreight
+            ? `Vinculado pelo relatório. Status de origem ${linked?.sourceStatus || linked?.status || "não informado"} usado só como referência.`
+            : "Vinculado, mas o relatório não trouxe remetente, destinatário, cidade ou frete para preencher a linha."
+          : `${match?.type || "Documento"} ${match?.number || document} não encontrado nos relatórios carregados. O status não bloqueia o vínculo; falta esse número de MD-e/CT-e na base.`;
         current.documents.push({
           key: documentKey,
           document,
           referenceType: match?.type || "Documento",
           referenceNumber: match?.number || document,
           linkedEntries,
+          linkWarning,
           sourceStatus: linked?.sourceStatus || linked?.status || "",
           sender: linked?.sender || "",
           recipient: linked?.recipient || "",
@@ -2880,7 +2928,13 @@ export default function Home() {
 
   function scanOrSearchRomaneio() {
     const typed = romaneioSearch.trim();
-    const typedIdentifiers = operationalIdentifiers(typed);
+    const typedIdentifiers = expandRomaneioScanIdentifiers(
+      operationalIdentifiers(typed),
+      [
+        ...entriesWithTde.map(asRomaneioReferenceEntry),
+        ...romaneioReferenceEntries,
+      ],
+    );
     if (!typedIdentifiers.length) {
       setMessageIsError(true);
       setMessage(
@@ -3141,7 +3195,13 @@ export default function Home() {
   }
 
   function scanRetainedDocument() {
-    const typedIdentifiers = operationalIdentifiers(retainedScanInput);
+    const typedIdentifiers = expandRomaneioScanIdentifiers(
+      operationalIdentifiers(retainedScanInput),
+      [
+        ...entriesWithTde.map(asRomaneioReferenceEntry),
+        ...romaneioReferenceEntries,
+      ],
+    );
     if (!typedIdentifiers.length) {
       setMessageIsError(true);
       setMessage("Digite ou bipe um MD-e ou CT-e Parceiro válido.");
@@ -3806,7 +3866,8 @@ export default function Home() {
             ? savedOperation?.savedAt
             : undefined,
           sourceStatus,
-          sourceEligible: row.eligible && Boolean(row.cte || row.invoice),
+          sourceEligible:
+            !result.referenceOnly && row.eligible && Boolean(row.cte || row.invoice),
         };
       },
       );
@@ -3822,6 +3883,33 @@ export default function Home() {
       const releasedByRomaneio = additions.filter(
         (entry) => entry.romaneioDocumentKey,
       ).length;
+      if (result.referenceOnly) {
+        const merged = new Map<string, RomaneioReferenceEntry>();
+        [...romaneioReferenceEntries, ...referenceEntries].forEach((entry) => {
+          const key = romaneioReferenceMergeKey(entry);
+          if (!key.replace(/\|/g, "")) return;
+          const current = merged.get(key);
+          if (!current || romaneioReferenceScore(entry) > romaneioReferenceScore(current))
+            merged.set(key, entry);
+        });
+        const previousKeys = new Set(
+          romaneioReferenceEntries.map(romaneioReferenceMergeKey),
+        );
+        const addedReferences = [...merged.keys()].filter(
+          (key) => !previousKeys.has(key),
+        ).length;
+        const updatedReferences = [...merged.entries()].filter(([key, entry]) => {
+          const previous = romaneioReferenceEntries.find(
+            (candidate) => romaneioReferenceMergeKey(candidate) === key,
+          );
+          return previous && romaneioReferenceScore(entry) > romaneioReferenceScore(previous);
+        }).length;
+        setRomaneioReferenceEntries([...merged.values()]);
+        setMessage(
+          `${addedReferences} documento(s) novo(s) e ${updatedReferences} documento(s) atualizado(s) do relatório complementar ficaram disponíveis para localizar nos Romaneios.${duplicates ? ` ${duplicates} linha(s) completamente repetida(s) foram ignoradas.` : ""}`,
+        );
+        return;
+      }
       setEntries(additions);
       setRomaneioReferenceEntries(
         referenceEntries.filter((entry) => !entry.sourceEligible),
@@ -5063,6 +5151,9 @@ export default function Home() {
                                             </label>
                                             <strong>{document.referenceType} {document.referenceNumber}</strong>
                                             <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}{document.sourceStatus ? ` · Origem ${document.sourceStatus}` : ""}</small>
+                                            <small className={document.linkedEntries.length ? "link-ok" : "link-warning"}>
+                                              Aviso temporario: {document.linkWarning}
+                                            </small>
                                           </span>
                                           <span><strong>{document.sender || "Aguardando relatório"}</strong></span>
                                           <span><strong>{document.recipient || "Aguardando relatório"}</strong><small>{document.city || "Cidade não localizada"}</small></span>
@@ -5336,6 +5427,9 @@ export default function Home() {
                                     <span className="document-id">
                                       <strong>{document.referenceType} {document.referenceNumber}</strong>
                                       <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}</small>
+                                      <small className={document.linkedEntries.length ? "link-ok" : "link-warning"}>
+                                        Aviso temporario: {document.linkWarning}
+                                      </small>
                                     </span>
                                     <span><strong>{document.sender || saved?.sender || "Aguardando relatório geral"}</strong></span>
                                     <span><strong>{document.recipient || saved?.recipient || "Aguardando relatório geral"}</strong><small>{city || saved?.city || "Sem cidade"}</small></span>

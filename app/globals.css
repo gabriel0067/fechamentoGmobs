@@ -2326,6 +2326,19 @@ button {
   color: #758078;
   font-size: 9px;
 }
+.daily-document-row .link-warning,
+.daily-document-row .link-ok {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.3;
+}
+.daily-document-row .link-warning {
+  color: #b45309;
+}
+.daily-document-row .link-ok {
+  color: #047857;
+}
 .daily-document-row .document-id strong,
 .retained-list .document-id strong {
   color: #146c43;

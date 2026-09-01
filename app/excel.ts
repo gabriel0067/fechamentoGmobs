@@ -402,6 +402,11 @@ export async function readRomaneioFile(file: File) {
 }
 
 export async function readClosingFile(file: File) {
+  const fileName = normalize(file.name);
+  const isNamedDocumentReferenceReport =
+    fileName.includes("relat mde emitidos") ||
+    fileName.includes("relat docs emitidos") ||
+    fileName.includes("relat cte emitidos");
   const workbook = XLSX.read(await file.arrayBuffer(), {
     type: "array",
     cellDates: false,
@@ -412,6 +417,9 @@ export async function readClosingFile(file: File) {
     map: Partial<Record<keyof ImportedRow, number>>;
     sheet: string;
     score: number;
+    referenceOnly: boolean;
+    documentColumn?: number;
+    documentTypeColumn?: number;
   } | null = null;
   for (const sheetName of workbook.SheetNames) {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(
@@ -444,8 +452,21 @@ export async function readClosingFile(file: File) {
           : headerAt("Chave CT-e");
       const valorDoFrete = headerAt("Valor do Frete");
       const tipoDocumento = headerAt("Tipo");
-      const isDocsCteReport =
+      const hasDocumentTypeRows =
         tipoDocumento >= 0 &&
+        rows
+          .slice(i + 1, i + 8)
+          .some((row) => {
+            const type = normalize(row[tipoDocumento]);
+            return type.includes("ct e") || type.includes("md e") || type === "mde";
+          });
+      const isDocsReferenceReport =
+        tipoDocumento >= 0 &&
+        documentoMde >= 0 &&
+        hasDocumentTypeRows &&
+        (redespacho < 0 || isNamedDocumentReferenceReport);
+      const isDocsCteReport =
+        isDocsReferenceReport &&
         rows
           .slice(i + 1, i + 8)
           .some((row) => normalize(row[tipoDocumento]).includes("ct e"));
@@ -457,7 +478,8 @@ export async function readClosingFile(file: File) {
           map.mde = documentoMde;
         }
       }
-      if (documentoOriginal >= 0) map.mde = documentoOriginal;
+      if (documentoOriginal >= 0 && !isDocsCteReport)
+        map.mde = documentoOriginal;
       if (remetente >= 0) map.sender = remetente + 1;
       if (remetente >= 0) map.senderCnpj = remetente;
       if (destinatario >= 0) {
@@ -476,7 +498,22 @@ export async function readClosingFile(file: File) {
         (map.invoice !== undefined ? 2 : 0) +
         (map.freight !== undefined ? 3 : 0);
       if (!best || score > best.score)
-        best = { rows, header: i, map, sheet: sheetName, score };
+        best = {
+          rows,
+          header: i,
+          map,
+          sheet: sheetName,
+          score,
+          referenceOnly: isDocsReferenceReport,
+          documentColumn:
+            isDocsReferenceReport && documentoMde >= 0
+              ? documentoMde
+              : undefined,
+          documentTypeColumn:
+            isDocsReferenceReport && tipoDocumento >= 0
+              ? tipoDocumento
+              : undefined,
+        };
     }
   }
   if (
@@ -523,6 +560,24 @@ export async function readClosingFile(file: File) {
         dedicated: toNumber(value(row, "dedicated")),
         adjustment: toNumber(value(row, "adjustment")),
       };
+      if (
+        best!.referenceOnly &&
+        best!.documentColumn !== undefined &&
+        best!.documentTypeColumn !== undefined
+      ) {
+        const documentValue = String(row[best!.documentColumn] ?? "").trim();
+        const type = normalize(row[best!.documentTypeColumn]);
+        if (type.includes("ct e")) {
+          result.cte = documentValue;
+          result.mde =
+            best!.map.mde === undefined
+              ? ""
+              : String(value(row, "mde") ?? "").trim();
+        } else if (type.includes("md e") || type === "mde") {
+          result.mde = documentValue;
+          if (best!.map.cte === best!.documentColumn) result.cte = "";
+        }
+      }
       result.isRedelivery = /(^|[^A-Z0-9])RE([^A-Z0-9]|$)/.test(
         `${result.status} ${result.statusDescription} ${result.occurrence} ${result.cte} ${result.invoice}`.toUpperCase(),
       );
@@ -565,6 +620,7 @@ export async function readClosingFile(file: File) {
   return {
     rows: eligible,
     referenceRows: imported,
+    referenceOnly: best.referenceOnly,
     excluded: imported.length - eligible.length,
     sheet: best.sheet,
     latestEmissionDate,
