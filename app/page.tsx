@@ -760,6 +760,9 @@ const expandRomaneioScanIdentifiers = (
   });
   return [...expanded];
 };
+const uniqueRomaneioReferences = (entries: RomaneioReferenceEntry[]) => [
+  ...new Map(entries.map((entry) => [entry.id, entry] as const)).values(),
+];
 const romaneioCompleteRowKey = (
   row: ImportedRomaneioRow & Partial<Pick<RomaneioEntry, "id" | "sourceFile">>,
 ) =>
@@ -1728,6 +1731,7 @@ export default function Home() {
   const romaneioDocumentMatches = useMemo(() => {
     const mdes = new Map<string, RomaneioReferenceEntry[]>();
     const ctes = new Map<string, RomaneioReferenceEntry[]>();
+    const invoices = new Map<string, RomaneioReferenceEntry[]>();
     const references = [
       ...new Map(
         [
@@ -1740,9 +1744,11 @@ export default function Home() {
       const mde = numericDocumentId(entry.mde);
       const cte = numericDocumentId(entry.cte);
       const cteFromKey = cteNumberFromAccessKey(entry.cteKey);
+      const invoice = normalizeInvoiceKey(entry.invoice);
       if (mde) mdes.set(mde, [...(mdes.get(mde) || []), entry]);
       if (cte) ctes.set(cte, [...(ctes.get(cte) || []), entry]);
       if (cteFromKey) ctes.set(cteFromKey, [...(ctes.get(cteFromKey) || []), entry]);
+      if (invoice) invoices.set(invoice, [...(invoices.get(invoice) || []), entry]);
     });
     const matches = new Map<
       string,
@@ -1760,8 +1766,14 @@ export default function Home() {
         const reference = romaneioDocumentReference(document);
         const matchedEntries = reference
           ? reference.type === "MD-e"
-            ? mdes.get(reference.number) || []
-            : ctes.get(reference.number) || []
+            ? uniqueRomaneioReferences([
+                ...(mdes.get(reference.number) || []),
+                ...(invoices.get(reference.number) || []),
+              ])
+            : uniqueRomaneioReferences([
+                ...(ctes.get(reference.number) || []),
+                ...(invoices.get(reference.number) || []),
+              ])
           : [];
         matches.set(documentKey, {
           type: reference?.type || "Documento",
