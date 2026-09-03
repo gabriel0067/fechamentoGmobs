@@ -478,26 +478,24 @@ const playRomaneioAttentionSound = () => {
     const context = new AudioContext();
     const start = context.currentTime;
     const master = context.createGain();
-    master.gain.setValueAtTime(0.95, start);
+    master.gain.setValueAtTime(0.0001, start);
+    master.gain.exponentialRampToValueAtTime(0.8, start + 0.04);
+    master.gain.exponentialRampToValueAtTime(0.0001, start + 0.42);
     master.connect(context.destination);
-    [0, 0.22, 0.44, 0.66, 0.88, 1.1].forEach((offset, index) => {
-      [0, 0.04].forEach((detuneOffset) => {
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        oscillator.type = "sawtooth";
-        oscillator.frequency.setValueAtTime(index % 2 ? 1120 : 430, start + offset);
-        oscillator.frequency.linearRampToValueAtTime(index % 2 ? 430 : 1120, start + offset + 0.18);
-        oscillator.detune.setValueAtTime(detuneOffset ? 18 : -18, start + offset);
-        gain.gain.setValueAtTime(0.0001, start + offset);
-        gain.gain.exponentialRampToValueAtTime(0.48, start + offset + 0.018);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.2);
-        oscillator.connect(gain);
-        gain.connect(master);
-        oscillator.start(start + offset);
-        oscillator.stop(start + offset + 0.21);
-      });
+    [220, 294].forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sawtooth";
+      oscillator.frequency.setValueAtTime(frequency, start);
+      oscillator.frequency.linearRampToValueAtTime(frequency * 0.86, start + 0.4);
+      oscillator.detune.setValueAtTime(index ? 7 : -7, start);
+      gain.gain.setValueAtTime(index ? 0.32 : 0.48, start);
+      oscillator.connect(gain);
+      gain.connect(master);
+      oscillator.start(start);
+      oscillator.stop(start + 0.43);
     });
-    window.setTimeout(() => void context.close(), 1700);
+    window.setTimeout(() => void context.close(), 700);
   } catch {
     /* o alerta visual continua funcionando quando o navegador bloqueia áudio */
   }
