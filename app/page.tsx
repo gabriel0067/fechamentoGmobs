@@ -19,6 +19,8 @@ import {
 import {
   commissionTotal,
   exportClosingXlsx,
+  exportCoverPdf,
+  exportCoversReportXlsx,
   exportDriverClosingPdf,
   exportMaexAdditionalXlsx,
   exportPajussaraMissingXlsx,
@@ -33,6 +35,8 @@ import {
   type DriverClosingDay,
   type DriverClosingDiscount,
   type DriverClosingExport,
+  type CoverExport,
+  type CoverDocumentExport,
   type PajussaraClosingDocument,
 } from "./excel";
 import {
@@ -48,7 +52,7 @@ import {
   writeClosingStorage,
 } from "./storage";
 
-type Tab = "import" | "romaneios" | "preview" | "export";
+type Tab = "import" | "romaneios" | "covers" | "preview" | "export";
 type CloudStatus = "local" | "loading" | "ready" | "saving" | "error";
 type AuthStatus = "checking" | "signedIn" | "signedOut";
 const cloudStatusText: Record<CloudStatus, string> = {
@@ -107,6 +111,7 @@ type ImportInfo = {
   duplicates?: number;
   latestEmissionDate?: string;
 };
+type CoverKind = "shipment" | "return" | "collection";
 type TdeRateRecord = {
   id: string;
   clientName: string;
@@ -387,10 +392,29 @@ const scanKey = (value?: string) =>
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
+const matchesCoverDocumentSearch = (
+  document: CoverDocumentExport,
+  searchValue: string,
+) => {
+  const search = scanKey(searchValue);
+  if (!search) return true;
+  const invoiceSearch = normalizeInvoiceKey(searchValue);
+  return (
+    [document.invoice, document.cte, document.cteKey, document.mde, document.manualCoverNumber].some(
+      (value) => scanKey(value) === search,
+    ) ||
+    Boolean(
+      invoiceSearch && normalizeInvoiceKey(document.invoice) === invoiceSearch,
+    )
+  );
+};
 const numericDocumentId = (value?: string) => {
   const text = String(value ?? "").trim();
   const reference = text.match(/^[MC]\s*-\s*(\d+)(?:\s*-\s*\d+)?$/i);
-  const digits = reference?.[1] || text.replace(/\D/g, "");
+  const withSeries = text.match(
+    /^0*(\d{3,})\s*(?:-|\/|\s+s[eé]rie\s+|\s+)\s*0*\d{1,2}\s*$/i,
+  );
+  const digits = reference?.[1] || withSeries?.[1] || text.replace(/\D/g, "");
   return digits.replace(/^0+/, "") || (digits ? "0" : "");
 };
 const romaneioDocumentReference = (value: string) => {
@@ -411,7 +435,9 @@ const operationalIdentifier = (value?: string) => {
   const text = String(value ?? "").trim();
   const reference = romaneioDocumentReference(text);
   if (reference) return reference.number;
-  const invoiceWithSeries = text.match(/^0*(\d+)\s*-\s*\d+$/);
+  const invoiceWithSeries = text.match(
+    /^0*(\d{3,})\s*(?:-|\/|\s+s[eé]rie\s+|\s+)\s*0*\d{1,2}\s*$/i,
+  );
   if (invoiceWithSeries) return invoiceWithSeries[1];
   const digits = text.replace(/\D/g, "");
   return digits.replace(/^0+/, "") || (digits ? "0" : "");
@@ -425,6 +451,20 @@ const operationalIdentifiers = (value?: string) =>
   [
     operationalIdentifier(value),
     cteNumberFromAccessKey(value),
+  ].filter(Boolean);
+const entryOperationalIdentifiers = (entry: {
+  mde?: string;
+  cte?: string;
+  cteKey?: string;
+  invoice?: string;
+}) =>
+  [
+    operationalIdentifier(entry.mde),
+    operationalIdentifier(entry.cte),
+    operationalIdentifier(entry.cteKey),
+    cteNumberFromAccessKey(entry.cteKey),
+    normalizeInvoiceKey(entry.invoice),
+    operationalIdentifier(entry.invoice),
   ].filter(Boolean);
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const newId = () =>
@@ -832,6 +872,16 @@ export default function Home() {
   const [scannedCtes, setScannedCtes] = useState<
     Record<string, Record<string, string>>
   >({});
+  const [covers, setCovers] = useState<CoverExport[]>([]);
+  const [coverSection, setCoverSection] = useState<CoverKind | "report">("shipment");
+  const [coverPartnerId, setCoverPartnerId] = useState("");
+  const [coverScanInput, setCoverScanInput] = useState("");
+  const [coverNumberInput, setCoverNumberInput] = useState("");
+  const [coverDrafts, setCoverDrafts] = useState<Record<string, CoverDocumentExport[]>>({});
+  const [coverReportFrom, setCoverReportFrom] = useState("");
+  const [coverReportTo, setCoverReportTo] = useState("");
+  const [coverReportSearch, setCoverReportSearch] = useState("");
+  const [selectedCoverReportIds, setSelectedCoverReportIds] = useState<string[]>([]);
   const [optionalScanPartnerIds, setOptionalScanPartnerIds] = useState<
     string[]
   >([]);
@@ -944,6 +994,7 @@ export default function Home() {
           | {
               entries: Entry[];
               referenceEntries?: RomaneioReferenceEntry[];
+              covers?: CoverExport[];
             }
           | null = null;
         let savedBilledDocuments: Record<string, BilledDocumentRecord> | null =
@@ -954,6 +1005,7 @@ export default function Home() {
             | {
                 entries: Entry[];
                 referenceEntries?: RomaneioReferenceEntry[];
+                covers?: CoverExport[];
               }
           >();
           if (Array.isArray(indexedClosing)) {
@@ -1050,6 +1102,7 @@ export default function Home() {
               normalizedEntries,
             ),
           );
+          if (Array.isArray(savedClosing.covers)) setCovers(savedClosing.covers);
         }
         if (savedGeneralImportInfo) {
           const parsedGeneralImportInfo = JSON.parse(savedGeneralImportInfo);
@@ -1157,6 +1210,7 @@ export default function Home() {
               entries: Entry[];
               referenceEntries?: RomaneioReferenceEntry[];
               importInfo: ImportInfo | null;
+              covers?: CoverExport[];
             }>("closing"),
             loadCloudStateRecord<Record<string, Record<string, string>>>(
               "scans",
@@ -1191,12 +1245,14 @@ export default function Home() {
             ),
           );
           setImportInfo(closing.importInfo || null);
+          setCovers(Array.isArray(closing.covers) ? closing.covers : []);
           cloudVersionsRef.current.closing = closingRecord?.version || "";
         } else {
           cloudVersionsRef.current.closing = await saveCloudState("closing", {
             entries: [],
             referenceEntries: [],
             importInfo: null,
+            covers: [],
           });
         }
         const scans = scansRecord?.value;
@@ -1288,7 +1344,7 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated || isHostedSite()) return;
     let cancelled = false;
-    void writeClosingStorage({ entries, referenceEntries: romaneioReferenceEntries })
+    void writeClosingStorage({ entries, referenceEntries: romaneioReferenceEntries, covers })
       .then(() => {
         try {
           localStorage.removeItem(CLOSING_STORAGE_KEY);
@@ -1311,7 +1367,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [entries, hydrated, romaneioReferenceEntries]);
+  }, [covers, entries, hydrated, romaneioReferenceEntries]);
   useEffect(() => {
     if (!hydrated || isHostedSite() || !importInfo) return;
     if (writeLocalStorage(GENERAL_IMPORT_INFO_STORAGE_KEY, importInfo)) return;
@@ -1433,8 +1489,8 @@ export default function Home() {
     romaneioRouteLabels,
   ]);
   const closingCloudState = useMemo(
-    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo }),
-    [entries, importInfo, romaneioReferenceEntries],
+    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo, covers }),
+    [covers, entries, importInfo, romaneioReferenceEntries],
   );
   const tdeCloudState = useMemo(
     () => ({ rates: tdeRates, importInfo: tdeImportInfo }),
@@ -1572,6 +1628,7 @@ export default function Home() {
             entries: Entry[];
             referenceEntries?: RomaneioReferenceEntry[];
             importInfo: ImportInfo | null;
+            covers?: CoverExport[];
           }>(key);
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
@@ -1587,6 +1644,7 @@ export default function Home() {
             ),
           );
           setImportInfo(record.value.importInfo || null);
+          setCovers(Array.isArray(record.value.covers) ? record.value.covers : []);
         } else if (key === "scans") {
           const record = await loadCloudStateRecord<
             Record<string, Record<string, string>>
@@ -1690,7 +1748,9 @@ export default function Home() {
     const references = [
       ...new Map(
         [
-          ...entriesWithTde.map(asRomaneioReferenceEntry),
+          ...entriesWithTde
+            .filter((entry) => normalized(entry.status) !== "cf")
+            .map(asRomaneioReferenceEntry),
           ...romaneioReferenceEntries,
         ].map((entry) => [entry.id, entry] as const),
       ).values(),
@@ -1808,6 +1868,7 @@ export default function Home() {
             operationalIdentifier(entry.cteKey),
             cteNumberFromAccessKey(entry.cteKey),
             normalizeInvoiceKey(entry.invoice),
+            operationalIdentifier(entry.invoice),
           ]),
         ].filter(Boolean) as string[];
         const grossFreight = linked?.reportedTotal ?? linked?.freight ?? 0;
@@ -2360,6 +2421,35 @@ export default function Home() {
     return comparePajussaraDocuments(rows, pajussaraClosing.documents);
   }, [pajussaraClosing, partners]);
   const active = partners.find((p) => p.id === selectedPartner) || partners[0];
+  const coverPartners = useMemo(() => {
+    const map = new Map<string, string>(
+      partnerAliases
+        .filter(([id]) => id !== "unidentified")
+        .map(([id, name]) => [id, name]),
+    );
+    entriesWithTde.forEach((entry) => {
+      if (entry.partnerId !== "unidentified")
+        map.set(entry.partnerId, canonicalPartnerName(entry.partnerId, entry.partnerName));
+    });
+    return [...map].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [entriesWithTde]);
+  const effectiveCoverPartnerId = coverPartnerId || coverPartners[0]?.id || "";
+  const coverDraftKey = `${coverSection}|${effectiveCoverPartnerId}`;
+  const currentCoverDraft = coverDrafts[coverDraftKey] || [];
+  const reportCovers = useMemo(
+    () => covers.filter((cover) => {
+      const day = cover.createdAt.slice(0, 10);
+      const dateMatches = (!coverReportFrom || day >= coverReportFrom) && (!coverReportTo || day <= coverReportTo);
+      const documentMatches = cover.documents.some((document) =>
+        matchesCoverDocumentSearch(document, coverReportSearch),
+      );
+      return dateMatches && documentMatches;
+    }),
+    [coverReportFrom, coverReportSearch, coverReportTo, covers],
+  );
+  const selectedReportCovers = reportCovers.filter((cover) =>
+    selectedCoverReportIds.includes(cover.id),
+  );
   const allIds = partners.map((p) => p.id);
   const assignmentPartners = useMemo(() => {
     const options = new Map<string, string>();
@@ -2578,7 +2668,8 @@ export default function Home() {
       (key) => key && partnerScans[key],
     );
   };
-  const isScanned = (entry: Entry) => Boolean(matchedScanKey(entry));
+  const isScanned = (entry: Entry) =>
+    normalized(entry.status) === "cf" || Boolean(matchedScanKey(entry));
   const usesScanForPartner = (partnerId: string) =>
     scanPartnerIds.has(partnerId) || optionalScanPartnerIds.includes(partnerId);
   const rowsForClosing = (partner: { id: string; rows: Entry[] }) =>
@@ -2603,10 +2694,68 @@ export default function Home() {
     );
     setMessage(
       enabled
-        ? `Bipagem opcional ativada para ${partner?.name || "esta transportadora"}. Somente documentos com OK entrarão na exportação.`
+        ? `Pagamento por bipagem ativado para ${partner?.name || "esta transportadora"}. A soma e a exportação considerarão as notas bipadas aqui ou na aba Capas.`
         : `Bipagem opcional desativada para ${partner?.name || "esta transportadora"}. A exportação voltou a considerar todos os documentos.`,
     );
   }
+  const activeClosingRows = active ? rowsForClosing(active) : [];
+  const activeClosingAudit = activeClosingRows.reduce(
+    (audit, entry) => {
+      const status = normalized(entry.status);
+      const baseFreight = Math.max(0, entry.reportedTotal ?? entry.freight);
+      const tdaValue = Math.max(0, entry.tda || entry.trt || 0);
+      const isComplement = status === "cf";
+      const isRedelivery = entry.isRedelivery || status === "re";
+      audit.total += totalOf(entry);
+      audit.baseFreight += baseFreight;
+      audit.weight += entry.weight || 0;
+      audit.volumes += entry.volumes || 0;
+      if (entry.invoice) audit.invoices.add(normalizeInvoiceKey(entry.invoice));
+      if (entry.cte) audit.ctes.add(scanKey(entry.cte));
+      if (isComplement) {
+        audit.complements.count += 1;
+        audit.complements.value += baseFreight;
+      } else if (isRedelivery) {
+        audit.redeliveries.count += 1;
+        audit.redeliveries.value += totalOf(entry);
+      } else {
+        audit.deliveries.count += 1;
+        audit.deliveries.value += totalOf(entry);
+      }
+      if (entry.tde) {
+        audit.tde.count += 1;
+        audit.tde.value += entry.tde;
+      }
+      if (tdaValue) {
+        audit.tda.count += 1;
+        audit.tda.value += tdaValue;
+      }
+      if (!isComplement && entry.dedicated) {
+        audit.dedicated.count += 1;
+        audit.dedicated.value += entry.dedicated;
+      }
+      if (entry.partnerFreight) {
+        audit.partnerFreight.count += 1;
+        audit.partnerFreight.value += entry.partnerFreight;
+      }
+      return audit;
+    },
+    {
+      total: 0,
+      baseFreight: 0,
+      weight: 0,
+      volumes: 0,
+      invoices: new Set<string>(),
+      ctes: new Set<string>(),
+      deliveries: { count: 0, value: 0 },
+      redeliveries: { count: 0, value: 0 },
+      complements: { count: 0, value: 0 },
+      tde: { count: 0, value: 0 },
+      tda: { count: 0, value: 0 },
+      dedicated: { count: 0, value: 0 },
+      partnerFreight: { count: 0, value: 0 },
+    },
+  );
 
   function setRomaneioDraft(
     groupKey: string,
@@ -2941,13 +3090,34 @@ export default function Home() {
       return;
     }
 
-    const matches = romaneioDailyGroups.flatMap((group) =>
+    let matches = romaneioDailyGroups.flatMap((group) =>
       group.documents
         .filter((document) =>
           typedIdentifiers.some((item) => document.identifiers.includes(item)),
         )
         .map((document) => ({ group, document })),
     );
+    if (!matches.length) {
+      const reportMatches = entriesWithTde.filter((entry) => {
+        if (normalized(entry.status) === "cf") return false;
+        const identifiers = entryOperationalIdentifiers(entry);
+        return typedIdentifiers.some((item) => identifiers.includes(item));
+      });
+      if (reportMatches.length) {
+        const fallbackIdentifiers = new Set(
+          reportMatches.flatMap(entryOperationalIdentifiers),
+        );
+        matches = romaneioDailyGroups.flatMap((group) =>
+          group.documents
+            .filter((document) =>
+              document.identifiers.some((item) =>
+                fallbackIdentifiers.has(item),
+              ),
+            )
+            .map((document) => ({ group, document })),
+        );
+      }
+    }
     const pendingMatch = matches.find(
       ({ group, document }) =>
         !romaneioDocumentStatuses[document.key] &&
@@ -3520,6 +3690,7 @@ export default function Home() {
         entries,
         referenceEntries: romaneioReferenceEntries,
         importInfo,
+        covers,
       },
       scans: scannedCtes,
       tde: { rates: tdeRates, importInfo: tdeImportInfo },
@@ -3564,6 +3735,7 @@ export default function Home() {
           entries?: Entry[];
           referenceEntries?: RomaneioReferenceEntry[];
           importInfo?: ImportInfo | null;
+          covers?: CoverExport[];
         };
         scans?: Record<string, Record<string, string>>;
         tde?: {
@@ -3600,6 +3772,7 @@ export default function Home() {
       );
       setOptionalScanPartnerIds([]);
       setImportInfo(backup.closing.importInfo || null);
+      setCovers(Array.isArray(backup.closing.covers) ? backup.closing.covers : []);
       setScannedCtes(backup.scans || {});
       setTdeRates(Array.isArray(backup.tde?.rates) ? backup.tde.rates : []);
       setTdeImportInfo(backup.tde?.importInfo || null);
@@ -4026,6 +4199,116 @@ export default function Home() {
     );
   }
 
+  function registerCoverScan() {
+    if (coverSection === "report" || !effectiveCoverPartnerId) return;
+    const raw = coverScanInput.trim();
+    const key = scanKey(raw);
+    if (!key) return;
+    const invoiceKey = normalizeInvoiceKey(raw);
+    const matches = entriesWithTde.filter((entry) =>
+      entry.partnerId === effectiveCoverPartnerId &&
+      (scanKey(entry.cte) === key || scanKey(entry.cteKey) === key || normalizeInvoiceKey(entry.invoice) === invoiceKey),
+    );
+    if (!matches.length) {
+      setMessageIsError(true);
+      setMessage(`Não encontrei a nota ou CTE ${raw} para esta transportadora.`);
+      return;
+    }
+    const scannedAt = new Date().toISOString();
+    setCoverDrafts((current) => {
+      const existing = current[coverDraftKey] || [];
+      const additions = matches
+        .filter((entry) => !existing.some((item) =>
+          item.cte === entry.cte && item.invoice === entry.invoice && item.cteKey === entry.cteKey,
+        ))
+        .map((entry): CoverDocumentExport => ({
+          scannedAt,
+          invoice: entry.invoice,
+          invoiceKey: normalizeInvoiceKey(entry.invoice),
+          cte: entry.cte,
+          cteKey: entry.cteKey,
+          mde: entry.mde,
+          sender: entry.sender,
+          recipient: entry.recipient,
+          city: entry.city,
+          date: entry.date,
+          deliveryDate: entry.deliveryDate,
+          status: entry.status,
+        }));
+      return { ...current, [coverDraftKey]: [...existing, ...additions] };
+    });
+    setScannedCtes((current) => {
+      const partnerScans = { ...(current[effectiveCoverPartnerId] || {}) };
+      matches.forEach((entry) => {
+        const scan = scanKey(entry.cte) || scanKey(entry.cteKey);
+        if (scan) partnerScans[scan] = scannedAt;
+      });
+      return { ...current, [effectiveCoverPartnerId]: partnerScans };
+    });
+    setCoverScanInput("");
+    setMessageIsError(false);
+    setMessage(`${matches.length} registro(s) incluído(s) na capa e também disponibilizado(s) para o fechamento por bipagem.`);
+  }
+
+  function removeCoverDraftDocument(index: number) {
+    setCoverDrafts((current) => ({
+      ...current,
+      [coverDraftKey]: (current[coverDraftKey] || []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  }
+
+  function addManualCoverNumber() {
+    if (coverSection !== "return") return;
+    const raw = coverNumberInput.trim();
+    if (!raw) return;
+    setCoverDrafts((current) => {
+      const existing = current[coverDraftKey] || [];
+      if (existing.some((document) => document.manualCoverNumber === raw))
+        return current;
+      const manualDocument: CoverDocumentExport = {
+        scannedAt: new Date().toISOString(),
+        invoice: "",
+        invoiceKey: "",
+        cte: raw,
+        cteKey: "",
+        mde: "",
+        sender: "",
+        recipient: "",
+        city: "",
+        date: "",
+        deliveryDate: "",
+        status: "CAPA MANUAL",
+        manualCoverNumber: raw,
+      };
+      return { ...current, [coverDraftKey]: [...existing, manualDocument] };
+    });
+    setCoverNumberInput("");
+    setMessageIsError(false);
+    setMessage(`Número de capa ${raw} adicionado manualmente ao documento atual.`);
+  }
+
+  function generateCover() {
+    if (coverSection === "report" || !currentCoverDraft.length) {
+      setMessage("Bipe ao menos uma nota fiscal antes de gerar a capa.");
+      return;
+    }
+    const partnerName = coverPartners.find((partner) => partner.id === effectiveCoverPartnerId)?.name || "Transportadora";
+    const cover: CoverExport = {
+      id: `CAPA-${Date.now()}`,
+      partnerId: effectiveCoverPartnerId,
+      partnerName,
+      kind: coverSection,
+      createdAt: new Date().toISOString(),
+      documents: currentCoverDraft,
+    };
+    setCovers((current) => [cover, ...current]);
+    setCoverDrafts((current) => ({ ...current, [coverDraftKey]: [] }));
+    exportCoverPdf(cover);
+    setMessageIsError(false);
+    const kindLabel = coverSection === "shipment" ? "embarque" : coverSection === "collection" ? "coleta" : "capas";
+    setMessage(`Capa de ${kindLabel} gerada e salva no relatório.`);
+  }
+
   function exportSelected() {
     const chosen = partners.filter(
       (p) => selectedExports.includes(p.id) && p.id !== "unidentified",
@@ -4340,13 +4623,22 @@ export default function Home() {
           <b>2</b>Romaneios
         </button>
         <button
+          className={tab === "covers" ? "active" : ""}
+          onClick={() => {
+            setTab("covers");
+            setMessage("");
+          }}
+        >
+          <b>3</b>Capas
+        </button>
+        <button
           className={tab === "preview" || tab === "export" ? "active" : ""}
           onClick={() => {
             setTab("preview");
             setMessage("");
           }}
         >
-          <b>3</b>Fechamento parceiros
+          <b>4</b>Fechamento parceiros
         </button>
       </nav>
       <section className="panel">
@@ -5510,6 +5802,100 @@ export default function Home() {
             )}
           </div>
         )}
+        {tab === "covers" && (
+          <div className="covers-view">
+            <div className="intro cover-intro">
+              <div>
+                <small>CAPAS DE TRANSPORTADORAS</small>
+                <h2>Embarque, capas, coleta e histórico</h2>
+                <p>Bipe a nota fiscal, o CTE ou a chave. A capa será gerada com os CTEs encontrados e ficará registrada para consulta.</p>
+              </div>
+              {coverSection !== "report" && (
+                <button type="button" className="primary cover-generate" disabled={!currentCoverDraft.length} onClick={generateCover}>
+                  Gerar capa ({currentCoverDraft.length})
+                </button>
+              )}
+            </div>
+            <div className="romaneio-subtabs cover-subtabs">
+              <button type="button" className={coverSection === "shipment" ? "active" : ""} onClick={() => setCoverSection("shipment")}>Embarque</button>
+              <button type="button" className={coverSection === "return" ? "active" : ""} onClick={() => setCoverSection("return")}>Capas</button>
+              <button type="button" className={coverSection === "collection" ? "active" : ""} onClick={() => setCoverSection("collection")}>Coleta</button>
+              <button type="button" className={coverSection === "report" ? "active" : ""} onClick={() => setCoverSection("report")}>Relatório</button>
+            </div>
+            {coverSection !== "report" ? (
+              <div className="cover-workspace">
+                <section className="cover-scan-card">
+                  <div className="cover-partner-heading">
+                    <small>1. ESCOLHA A PARCEIRA</small>
+                    <strong>Para quem será esta capa?</strong>
+                  </div>
+                  <label htmlFor="cover-partner">Parceira / transportadora</label>
+                  <select id="cover-partner" value={effectiveCoverPartnerId} onChange={(event) => setCoverPartnerId(event.target.value)}>
+                    {coverPartners.map((partner) => <option key={partner.id} value={partner.id}>{partner.name}</option>)}
+                  </select>
+                  <form className="cover-scan-form" onSubmit={(event) => { event.preventDefault(); registerCoverScan(); }}>
+                    <label htmlFor="cover-scan">2. Bipe as notas desta parceira</label>
+                    <div>
+                      <input id="cover-scan" autoFocus inputMode="numeric" value={coverScanInput} onChange={(event) => setCoverScanInput(event.target.value)} placeholder="Bipe a NF, CTE ou chave" />
+                      <button className="primary" disabled={!coverScanInput.trim()}>Adicionar</button>
+                    </div>
+                  </form>
+                  {coverSection === "return" && <>
+                    <div className="cover-input-divider"><span>ou</span></div>
+                    <form className="cover-scan-form cover-number-form" onSubmit={(event) => { event.preventDefault(); addManualCoverNumber(); }}>
+                      <label htmlFor="cover-number">Adicionar número de capa manual</label>
+                      <div>
+                        <input id="cover-number" value={coverNumberInput} onChange={(event) => setCoverNumberInput(event.target.value)} placeholder="Digite o número informado pela parceira" />
+                        <button type="submit" disabled={!coverNumberInput.trim()}>Adicionar capa</button>
+                      </div>
+                      <small>Este número será incluído diretamente na capa e no relatório; ele não procura notas no sistema.</small>
+                    </form>
+                  </>}
+                  <p className="cover-shared-scan-note">Toda nota localizada aqui também fica disponível na prévia da parceira. Se você ativar “Pagar somente notas bipadas”, ela entrará na soma mensal.</p>
+                </section>
+                <section className="cover-list-card">
+                  <div className="cover-list-heading"><div><small>ITENS DA CAPA</small><h3>{coverSection === "shipment" ? "Para embarque" : coverSection === "collection" ? "Para coleta" : "CTEs e capas manuais"}</h3></div><b>{currentCoverDraft.length}</b></div>
+                  <div className="cover-document-list">
+                    {currentCoverDraft.length ? currentCoverDraft.map((document, index) => (
+                      <div key={`${document.cteKey}-${document.cte}-${document.invoice}-${index}`}>
+                        <span>{index + 1}</span>
+                        <div><strong>{document.manualCoverNumber ? `Capa manual ${document.manualCoverNumber}` : `NF ${document.invoice || "não informada"}`}</strong><small>{document.manualCoverNumber ? "Número informado manualmente" : `CTE ${document.cte || "não informado"} · ${document.recipient || document.sender || "sem descrição"}`}</small></div>
+                        <button type="button" onClick={() => removeCoverDraftDocument(index)}>Remover</button>
+                      </div>
+                    )) : <p className="cover-empty">Nenhum documento bipado nesta capa.</p>}
+                  </div>
+                </section>
+              </div>
+            ) : (
+              <div className="cover-report">
+                <section className="cover-report-filters">
+                  <div><small>HISTÓRICO DE CAPAS</small><h3>Filtre, selecione a capa e gere o relatório</h3></div>
+                  <label>De<input type="date" value={coverReportFrom} onChange={(event) => setCoverReportFrom(event.target.value)} /></label>
+                  <label>Até<input type="date" value={coverReportTo} onChange={(event) => setCoverReportTo(event.target.value)} /></label>
+                  <button type="button" className="primary" disabled={!selectedReportCovers.length} onClick={() => exportCoversReportXlsx(selectedReportCovers, coverReportFrom, coverReportTo)}>Gerar relatório ({selectedReportCovers.length})</button>
+                </section>
+                <section className="cover-report-search">
+                  <label htmlFor="cover-report-search">Localizar uma nota dentro das capas</label>
+                  <div>
+                    <input id="cover-report-search" inputMode="numeric" value={coverReportSearch} onChange={(event) => setCoverReportSearch(event.target.value)} placeholder="Digite ou bipe NF, minuta/MD-e, CTE ou chave" />
+                    {coverReportSearch && <button type="button" onClick={() => setCoverReportSearch("")}>Limpar</button>}
+                  </div>
+                  <small>{coverReportSearch ? `${reportCovers.length} capa(s) encontrada(s) para este documento.` : "A busca mostra em qual capa e relatório o documento foi incluído."}</small>
+                </section>
+                <div className="cover-history">
+                  {reportCovers.length ? reportCovers.map((cover) => (
+                    <div className={selectedCoverReportIds.includes(cover.id) ? "selected" : ""} key={cover.id}>
+                      <input type="checkbox" aria-label={`Selecionar capa ${cover.id}`} checked={selectedCoverReportIds.includes(cover.id)} onChange={(event) => setSelectedCoverReportIds((current) => event.target.checked ? [...new Set([...current, cover.id])] : current.filter((id) => id !== cover.id))} />
+                      <span className={`cover-kind ${cover.kind}`}>{cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas"}</span>
+                      <div><strong>{cover.partnerName}</strong><small>{new Date(cover.createdAt).toLocaleDateString("pt-BR")} · {cover.documents.length} item(ns) · {cover.id}</small>{coverReportSearch && cover.documents.filter((document) => matchesCoverDocumentSearch(document, coverReportSearch)).map((document, index) => <small className="cover-match" key={`${cover.id}-match-${index}`}>{document.manualCoverNumber ? `Encontrado: capa manual ${document.manualCoverNumber}` : `Encontrado: NF ${document.invoice || "-"} · CTE ${document.cte || "-"} · Minuta ${document.mde || "-"}`}</small>)}</div>
+                      <button type="button" onClick={() => exportCoverPdf(cover)}>Baixar capa</button>
+                    </div>
+                  )) : <p className="cover-empty">Nenhuma capa salva neste período.</p>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {(tab === "preview" || tab === "export") && (
           <>
             <div className="romaneio-subtabs partner-closing-subtabs">
@@ -5597,7 +5983,7 @@ export default function Home() {
                           <input
                             id={`optional-scan-${active.id}`}
                             type="checkbox"
-                            aria-label="Exportar apenas documentos bipados"
+                            aria-label="Pagar somente notas bipadas"
                             checked={optionalScanPartnerIds.includes(active.id)}
                             onChange={(event) =>
                               toggleOptionalPartnerScan(
@@ -5607,9 +5993,9 @@ export default function Home() {
                             }
                           />
                           <label htmlFor={`optional-scan-${active.id}`}>
-                            <strong>Exportar apenas documentos bipados</strong>
+                            <strong>Pagar somente notas bipadas</strong>
                             <small>
-                              Desmarcado: exporta normalmente, sem exigir bipagem.
+                              Marcado: soma e exporta somente notas bipadas aqui ou em Capas.
                             </small>
                           </label>
                         </div>
@@ -5627,7 +6013,7 @@ export default function Home() {
                           </div>
                           <b>
                             {active.rows.filter(isScanned).length} de{" "}
-                            {active.rows.length} com OK
+                            {active.rows.length} liberados
                             {pendingScanKeys(active).length
                               ? ` · ${pendingScanKeys(active).length} aguardando`
                               : ""}
@@ -5679,20 +6065,20 @@ export default function Home() {
                           {active.rows.filter(isScanned).length ? (
                             active.rows.filter(isScanned).map((entry) => (
                               <div key={entry.id}>
-                                <span className="scan-ok">OK</span>
+                                <span className="scan-ok">{normalized(entry.status) === "cf" ? "CF DIRETO" : "OK"}</span>
                                 <strong>CTE {entry.cte}</strong>
                                 <small>NF {entry.invoice || "não informada"}</small>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    removeScan(
-                                      active.id,
-                                      matchedScanKey(entry) || entry.cte,
-                                    )
-                                  }
-                                >
-                                  Desmarcar
-                                </button>
+                                {normalized(entry.status) !== "cf" && <button
+                                    type="button"
+                                    onClick={() =>
+                                      removeScan(
+                                        active.id,
+                                        matchedScanKey(entry) || entry.cte,
+                                      )
+                                    }
+                                  >
+                                    Desmarcar
+                                  </button>}
                               </div>
                             ))
                           ) : !pendingScanKeys(active).length ? (
@@ -6104,6 +6490,46 @@ export default function Home() {
                       </strong>
                       <p>Valor do Frete + TDE</p>
                     </div>
+                    <section className="closing-audit">
+                      <div className="closing-audit-heading">
+                        <div>
+                          <small>CONTROLE TEMPORÁRIO DA PRÉVIA</small>
+                          <h3>O que está entrando neste fechamento</h3>
+                          <p>Os números abaixo usam exatamente os mesmos documentos da soma e da exportação.</p>
+                        </div>
+                        <span>{activeClosingRows.length} linhas</span>
+                      </div>
+                      <div className="closing-audit-grid">
+                        <article><small>NOTAS FISCAIS</small><strong>{activeClosingAudit.invoices.size}</strong><p>{money(activeClosingAudit.total)} no fechamento</p></article>
+                        <article><small>ENTREGAS NORMAIS</small><strong>{activeClosingAudit.deliveries.count}</strong><p>{money(activeClosingAudit.deliveries.value)}</p></article>
+                        <article><small>REENTREGAS (RE)</small><strong>{activeClosingAudit.redeliveries.count}</strong><p>{money(activeClosingAudit.redeliveries.value)}</p></article>
+                        <article className="audit-highlight"><small>COMPLEMENTOS (CF)</small><strong>{activeClosingAudit.complements.count}</strong><p>{money(activeClosingAudit.complements.value)} integral</p></article>
+                        <article><small>TDE</small><strong>{activeClosingAudit.tde.count}</strong><p>{money(activeClosingAudit.tde.value)}</p></article>
+                        <article><small>TDA / TRT</small><strong>{activeClosingAudit.tda.count}</strong><p>{money(activeClosingAudit.tda.value)}</p></article>
+                        <article><small>DEDICADOS FORA DO CF</small><strong>{activeClosingAudit.dedicated.count}</strong><p>{money(activeClosingAudit.dedicated.value)}</p></article>
+                        <article><small>FRETE DA PARCEIRA</small><strong>{activeClosingAudit.partnerFreight.count}</strong><p>{money(activeClosingAudit.partnerFreight.value)}</p></article>
+                        <article><small>FRETE BASE (BA)</small><strong>{money(activeClosingAudit.baseFreight)}</strong><p>{activeClosingAudit.ctes.size} CTEs únicos</p></article>
+                        <article><small>PESO / VOLUMES</small><strong>{activeClosingAudit.weight.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg</strong><p>{activeClosingAudit.volumes.toLocaleString("pt-BR")} volumes</p></article>
+                        {usesScanForPartner(active.id) && <article><small>FORA POR FALTA DE BIPAGEM</small><strong>{active.rows.filter((entry) => !isScanned(entry)).length}</strong><p>não entram na soma</p></article>}
+                      </div>
+                      <details className="closing-audit-details">
+                        <summary>Ver nota por nota e todos os valores</summary>
+                        <div className="closing-audit-table-wrap">
+                          <table>
+                            <thead><tr><th>NF</th><th>CTE</th><th>Status</th><th>Destinatário</th><th>Cidade</th><th>Frete base</th><th>TDE</th><th>TDA/TRT</th><th>Dedicado</th><th>Total que entra</th></tr></thead>
+                            <tbody>
+                              {activeClosingRows.map((entry) => {
+                                const isComplement = normalized(entry.status) === "cf";
+                                const baseFreight = Math.max(0, entry.reportedTotal ?? entry.freight);
+                                return <tr className={isComplement ? "cf-row" : ""} key={`audit-${entry.id}`}>
+                                  <td>{entry.invoice || "-"}</td><td>{entry.cte || "-"}</td><td>{isComplement ? "CF" : entry.isRedelivery || normalized(entry.status) === "re" ? "RE" : entry.status || "ET"}</td><td>{entry.recipient || "-"}</td><td>{entry.city || "-"}</td><td>{money(baseFreight)}</td><td>{money(entry.tde || 0)}</td><td>{money(entry.tda || entry.trt || 0)}</td><td>{money(isComplement ? baseFreight : entry.dedicated || 0)}</td><td><strong>{money(totalOf(entry))}</strong></td>
+                                </tr>;
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    </section>
                   </div>
                 )}
               </div>

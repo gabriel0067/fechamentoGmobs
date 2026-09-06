@@ -114,6 +114,31 @@ export type DriverClosingExport = {
   discounts?: DriverClosingDiscount[];
 };
 
+export type CoverDocumentExport = {
+  scannedAt: string;
+  invoice: string;
+  invoiceKey: string;
+  cte: string;
+  cteKey: string;
+  mde: string;
+  sender: string;
+  recipient: string;
+  city: string;
+  date: string;
+  deliveryDate: string;
+  status: string;
+  manualCoverNumber?: string;
+};
+
+export type CoverExport = {
+  id: string;
+  partnerId?: string;
+  partnerName: string;
+  kind: "shipment" | "return" | "collection";
+  createdAt: string;
+  documents: CoverDocumentExport[];
+};
+
 const aliases: Record<keyof ImportedRow, string[]> = {
   partner: [
     "parceiro",
@@ -235,9 +260,11 @@ export const normalizeCnpj = (value: unknown) => {
   return digits.padStart(14, "0");
 };
 export const normalizeInvoiceKey = (value: unknown) => {
-  const firstPart = String(value ?? "")
-    .trim()
-    .split(/\s+-\s+|\s+serie\s+|\//i)[0];
+  const raw = String(value ?? "").trim();
+  const withSeries = raw.match(
+    /^0*(\d{3,})\s*(?:-|\/|\s+s[eé]rie\s+|\s+)\s*0*\d{1,2}\s*$/i,
+  );
+  const firstPart = withSeries?.[1] || raw;
   const digits = firstPart.replace(/\D/g, "").replace(/^0+/, "");
   return digits || (firstPart.includes("0") ? "0" : "");
 };
@@ -1981,6 +2008,110 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
   const safeDriver = safePdfFilenamePart(report.driver) || "Sem nome";
   const safePeriod = safePdfFilenamePart(period) || "Todo periodo";
   pdf.save(`Fechamento Motorista - ${safeDriver} - ${safePeriod}.pdf`);
+}
+
+const coverDate = (value: string) =>
+  value ? new Date(value).toLocaleDateString("pt-BR") : new Date().toLocaleDateString("pt-BR");
+
+export function exportCoverPdf(cover: CoverExport) {
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const margin = 14;
+  const width = 182;
+  const title = cover.kind === "shipment"
+    ? "PROTOCOLO DE EMBARQUE"
+    : cover.kind === "collection"
+      ? "PROTOCOLO DE COLETA"
+      : "PROTOCOLO DE CAPAS";
+  const protocol = cover.id.replace(/\D/g, "").slice(-8) || Date.now().toString().slice(-8);
+  pdf.setDrawColor(25, 25, 25);
+  pdf.setLineWidth(0.35);
+  pdf.rect(margin, 14, width, 34);
+  pdf.line(margin + 40, 14, margin + 40, 48);
+  pdf.line(margin + 124, 14, margin + 124, 48);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(17);
+  pdf.text("GMOBS", margin + 20, 31, { align: "center" });
+  pdf.setFontSize(10);
+  pdf.text(cover.partnerName.toUpperCase(), margin + 82, 23, { align: "center", maxWidth: 80 });
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(8);
+  pdf.text("CAPA DE DOCUMENTOS DA TRANSPORTADORA", margin + 82, 30, { align: "center" });
+  pdf.text(`Gerado em ${coverDate(cover.createdAt)}`, margin + 82, 37, { align: "center" });
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(9);
+  pdf.text(title, margin + 153, 23, { align: "center", maxWidth: 54 });
+  pdf.setFontSize(13);
+  pdf.text(`Nº ${protocol}`, margin + 153, 33, { align: "center" });
+  pdf.setFontSize(8);
+  pdf.text(`${cover.documents.length} CTE(s)`, margin + 153, 41, { align: "center" });
+  pdf.rect(margin, 48, width, 8);
+  pdf.setFontSize(8.5);
+  pdf.text(`${title} - ${cover.partnerName}`, margin + width / 2, 53.3, { align: "center" });
+  const columns = 3;
+  const cellWidth = width / columns;
+  const headerY = 56;
+  pdf.setFillColor(0, 0, 0);
+  pdf.rect(margin, headerY, width, 7, "F");
+  pdf.setTextColor(255, 255, 255);
+  pdf.setFontSize(8);
+  for (let col = 0; col < columns; col++)
+    pdf.text(cover.kind === "return" ? "CAPA / CTE" : "CTE", margin + cellWidth * col + cellWidth / 2, headerY + 4.8, { align: "center" });
+  pdf.setTextColor(0, 0, 0);
+  let y = headerY + 7;
+  const visibleRows = Math.min(24, Math.max(1, Math.ceil(cover.documents.length / columns)));
+  for (let row = 0; row < visibleRows; row++) {
+    if (row % 2 === 1) {
+      pdf.setFillColor(205, 205, 205);
+      pdf.rect(margin, y, width, 7, "F");
+    }
+    pdf.rect(margin, y, width, 7);
+    for (let col = 1; col < columns; col++) pdf.line(margin + cellWidth * col, y, margin + cellWidth * col, y + 7);
+    for (let col = 0; col < columns; col++) {
+      const document = cover.documents[row + col * visibleRows];
+      if (!document) continue;
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8.5);
+      const documentNumber = document.manualCoverNumber || document.cte || document.invoice || "SEM CTE";
+      pdf.text(documentNumber.padStart(9, "0"), margin + cellWidth * col + cellWidth / 2, y + 4.8, { align: "center" });
+    }
+    y += 7;
+  }
+  y = Math.max(y + 18, 245);
+  pdf.line(margin + 30, y, margin + width - 30, y);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(7.5);
+  pdf.text("ASSINATURA DO RESPONSÁVEL / DATA", margin + width / 2, y + 5, { align: "center" });
+  const safePartner = cover.partnerName.replace(/[\\/:*?"<>|]+/g, "-");
+  const kindLabel = cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas";
+  pdf.save(`Capa ${kindLabel} - ${safePartner} - ${coverDate(cover.createdAt).replace(/\//g, "-")}.pdf`);
+}
+
+export function exportCoversReportXlsx(covers: CoverExport[], periodFrom: string, periodTo: string) {
+  const rows = covers.flatMap((cover) => cover.documents.map((document) => ({
+    "Data da capa": coverDate(cover.createdAt),
+    Tipo: cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas",
+    Transportadora: cover.partnerName,
+    Protocolo: cover.id,
+    "Bipado em": coverDate(document.scannedAt),
+    NF: document.invoice,
+    "Chave NF": document.invoiceKey,
+    CTE: document.cte,
+    "Número de capa manual": document.manualCoverNumber || "",
+    "Chave CTE": document.cteKey,
+    "MD-e": document.mde,
+    Remetente: document.sender,
+    Destinatário: document.recipient,
+    Cidade: document.city,
+    Emissão: document.date,
+    Entrega: document.deliveryDate,
+    Status: document.status,
+  })));
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Aviso: "Nenhuma nota encontrada no período selecionado." }]);
+  sheet["!cols"] = [14, 14, 22, 18, 14, 14, 48, 14, 20, 48, 14, 24, 24, 20, 14, 14, 12].map((wch) => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, sheet, "Capas");
+  const label = `${periodFrom || "inicio"} a ${periodTo || "hoje"}`.replace(/[\\/:*?"<>|]+/g, "-");
+  XLSX.writeFile(workbook, `Relatorio de Capas - ${label}.xlsx`);
 }
 
 export function exportClosingXlsx(
