@@ -23,6 +23,7 @@ export type ImportedRow = {
   observation: string;
   weight: number;
   volumes: number;
+  merchandiseValue: number;
   freight: number;
   partnerFreight: number;
   tde: number;
@@ -130,6 +131,7 @@ export type CoverDocumentExport = {
   manualCoverNumber?: string;
   volumes?: number;
   weight?: number;
+  merchandiseValue?: number;
   manualEntry?: boolean;
 };
 
@@ -211,6 +213,14 @@ const aliases: Record<keyof ImportedRow, string[]> = {
   observation: ["observacao", "observação"],
   weight: ["peso"],
   volumes: ["volumes", "volume", "vol"],
+  merchandiseValue: [
+    "valor mercadoria",
+    "valor da mercadoria",
+    "valor nota fiscal",
+    "valor da nota fiscal",
+    "valor nf",
+    "valor total mercadoria",
+  ],
   freight: [
     "frete",
     "frete parceiro",
@@ -547,6 +557,7 @@ export async function readClosingFile(file: File) {
         observation: String(value(row, "observation") ?? "").trim(),
         weight: toNumber(value(row, "weight")),
         volumes: toNumber(value(row, "volumes")),
+        merchandiseValue: toNumber(value(row, "merchandiseValue")),
         freight: toNumber(value(row, "freight")),
         partnerFreight: toNumber(value(row, "partnerFreight")),
         tde: toNumber(value(row, "tde")),
@@ -2043,11 +2054,12 @@ export function exportCoverPdf(cover: CoverExport) {
       ? "PROTOCOLO DE COLETA"
       : "PROTOCOLO DE CAPAS";
   const protocol = cover.id || Date.now().toString().slice(-8);
+  const isOperationalCover = cover.kind === "shipment" || cover.kind === "collection";
   const columns = 3;
   const cellWidth = width / columns;
   const headerY = 56;
   const rowsPerPage = 24;
-  const documentsPerPage = rowsPerPage * columns;
+  const documentsPerPage = isOperationalCover ? 25 : rowsPerPage * columns;
   const documents = uniqueCoverDocuments(cover.documents);
   const pages = Math.max(1, Math.ceil(documents.length / documentsPerPage));
 
@@ -2085,6 +2097,68 @@ export function exportCoverPdf(cover: CoverExport) {
     pdf.rect(margin, headerY, width, 7, "F");
     pdf.setTextColor(255, 255, 255);
     pdf.setFontSize(8);
+    if (isOperationalCover) {
+      const tableColumns = [
+        { label: "CTE", width: 22 },
+        { label: "NF", width: 24 },
+        { label: "REMETENTE", width: 37 },
+        { label: "DESTINATÁRIO", width: 39 },
+        { label: "VOLUMES", width: 17 },
+        { label: "PESO", width: 19 },
+        { label: "VALOR", width: 24 },
+      ];
+      let x = margin;
+      tableColumns.forEach((column) => {
+        pdf.text(column.label, x + column.width / 2, headerY + 4.8, { align: "center", maxWidth: column.width - 2 });
+        x += column.width;
+      });
+      pdf.setTextColor(0, 0, 0);
+      let y = headerY + 7;
+      pageDocuments.forEach((document, row) => {
+        if (row % 2 === 1) {
+          pdf.setFillColor(205, 205, 205);
+          pdf.rect(margin, y, width, 7, "F");
+        }
+        const values = [
+          document.cte || "-",
+          document.invoice || "-",
+          document.sender || "-",
+          document.recipient || "-",
+          String(document.volumes ?? "-"),
+          document.weight === undefined ? "-" : document.weight.toLocaleString("pt-BR", { maximumFractionDigits: 2 }),
+          document.merchandiseValue === undefined ? "-" : document.merchandiseValue.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        ];
+        x = margin;
+        tableColumns.forEach((column, index) => {
+          pdf.rect(x, y, column.width, 7);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(index === 2 || index === 3 ? 6.3 : 7.2);
+          pdf.text(values[index], x + column.width / 2, y + 4.7, { align: "center", maxWidth: column.width - 2 });
+          x += column.width;
+        });
+        y += 7;
+      });
+      while (y < headerY + 7 + 25 * 7) {
+        if (Math.round((y - headerY - 7) / 7) % 2 === 1) {
+          pdf.setFillColor(205, 205, 205);
+          pdf.rect(margin, y, width, 7, "F");
+        }
+        x = margin;
+        tableColumns.forEach((column) => {
+          pdf.rect(x, y, column.width, 7);
+          x += column.width;
+        });
+        y += 7;
+      }
+      const footerY = 252;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8);
+      pdf.text(`Gerado por: ${cover.generatedBy || "Não informado"}`, margin, footerY);
+      pdf.line(margin + 30, footerY + 12, margin + width - 30, footerY + 12);
+      pdf.setFontSize(7.5);
+      pdf.text("ASSINATURA DO RESPONSÁVEL / DATA", margin + width / 2, footerY + 17, { align: "center" });
+      continue;
+    }
     for (let col = 0; col < columns; col++)
       pdf.text(cover.kind === "return" ? "CAPA / CTE" : "CTE", margin + cellWidth * col + cellWidth / 2, headerY + 4.8, { align: "center" });
     pdf.setTextColor(0, 0, 0);
@@ -2212,6 +2286,7 @@ export function exportCoversReportXlsx(covers: CoverExport[], periodFrom: string
     Status: document.status,
     Volumes: document.volumes ?? "",
     "Peso (kg)": document.weight ?? "",
+    "Valor da mercadoria": document.merchandiseValue ?? "",
   })));
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Aviso: "Nenhuma nota encontrada no período selecionado." }]);

@@ -84,6 +84,7 @@ type Entry = {
   observation: string;
   weight: number;
   volumes: number;
+  merchandiseValue?: number;
   freight: number;
   partnerFreight: number;
   tde: number;
@@ -431,17 +432,21 @@ const coverDocumentsOverlap = (
 };
 type ManualCoverDocumentDraft = {
   invoice: string;
+  cte: string;
   sender: string;
   recipient: string;
   volumes: string;
   weight: string;
+  value: string;
 };
 const emptyManualCoverDocument: ManualCoverDocumentDraft = {
   invoice: "",
+  cte: "",
   sender: "",
   recipient: "",
   volumes: "",
   weight: "",
+  value: "",
 };
 const numericDocumentId = (value?: string) => {
   const text = String(value ?? "").trim();
@@ -4139,6 +4144,7 @@ export default function Home() {
           observation: row.observation,
           weight: row.weight,
           volumes: row.volumes,
+          merchandiseValue: row.merchandiseValue,
           freight: row.freight,
           partnerFreight: row.partnerFreight,
           tde,
@@ -4234,6 +4240,7 @@ export default function Home() {
     observation: entry.observation,
     weight: entry.weight || 0,
     volumes: entry.volumes || 0,
+    merchandiseValue: entry.merchandiseValue || 0,
     freight: entry.freight,
     partnerFreight: entry.partnerFreight,
     tde: entry.tde,
@@ -4422,6 +4429,7 @@ export default function Home() {
           status: entry.status,
           volumes: entry.volumes,
           weight: entry.weight,
+          merchandiseValue: entry.merchandiseValue,
         }));
     const alreadyScanned = additions.some((document) =>
       [...existing, ...savedDocuments].some((item) =>
@@ -4529,11 +4537,13 @@ export default function Home() {
     if (coverSection !== "shipment" && coverSection !== "collection") return;
     const draft = manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument;
     const invoice = draft.invoice.trim();
+    const cte = draft.cte.trim();
     const volumes = Number(draft.volumes.replace(",", "."));
-    const weight = Number(draft.weight.replace(",", "."));
-    if (!invoice || !draft.sender.trim() || !draft.recipient.trim() || !Number.isFinite(volumes) || volumes <= 0 || !Number.isFinite(weight) || weight < 0) {
+    const weight = Number(draft.weight.replace(/\./g, "").replace(",", "."));
+    const value = Number(draft.value.replace(/\./g, "").replace(",", "."));
+    if (!invoice || !cte || !draft.sender.trim() || !draft.recipient.trim() || !Number.isFinite(volumes) || volumes <= 0 || !Number.isFinite(weight) || weight < 0 || !Number.isFinite(value) || value < 0) {
       setMessageIsError(true);
-      setMessage("Preencha NF, remetente, destinatário, volumes e peso corretamente.");
+      setMessage("Preencha NF, CTE, remetente, destinatário, volumes, peso e valor corretamente.");
       playRomaneioAttentionSound();
       return;
     }
@@ -4541,7 +4551,7 @@ export default function Home() {
       scannedAt: new Date().toISOString(),
       invoice,
       invoiceKey: normalizeInvoiceKey(invoice),
-      cte: "",
+      cte,
       cteKey: "",
       mde: "",
       sender: draft.sender.trim(),
@@ -4552,6 +4562,7 @@ export default function Home() {
       status: "INCLUSÃO MANUAL",
       volumes: Math.floor(volumes),
       weight,
+      merchandiseValue: value,
       manualEntry: true,
     };
     const existing = coverDraftsRef.current[coverDraftKey] || [];
@@ -6248,12 +6259,14 @@ export default function Home() {
                     <div className="cover-input-divider"><span>ou preencha manualmente</span></div>
                     <form className="cover-manual-document-form" onSubmit={(event) => { event.preventDefault(); addManualCoverDocument(); }}>
                       <label>Nota fiscal<input value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).invoice} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), invoice: event.target.value } }))} placeholder="Número da NF" /></label>
+                      <label>CTE<input value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).cte} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), cte: event.target.value } }))} placeholder="Número do CTE" /></label>
                       <label>Remetente<input value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).sender} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), sender: event.target.value } }))} placeholder="Nome do remetente" /></label>
                       <label>Destinatário<input value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).recipient} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), recipient: event.target.value } }))} placeholder="Nome do destinatário" /></label>
                       <div>
                         <label>Volumes<input inputMode="numeric" value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).volumes} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), volumes: event.target.value } }))} placeholder="0" /></label>
                         <label>Peso (kg)<input inputMode="decimal" value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).weight} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), weight: event.target.value } }))} placeholder="0,00" /></label>
                       </div>
+                      <label>Valor da mercadoria (R$)<input inputMode="decimal" value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).value} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), value: event.target.value } }))} placeholder="0,00" /></label>
                       <button type="submit">Adicionar nota manual</button>
                     </form>
                   </>}
