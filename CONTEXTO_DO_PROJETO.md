@@ -137,7 +137,7 @@ Em `app/page.tsx`, há aliases para:
 - TRD;
 - D&Y;
 - ARC, agrupado e exibido como D&Y;
-- PAJUSSARA (também reconhece as grafias antigas Pajuçara/Pajucara);
+- PAJUÇARA (também reconhece as grafias antigas Pajussara/Pajucara);
 - Rio Vermelho.
 
 Uma transportadora desconhecida recebe um identificador próprio baseado no nome recebido. Linhas sem nome de parceira aparecem como **Não identificado** e não podem ser exportadas até que essa situação seja tratada.
@@ -194,6 +194,12 @@ Na bipagem de Capas, a localização é global sobre todas as linhas preservadas
 
 Se a mesma chave, CT-e ou nota for bipado novamente na capa em preparação, o item não é duplicado: o sistema limpa o campo, mostra o aviso de que já foi bipado e toca o alerta sonoro.
 
+As notificações de bipagem são apenas visuais, não possuem botão de fechar, desaparecem automaticamente em menos de dois segundos e nunca consomem o Enter enviado pelo leitor. Assim, leituras rápidas continuam submetendo a próxima nota normalmente.
+
+Embarque e Coleta aceitam também inclusão manual com NF, remetente, destinatário, volumes e peso. Capas salvas podem ser abertas para edição, atualizadas com novos itens e excluídas pelo histórico mediante confirmação. A duplicidade é bloqueada tanto no rascunho quanto contra capas já salvas; as exportações também eliminam repetições exatas antigas. A capa padrão pagina automaticamente a cada 72 itens, sem limite de páginas, e existe um PDF completo em paisagem com NF, CT-e, chave, remetente, destinatário, volumes, peso e cidade.
+
+Quando a procura de Romaneios é bloqueada por uma ticagem ainda não gravada, o aviso oferece `Cancelar ticagem atual`, que descarta apenas as marcações provisórias e permite recomeçar sem recarregar a página.
+
 A busca de Capas consulta tanto os documentos já elegíveis para o fechamento quanto a base completa preservada para consulta dos Romaneios. Isso permite localizar chaves que estão visíveis no sistema, mas cujo status ainda não foi liberado para entrar no fechamento.
 
 Alguns arquivos `Relat_Docs_Emitidos` de MD-e informam o CT-e de redespacho em `Doc Redesp Parceiro` e colocam a chave CT-e somente no texto da `Observacao`, no formato `MDE DE REDESPACHO GERADO COM BASE NO DOCUMENTO: ... CHAVE: ...`. A importação reconhece essa coluna como CT-e e recupera a chave da observação quando o campo próprio estiver vazio. As buscas operacionais também extraem dinamicamente o documento e qualquer chave de 44 dígitos da observação, permitindo corrigir a consulta dos dados já carregados sem exigir nova importação.
@@ -206,9 +212,9 @@ Registros `CF` são complementos de frete independentes, mesmo quando repetem NF
 
 Na prévia de cada parceira, logo abaixo do valor do fechamento, existe um painel temporário de auditoria calculado sobre exatamente as linhas que entram na soma e na exportação. Ele mostra quantidade e valor de entregas normais, reentregas, CF, TDE, TDA/TRT, dedicados fora de CF, frete da parceira, frete base, NFs, CTEs, peso, volumes e documentos excluídos por falta de bipagem. Um detalhamento expansível lista cada NF com CTE, status, destinatário, cidade e todos os componentes de valor.
 
-#### Validação do fechamento recebido da Pajussara
+#### Validação do fechamento recebido da Pajuçara
 
-Na prévia da Pajussara existe um campo para importar o fechamento enviado pela própria transportadora. O modelo reconhecido pode conter as abas `Extrato` e `MAPA SJC`; o sistema localiza automaticamente a aba e a linha que possuem as colunas `CTRC/SUBC` e `NF`, ignorando linhas de cabeçalho, separadores, totais e o bloco de estorno posterior ao resumo.
+Na prévia da Pajuçara existe um campo para importar o fechamento enviado pela própria transportadora. O modelo reconhecido pode conter as abas `Extrato` e `MAPA SJC`; o sistema localiza automaticamente a aba e a linha que possuem as colunas `CTRC/SUBC` e `NF`, ignorando linhas de cabeçalho, separadores, totais e o bloco de estorno posterior ao resumo.
 
 O número `CTRC/SUBC` deles não corresponde ao CTE que vem no relatório GMOBS. Por isso, a comparação usa a NF: remove zeros à esquerda e desconsidera a série que aparece depois do hífen no nosso relatório. Quando a mesma NF aparece mais de uma vez, cada ocorrência do arquivo recebido só pode confirmar uma ocorrência do nosso relatório; remetente é usado como apoio para escolher a correspondência correta.
 
@@ -293,7 +299,7 @@ O arquivo adicional não possui mais a coluna `ENTREGA`. Ele não substitui nem 
 - Se o IndexedDB não estiver disponível, o sistema tenta o `localStorage` como alternativa. Se ambos recusarem a gravação, a tela não cai: o relatório permanece aberto na sessão e aparece um aviso para não recarregar antes de exportar.
 - A correção foi validada com um relatório real de 7,8 MB contendo 18.116 registros elegíveis; somente os registros importados resultavam em aproximadamente 14,5 MB de dados serializados, acima da capacidade comum do `localStorage`.
 - O histórico foi validado com 28 fechamentos antigos: todos foram reconhecidos, totalizando 9.525 linhas lidas e 6.114 documentos únicos depois de remover duplicatas. No relatório real de 18.116 registros, 6.183 linhas corresponderam a CTEs já faturados; a diferença para os CTEs únicos decorre de ocorrências repetidas/reentregas do mesmo documento.
-- O fechamento recebido da Pajussara e o resultado da comparação não são gravados no `localStorage`.
+- O fechamento recebido da Pajuçara e o resultado da comparação não são gravados no `localStorage`.
 - Importar outra planilha substitui `gmobs-closing-v3`, mas não apaga `gmobs-scanned-ctes-v1`.
 - Importar outra lista TDE substitui as taxas com origem no arquivo e preserva os registros manuais.
 - A taxa manual prevalece sobre a taxa importada para o mesmo CNPJ + transportadora.
@@ -368,7 +374,7 @@ git push
 6. Para qualquer mudança financeira, confirmar que o total de todas as transportadoras continua sendo BA + TDE, sem somar TDA, TRT ou outras taxas, e validar separadamente a divisão especial dos valores nos dois arquivos da Argius.
 7. Para qualquer mudança em TDE, validar a lista, CNPJ com zero à esquerda, taxa da transportadora correta, cadastro manual e persistência em `gmobs-tde-rates-v1`.
 8. Para qualquer mudança de bipagem, validar leitor/digitação, TXT, caixas de seleção, AJ, AK, `AGUARDANDO`, `OK`, nova importação e persistência no D1 compartilhado.
-9. Para qualquer mudança de exportação, validar separadamente formato padrão, CF/aba `OUTROS`, os dois arquivos da Argius, a exceção da Fitlog sem Dedicado e a lista de faltantes da Pajussara.
+9. Para qualquer mudança de exportação, validar separadamente formato padrão, CF/aba `OUTROS`, os dois arquivos da Argius, a exceção da Fitlog sem Dedicado e a lista de faltantes da Pajuçara.
 10. Para qualquer mudança na Maex, validar o fechamento normal e o adicional separadamente, incluindo marcação por remetente, nova importação, taxa fixa de R$ 15 e layout A:J sem coluna de entrega.
 11. Executar `npx vite build` antes de concluir.
 12. Atualizar este documento ao mudar qualquer regra aprovada.

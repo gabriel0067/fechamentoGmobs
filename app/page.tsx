@@ -19,6 +19,7 @@ import {
 import {
   commissionTotal,
   exportClosingXlsx,
+  exportCoverDetailedPdf,
   exportCoverPdf,
   exportCoversReportXlsx,
   exportDriverClosingPdf,
@@ -325,7 +326,7 @@ const partnerAliases: Array<[string, string, string[]]> = [
   ["dy", "D&Y", ["d e y", "dey", "d y", "arc"]],
   [
     "pajucara",
-    "PAJUSSARA",
+    "PAJUÇARA",
     ["pajussara", "pajusara", "pajucar", "pajucara"],
   ],
   ["rio-vermelho", "Rio Vermelho", ["rio vermelho"]],
@@ -409,6 +410,38 @@ const matchesCoverDocumentSearch = (
       invoiceSearch && normalizeInvoiceKey(document.invoice) === invoiceSearch,
     )
   );
+};
+const coverDocumentIdentityKeys = (document: CoverDocumentExport) =>
+  [
+    scanKey(document.cteKey) ? `CHAVE:${scanKey(document.cteKey)}` : "",
+    scanKey(document.cte) ? `CTE:${scanKey(document.cte)}` : "",
+    normalizeInvoiceKey(document.invoice)
+      ? `NF:${normalizeInvoiceKey(document.invoice)}`
+      : "",
+    scanKey(document.manualCoverNumber)
+      ? `CAPA:${scanKey(document.manualCoverNumber)}`
+      : "",
+  ].filter(Boolean);
+const coverDocumentsOverlap = (
+  left: CoverDocumentExport,
+  right: CoverDocumentExport,
+) => {
+  const rightKeys = new Set(coverDocumentIdentityKeys(right));
+  return coverDocumentIdentityKeys(left).some((key) => rightKeys.has(key));
+};
+type ManualCoverDocumentDraft = {
+  invoice: string;
+  sender: string;
+  recipient: string;
+  volumes: string;
+  weight: string;
+};
+const emptyManualCoverDocument: ManualCoverDocumentDraft = {
+  invoice: "",
+  sender: "",
+  recipient: "",
+  volumes: "",
+  weight: "",
 };
 const numericDocumentId = (value?: string) => {
   const text = String(value ?? "").trim();
@@ -927,6 +960,10 @@ export default function Home() {
   const [coverScanInput, setCoverScanInput] = useState("");
   const [coverNumberInput, setCoverNumberInput] = useState("");
   const [coverDrafts, setCoverDrafts] = useState<Record<string, CoverDocumentExport[]>>({});
+  const coverDraftsRef = useRef<Record<string, CoverDocumentExport[]>>({});
+  const [manualCoverDrafts, setManualCoverDrafts] = useState<Record<string, ManualCoverDocumentDraft>>({});
+  const [editingCoverId, setEditingCoverId] = useState("");
+  const [coverDeleteConfirmation, setCoverDeleteConfirmation] = useState(false);
   const [coverReportFrom, setCoverReportFrom] = useState("");
   const [coverReportTo, setCoverReportTo] = useState("");
   const [coverReportSearch, setCoverReportSearch] = useState("");
@@ -1005,13 +1042,6 @@ export default function Home() {
         return;
       }
 
-      if (message) {
-        event.preventDefault();
-        setMessage("");
-        setMessageIsError(false);
-        return;
-      }
-
       if (target instanceof HTMLInputElement && !target.form) {
         const section = target.closest("section, article, .card");
         const actionButton = section?.querySelector<HTMLButtonElement>(
@@ -1025,7 +1055,7 @@ export default function Home() {
     };
     document.addEventListener("keydown", continueWithEnter);
     return () => document.removeEventListener("keydown", continueWithEnter);
-  }, [message]);
+  }, []);
   const [selectedRomaneioDocumentKeys, setSelectedRomaneioDocumentKeys] =
     useState<Record<string, string[]>>({});
   const [romaneioRouteDrafts, setRomaneioRouteDrafts] = useState<
@@ -1065,9 +1095,12 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       setMessage("");
       setMessageIsError(false);
-    }, 3000);
+    }, messageIsError ? 1400 : 850);
     return () => window.clearTimeout(timer);
-  }, [message]);
+  }, [message, messageIsError]);
+  useEffect(() => {
+    coverDraftsRef.current = coverDrafts;
+  }, [coverDrafts]);
   useEffect(() => {
     if (!activeOperator) return;
     setCoverGenerators((current) => {
@@ -3632,13 +3665,13 @@ export default function Home() {
         result.documents,
       );
       setMessage(
-        `${result.documents.length} documentos lidos no fechamento da Pajussara. ${comparison.matched.length} encontrados e ${comparison.missing.length} faltantes no arquivo deles para o período selecionado.`,
+        `${result.documents.length} documentos lidos no fechamento da Pajuçara. ${comparison.matched.length} encontrados e ${comparison.missing.length} faltantes no arquivo deles para o período selecionado.`,
       );
     } catch (error) {
       setMessage(
         error instanceof Error
           ? error.message
-          : "Não foi possível ler o fechamento da Pajussara.",
+          : "Não foi possível ler o fechamento da Pajuçara.",
       );
     } finally {
       setImportingPajussara(false);
@@ -4214,11 +4247,11 @@ export default function Home() {
   function exportPajussaraMissing() {
     if (!pajussaraClosing || !pajussaraComparison?.missing.length)
       return setMessage(
-        "Não há documentos faltantes da Pajussara para exportar.",
+        "Não há documentos faltantes da Pajuçara para exportar.",
       );
     exportPajussaraMissingXlsx(
       pajussaraComparison.missing.map((entry) =>
-        toExportRow(entry, "Pajussara"),
+        toExportRow(entry, "Pajuçara"),
       ),
       pajussaraClosing.file,
     );
@@ -4368,9 +4401,11 @@ export default function Home() {
       return;
     }
     const scannedAt = new Date().toISOString();
-    const existing = currentCoverDraft;
-    const additions = matches
-      .map((entry): CoverDocumentExport => ({
+    const existing = coverDraftsRef.current[coverDraftKey] || [];
+    const savedDocuments = covers
+      .filter((cover) => cover.id !== editingCoverId)
+      .flatMap((cover) => cover.documents);
+    const additions = matches.map((entry): CoverDocumentExport => ({
           scannedAt,
           invoice: entry.invoice,
           invoiceKey: normalizeInvoiceKey(entry.invoice),
@@ -4383,25 +4418,27 @@ export default function Home() {
           date: entry.date,
           deliveryDate: entry.deliveryDate,
           status: entry.status,
-        }))
-      .filter((document) => !existing.some((item) =>
-        (scanKey(document.cteKey) && scanKey(document.cteKey) === scanKey(item.cteKey)) ||
-        (
-          scanKey(document.cte) === scanKey(item.cte) &&
-          normalizeInvoiceKey(document.invoice) === normalizeInvoiceKey(item.invoice)
-        ),
-      ));
-    if (!additions.length) {
+          volumes: entry.volumes,
+          weight: entry.weight,
+        }));
+    const alreadyScanned = additions.some((document) =>
+      [...existing, ...savedDocuments].some((item) =>
+        coverDocumentsOverlap(document, item),
+      ),
+    );
+    if (alreadyScanned) {
       setCoverScanInput("");
       setMessageIsError(true);
-      setMessage(`A nota ou CTE ${raw} já foi bipado nesta capa.`);
+      setMessage(`A nota ou CTE ${raw} já foi bipado e não será repetido.`);
       playRomaneioAttentionSound();
       return;
     }
-    setCoverDrafts((current) => ({
-      ...current,
-      [coverDraftKey]: [...(current[coverDraftKey] || []), ...additions],
-    }));
+    const nextDrafts = {
+      ...coverDraftsRef.current,
+      [coverDraftKey]: [...existing, ...additions],
+    };
+    coverDraftsRef.current = nextDrafts;
+    setCoverDrafts(nextDrafts);
     setScannedCtes((current) => {
       const next = { ...current };
       matches.forEach((entry) => {
@@ -4416,8 +4453,7 @@ export default function Home() {
     });
     setCoverScanInput("");
     setMessageIsError(false);
-    const repeated = matches.length - additions.length;
-    setMessage(`${additions.length} registro(s) incluído(s) na capa, independentemente da parceira de origem, e disponibilizado(s) para o fechamento por bipagem.${repeated ? ` ${repeated} registro(s) já bipado(s) não foram repetidos.` : ""}`);
+    setMessage(`${additions.length} registro(s) incluído(s) na capa e disponibilizado(s) para o fechamento por bipagem.`);
     playRomaneioSuccessSound();
   }
 
@@ -4436,21 +4472,20 @@ export default function Home() {
   }
 
   function removeCoverDraftDocument(index: number) {
-    setCoverDrafts((current) => ({
-      ...current,
-      [coverDraftKey]: (current[coverDraftKey] || []).filter((_, itemIndex) => itemIndex !== index),
-    }));
+    const next = {
+      ...coverDraftsRef.current,
+      [coverDraftKey]: (coverDraftsRef.current[coverDraftKey] || []).filter((_, itemIndex) => itemIndex !== index),
+    };
+    coverDraftsRef.current = next;
+    setCoverDrafts(next);
   }
 
   function addManualCoverNumber() {
     if (coverSection !== "return") return;
     const raw = coverNumberInput.trim();
     if (!raw) return;
-    setCoverDrafts((current) => {
-      const existing = current[coverDraftKey] || [];
-      if (existing.some((document) => document.manualCoverNumber === raw))
-        return current;
-      const manualDocument: CoverDocumentExport = {
+    const existing = coverDraftsRef.current[coverDraftKey] || [];
+    const manualDocument: CoverDocumentExport = {
         scannedAt: new Date().toISOString(),
         invoice: "",
         invoiceKey: "",
@@ -4464,13 +4499,127 @@ export default function Home() {
         deliveryDate: "",
         status: "CAPA MANUAL",
         manualCoverNumber: raw,
+        manualEntry: true,
       };
-      return { ...current, [coverDraftKey]: [...existing, manualDocument] };
-    });
+    const savedDocuments = covers
+      .filter((cover) => cover.id !== editingCoverId)
+      .flatMap((cover) => cover.documents);
+    if ([...existing, ...savedDocuments].some((document) => coverDocumentsOverlap(document, manualDocument))) {
+      setCoverNumberInput("");
+      setMessageIsError(true);
+      setMessage(`A capa manual ${raw} já foi adicionada e não será repetida.`);
+      playRomaneioAttentionSound();
+      return;
+    }
+    const next = {
+      ...coverDraftsRef.current,
+      [coverDraftKey]: [...existing, manualDocument],
+    };
+    coverDraftsRef.current = next;
+    setCoverDrafts(next);
     setCoverNumberInput("");
     setMessageIsError(false);
     setMessage(`Número de capa ${raw} adicionado manualmente ao documento atual.`);
     playRomaneioSuccessSound();
+  }
+
+  function addManualCoverDocument() {
+    if (coverSection !== "shipment" && coverSection !== "collection") return;
+    const draft = manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument;
+    const invoice = draft.invoice.trim();
+    const volumes = Number(draft.volumes.replace(",", "."));
+    const weight = Number(draft.weight.replace(",", "."));
+    if (!invoice || !draft.sender.trim() || !draft.recipient.trim() || !Number.isFinite(volumes) || volumes <= 0 || !Number.isFinite(weight) || weight < 0) {
+      setMessageIsError(true);
+      setMessage("Preencha NF, remetente, destinatário, volumes e peso corretamente.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    const document: CoverDocumentExport = {
+      scannedAt: new Date().toISOString(),
+      invoice,
+      invoiceKey: normalizeInvoiceKey(invoice),
+      cte: "",
+      cteKey: "",
+      mde: "",
+      sender: draft.sender.trim(),
+      recipient: draft.recipient.trim(),
+      city: "",
+      date: "",
+      deliveryDate: "",
+      status: "INCLUSÃO MANUAL",
+      volumes: Math.floor(volumes),
+      weight,
+      manualEntry: true,
+    };
+    const existing = coverDraftsRef.current[coverDraftKey] || [];
+    const savedDocuments = covers
+      .filter((cover) => cover.id !== editingCoverId)
+      .flatMap((cover) => cover.documents);
+    if ([...existing, ...savedDocuments].some((item) => coverDocumentsOverlap(item, document))) {
+      setMessageIsError(true);
+      setMessage(`A nota fiscal ${invoice} já foi adicionada e não será repetida.`);
+      playRomaneioAttentionSound();
+      return;
+    }
+    const next = {
+      ...coverDraftsRef.current,
+      [coverDraftKey]: [...existing, document],
+    };
+    coverDraftsRef.current = next;
+    setCoverDrafts(next);
+    setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: emptyManualCoverDocument }));
+    setMessageIsError(false);
+    setMessage(`Nota fiscal ${invoice} adicionada manualmente.`);
+    playRomaneioSuccessSound();
+  }
+
+  function startEditingCover(cover: CoverExport) {
+    const partnerId = cover.partnerId || coverPartners.find((partner) => partner.name === cover.partnerName)?.id || effectiveCoverPartnerId;
+    const key = `${cover.kind}|${partnerId}`;
+    const next = { ...coverDraftsRef.current, [key]: [...cover.documents] };
+    coverDraftsRef.current = next;
+    setCoverDrafts(next);
+    setCoverSection(cover.kind);
+    setCoverPartnerId(partnerId);
+    setEditingCoverId(cover.id);
+    setSelectedCoverReportIds([]);
+    setMessageIsError(false);
+    setMessage(`${cover.id} aberta para edição. Adicione ou remova itens e salve novamente.`);
+  }
+
+  function cancelCoverEdit() {
+    const next = { ...coverDraftsRef.current, [coverDraftKey]: [] };
+    coverDraftsRef.current = next;
+    setCoverDrafts(next);
+    setEditingCoverId("");
+    setMessage("Edição cancelada. A capa salva não foi alterada.");
+  }
+
+  function deleteSelectedCovers() {
+    const selected = new Set(selectedCoverReportIds);
+    setCovers((current) => current.filter((cover) => !selected.has(cover.id)));
+    if (selected.has(editingCoverId)) setEditingCoverId("");
+    setSelectedCoverReportIds([]);
+    setCoverDeleteConfirmation(false);
+    setMessageIsError(false);
+    setMessage(`${selected.size} capa(s) excluída(s) do relatório.`);
+  }
+
+  function exportCurrentCoverDetails() {
+    if (!currentCoverDraft.length) return;
+    const editing = covers.find((cover) => cover.id === editingCoverId);
+    const partnerName = coverPartners.find((partner) => partner.id === effectiveCoverPartnerId)?.name || editing?.partnerName || "Transportadora";
+    exportCoverDetailedPdf({
+      id: editing?.id || "RASCUNHO",
+      sequenceNumber: editing?.sequenceNumber,
+      partnerId: effectiveCoverPartnerId,
+      partnerName,
+      kind: coverSection as CoverKind,
+      createdAt: editing?.createdAt || new Date().toISOString(),
+      generatedBy: activeOperator,
+      documents: currentCoverDraft,
+    });
   }
 
   function generateCover() {
@@ -4484,27 +4633,33 @@ export default function Home() {
       return;
     }
     const partnerName = coverPartners.find((partner) => partner.id === effectiveCoverPartnerId)?.name || "Transportadora";
-    const sequenceNumber = Math.max(
+    const editing = covers.find((cover) => cover.id === editingCoverId);
+    const sequenceNumber = editing?.sequenceNumber || Math.max(
       9999,
       ...covers.map((savedCover) => savedCover.sequenceNumber || 0),
     ) + 1;
     const prefix = coverSection === "shipment" ? "E" : coverSection === "collection" ? "CO" : "CA";
     const cover: CoverExport = {
-      id: `${prefix}-${sequenceNumber}`,
+      id: editing?.id || `${prefix}-${sequenceNumber}`,
       sequenceNumber,
       partnerId: effectiveCoverPartnerId,
       partnerName,
       kind: coverSection,
-      createdAt: new Date().toISOString(),
+      createdAt: editing?.createdAt || new Date().toISOString(),
       generatedBy: effectiveCoverGenerator,
       documents: currentCoverDraft,
     };
-    setCovers((current) => [cover, ...current]);
-    setCoverDrafts((current) => ({ ...current, [coverDraftKey]: [] }));
+    setCovers((current) => editing
+      ? current.map((savedCover) => savedCover.id === editing.id ? cover : savedCover)
+      : [cover, ...current]);
+    const next = { ...coverDraftsRef.current, [coverDraftKey]: [] };
+    coverDraftsRef.current = next;
+    setCoverDrafts(next);
+    setEditingCoverId("");
     exportCoverPdf(cover);
     setMessageIsError(false);
     const kindLabel = coverSection === "shipment" ? "embarque" : coverSection === "collection" ? "coleta" : "capas";
-    setMessage(`${cover.id} de ${kindLabel} gerada por ${effectiveCoverGenerator} e salva no relatório.`);
+    setMessage(`${cover.id} de ${kindLabel} ${editing ? "atualizada" : "gerada"} por ${effectiveCoverGenerator} e salva no relatório.`);
     playRomaneioSuccessSound();
   }
 
@@ -6024,9 +6179,13 @@ export default function Home() {
                 <p>Bipe a nota fiscal, o CTE ou a chave. A capa será gerada com os CTEs encontrados e ficará registrada para consulta.</p>
               </div>
               {coverSection !== "report" && (
-                <button type="button" className="primary cover-generate" disabled={!currentCoverDraft.length} onClick={generateCover}>
-                  Gerar capa ({currentCoverDraft.length})
-                </button>
+                <div className="cover-top-actions">
+                  <button type="button" disabled={!currentCoverDraft.length} onClick={exportCurrentCoverDetails}>PDF completo</button>
+                  {editingCoverId && <button type="button" onClick={cancelCoverEdit}>Cancelar edição</button>}
+                  <button type="button" className="primary cover-generate" disabled={!currentCoverDraft.length} onClick={generateCover}>
+                    {editingCoverId ? `Salvar ${editingCoverId}` : "Gerar capa"} ({currentCoverDraft.length})
+                  </button>
+                </div>
               )}
             </div>
             <div className="romaneio-subtabs cover-subtabs">
@@ -6064,6 +6223,19 @@ export default function Home() {
                       <small>Este número será incluído diretamente na capa e no relatório; ele não procura notas no sistema.</small>
                     </form>
                   </>}
+                  {(coverSection === "shipment" || coverSection === "collection") && <>
+                    <div className="cover-input-divider"><span>ou preencha manualmente</span></div>
+                    <form className="cover-manual-document-form" onSubmit={(event) => { event.preventDefault(); addManualCoverDocument(); }}>
+                      <label>Nota fiscal<input value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).invoice} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), invoice: event.target.value } }))} placeholder="Número da NF" /></label>
+                      <label>Remetente<input value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).sender} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), sender: event.target.value } }))} placeholder="Nome do remetente" /></label>
+                      <label>Destinatário<input value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).recipient} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), recipient: event.target.value } }))} placeholder="Nome do destinatário" /></label>
+                      <div>
+                        <label>Volumes<input inputMode="numeric" value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).volumes} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), volumes: event.target.value } }))} placeholder="0" /></label>
+                        <label>Peso (kg)<input inputMode="decimal" value={(manualCoverDrafts[coverDraftKey] || emptyManualCoverDocument).weight} onChange={(event) => setManualCoverDrafts((current) => ({ ...current, [coverDraftKey]: { ...(current[coverDraftKey] || emptyManualCoverDocument), weight: event.target.value } }))} placeholder="0,00" /></label>
+                      </div>
+                      <button type="submit">Adicionar nota manual</button>
+                    </form>
+                  </>}
                   <p className="cover-shared-scan-note">Toda nota localizada aqui também fica disponível na prévia da parceira. Se você ativar “Pagar somente notas bipadas”, ela entrará na soma mensal.</p>
                 </section>
                 <section className="cover-list-card">
@@ -6072,7 +6244,7 @@ export default function Home() {
                     {currentCoverDraft.length ? currentCoverDraft.map((document, index) => (
                       <div key={`${document.cteKey}-${document.cte}-${document.invoice}-${index}`}>
                         <span>{index + 1}</span>
-                        <div><strong>{document.manualCoverNumber ? `Capa manual ${document.manualCoverNumber}` : `NF ${document.invoice || "não informada"}`}</strong><small>{document.manualCoverNumber ? "Número informado manualmente" : `CTE ${document.cte || "não informado"} · ${document.recipient || document.sender || "sem descrição"}`}</small></div>
+                        <div><strong>{document.manualCoverNumber ? `Capa manual ${document.manualCoverNumber}` : `NF ${document.invoice || "não informada"}`}</strong><small>{document.manualCoverNumber ? "Número informado manualmente" : `CTE ${document.cte || "não informado"} · ${document.recipient || document.sender || "sem descrição"}${document.volumes !== undefined ? ` · ${document.volumes} volume(s) · ${document.weight || 0} kg` : ""}`}</small></div>
                         <button type="button" onClick={() => removeCoverDraftDocument(index)}>Remover</button>
                       </div>
                     )) : <p className="cover-empty">Nenhum documento bipado nesta capa.</p>}
@@ -6086,6 +6258,7 @@ export default function Home() {
                   <label>De<input type="date" value={coverReportFrom} onChange={(event) => setCoverReportFrom(event.target.value)} /></label>
                   <label>Até<input type="date" value={coverReportTo} onChange={(event) => setCoverReportTo(event.target.value)} /></label>
                   <button type="button" className="primary" disabled={!selectedReportCovers.length} onClick={() => exportCoversReportXlsx(selectedReportCovers, coverReportFrom, coverReportTo)}>Gerar relatório ({selectedReportCovers.length})</button>
+                  <button type="button" className="danger" disabled={!selectedReportCovers.length} onClick={() => setCoverDeleteConfirmation(true)}>Excluir selecionadas</button>
                 </section>
                 <section className="cover-report-search">
                   <label htmlFor="cover-report-search">Localizar por identificador da capa ou documento</label>
@@ -6101,7 +6274,11 @@ export default function Home() {
                       <input type="checkbox" aria-label={`Selecionar capa ${cover.id}`} checked={selectedCoverReportIds.includes(cover.id)} onChange={(event) => setSelectedCoverReportIds((current) => event.target.checked ? [...new Set([...current, cover.id])] : current.filter((id) => id !== cover.id))} />
                       <span className={`cover-kind ${cover.kind}`}>{cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas"}</span>
                       <div><strong>{cover.partnerName}</strong><small>{new Date(cover.createdAt).toLocaleDateString("pt-BR")} · {cover.documents.length} item(ns) · {cover.id} · Gerado por {cover.generatedBy || "não informado"}</small>{coverReportSearch && cover.documents.filter((document) => matchesCoverDocumentSearch(document, coverReportSearch)).map((document, index) => <small className="cover-match" key={`${cover.id}-match-${index}`}>{document.manualCoverNumber ? `Encontrado: capa manual ${document.manualCoverNumber}` : `Encontrado: NF ${document.invoice || "-"} · CTE ${document.cte || "-"} · Minuta ${document.mde || "-"}`}</small>)}</div>
-                      <button type="button" onClick={() => exportCoverPdf(cover)}>Baixar capa</button>
+                      <div className="cover-history-actions">
+                        <button type="button" onClick={() => startEditingCover(cover)}>Editar</button>
+                        <button type="button" onClick={() => exportCoverDetailedPdf(cover)}>PDF completo</button>
+                        <button type="button" onClick={() => exportCoverPdf(cover)}>Baixar capa</button>
+                      </div>
                     </div>
                   )) : <p className="cover-empty">Nenhuma capa salva neste período.</p>}
                 </div>
@@ -6379,7 +6556,7 @@ export default function Home() {
                         <div className="pajussara-validation-heading">
                           <div>
                             <small>CONFERÊNCIA DO FECHAMENTO RECEBIDO</small>
-                            <strong>Validar arquivo da Pajussara</strong>
+                            <strong>Validar arquivo da Pajuçara</strong>
                             <p>
                               A comparação usa a NF e considera a série do nosso
                               relatório automaticamente.
@@ -6489,7 +6666,7 @@ export default function Home() {
                               ) : (
                                 <div className="pajussara-validation-success">
                                   Tudo certo: todos os documentos do nosso relatório
-                                  foram encontrados no fechamento da Pajussara.
+                                  foram encontrados no fechamento da Pajuçara.
                                 </div>
                               )}
                             </>
@@ -7119,6 +7296,22 @@ export default function Home() {
                 </p>
               </div>
               <div className="romaneio-alert-actions">
+                {romaneioPendingAlert.kind === "change-romaneio" && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      setRomaneioDocumentDrafts({});
+                      setSelectedRomaneioDocumentKeys({});
+                      setRomaneioSearch("");
+                      setRomaneioPendingAlert(null);
+                      setMessageIsError(false);
+                      setMessage("Ticagem cancelada. Você pode começar novamente.");
+                    }}
+                  >
+                    Cancelar ticagem atual
+                  </button>
+                )}
                 {romaneioPendingAlert.kind === "save-with-pending" && (
                   <button
                     type="button"
@@ -7146,17 +7339,30 @@ export default function Home() {
             </div>
           </div>
         )}
+        {coverDeleteConfirmation && (
+          <div className="romaneio-alert-overlay">
+            <div className="romaneio-alert-dialog" role="alertdialog" aria-modal="true" aria-labelledby="cover-delete-title">
+              <span className="romaneio-alert-icon" aria-hidden="true">!</span>
+              <div className="romaneio-alert-copy">
+                <small>EXCLUSÃO DE CAPA</small>
+                <h2 id="cover-delete-title">Excluir {selectedReportCovers.length} capa(s)?</h2>
+                <p>As capas selecionadas e seus itens serão retirados do relatório compartilhado.</p>
+              </div>
+              <div className="romaneio-alert-actions">
+                <button type="button" className="secondary" onClick={() => setCoverDeleteConfirmation(false)}>Cancelar</button>
+                <button type="button" className="primary" onClick={deleteSelectedCovers}>Sim, excluir</button>
+              </div>
+            </div>
+          </div>
+        )}
         {message && (
-          <button
+          <div
             className={`message ${messageIsError ? "message-error" : "message-info"}`}
-            onClick={() => {
-              setMessage("");
-              setMessageIsError(false);
-            }}
+            role="status"
+            aria-live="polite"
           >
             {message}
-            <span>×</span>
-          </button>
+          </div>
         )}
       </section>
     </main>
