@@ -219,6 +219,11 @@ button {
   background: #146c43;
   color: white;
 }
+.header .active-operator {
+  color: #405047;
+  font-size: 12px;
+}
+.header .active-operator strong { color: #146c43; }
 
 .cover-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .cover-intro > div { max-width: 690px; }
@@ -2389,6 +2394,20 @@ button {
   padding: 11px 12px;
   border-top: 1px solid #edf0ee;
 }
+.daily-document-row.scanned-delivered {
+  background: #eaf8ef;
+  box-shadow: inset 4px 0 #3aa66a;
+}
+.daily-document-row.marked-occurrence {
+  background: #fff0ef;
+  box-shadow: inset 4px 0 #d35b52;
+}
+.daily-document-row.marked-occurrence .document-situation select {
+  border-color: #d98b84;
+  background: #fff8f7;
+  color: #8f2f29;
+  font-weight: 800;
+}
 .daily-document-row > span {
   display: grid;
   gap: 3px;
@@ -2430,6 +2449,16 @@ button {
 .document-situation .return-reason {
   border-color: #d7a7a2;
   background: #fff8f7;
+}
+.document-situation .undo-romaneio-scan {
+  width: 100%;
+  border: 1px solid #8fc5a5;
+  border-radius: 7px;
+  background: #fff;
+  color: #17633d;
+  padding: 7px;
+  font-size: 10px;
+  font-weight: 850;
 }
 .romaneio-missing-warning {
   display: grid;

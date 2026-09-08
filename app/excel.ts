@@ -132,10 +132,12 @@ export type CoverDocumentExport = {
 
 export type CoverExport = {
   id: string;
+  sequenceNumber?: number;
   partnerId?: string;
   partnerName: string;
   kind: "shipment" | "return" | "collection";
   createdAt: string;
+  generatedBy?: string;
   documents: CoverDocumentExport[];
 };
 
@@ -186,6 +188,7 @@ const aliases: Record<keyof ImportedRow, string[]> = {
     "documento",
     "numero cte",
     "n cte",
+    "doc redesp parceiro",
   ],
   cteKey: ["chave ct e parceiro", "chave cte parceiro", "chave ct e", "chave cte"],
   invoice: [
@@ -550,6 +553,10 @@ export async function readClosingFile(file: File) {
         dedicated: toNumber(value(row, "dedicated")),
         adjustment: toNumber(value(row, "adjustment")),
       };
+      if (!result.cteKey) {
+        const observationKey = result.observation.match(/\b\d{44}\b/);
+        if (observationKey) result.cteKey = observationKey[0];
+      }
       result.isRedelivery = /(^|[^A-Z0-9])RE([^A-Z0-9]|$)/.test(
         `${result.status} ${result.statusDescription} ${result.occurrence} ${result.cte} ${result.invoice}`.toUpperCase(),
       );
@@ -2022,7 +2029,7 @@ export function exportCoverPdf(cover: CoverExport) {
     : cover.kind === "collection"
       ? "PROTOCOLO DE COLETA"
       : "PROTOCOLO DE CAPAS";
-  const protocol = cover.id.replace(/\D/g, "").slice(-8) || Date.now().toString().slice(-8);
+  const protocol = cover.id || Date.now().toString().slice(-8);
   pdf.setDrawColor(25, 25, 25);
   pdf.setLineWidth(0.35);
   pdf.rect(margin, 14, width, 34);
@@ -2030,7 +2037,7 @@ export function exportCoverPdf(cover: CoverExport) {
   pdf.line(margin + 124, 14, margin + 124, 48);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(17);
-  pdf.text("GMOBS", margin + 20, 31, { align: "center" });
+  pdf.text("MVFLOG", margin + 20, 31, { align: "center" });
   pdf.setFontSize(10);
   pdf.text(cover.partnerName.toUpperCase(), margin + 82, 23, { align: "center", maxWidth: 80 });
   pdf.setFont("helvetica", "normal");
@@ -2041,7 +2048,7 @@ export function exportCoverPdf(cover: CoverExport) {
   pdf.setFontSize(9);
   pdf.text(title, margin + 153, 23, { align: "center", maxWidth: 54 });
   pdf.setFontSize(13);
-  pdf.text(`Nº ${protocol}`, margin + 153, 33, { align: "center" });
+  pdf.text(protocol, margin + 153, 33, { align: "center" });
   pdf.setFontSize(8);
   pdf.text(`${cover.documents.length} CTE(s)`, margin + 153, 41, { align: "center" });
   pdf.rect(margin, 48, width, 8);
@@ -2076,7 +2083,11 @@ export function exportCoverPdf(cover: CoverExport) {
     }
     y += 7;
   }
-  y = Math.max(y + 18, 245);
+  y = Math.max(y + 13, 238);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(8);
+  pdf.text(`Gerado por: ${cover.generatedBy || "Não informado"}`, margin, y);
+  y += 12;
   pdf.line(margin + 30, y, margin + width - 30, y);
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(7.5);
@@ -2092,6 +2103,8 @@ export function exportCoversReportXlsx(covers: CoverExport[], periodFrom: string
     Tipo: cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas",
     Transportadora: cover.partnerName,
     Protocolo: cover.id,
+    "Número identificador": cover.sequenceNumber || "",
+    "Gerado por": cover.generatedBy || "",
     "Bipado em": coverDate(document.scannedAt),
     NF: document.invoice,
     "Chave NF": document.invoiceKey,
@@ -2108,7 +2121,7 @@ export function exportCoversReportXlsx(covers: CoverExport[], periodFrom: string
   })));
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Aviso: "Nenhuma nota encontrada no período selecionado." }]);
-  sheet["!cols"] = [14, 14, 22, 18, 14, 14, 48, 14, 20, 48, 14, 24, 24, 20, 14, 14, 12].map((wch) => ({ wch }));
+  sheet["!cols"] = [14, 14, 22, 18, 18, 22, 14, 14, 48, 14, 20, 48, 14, 24, 24, 20, 14, 14, 12].map((wch) => ({ wch }));
   XLSX.utils.book_append_sheet(workbook, sheet, "Capas");
   const label = `${periodFrom || "inicio"} a ${periodTo || "hoje"}`.replace(/[\\/:*?"<>|]+/g, "-");
   XLSX.writeFile(workbook, `Relatorio de Capas - ${label}.xlsx`);
