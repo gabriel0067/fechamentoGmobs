@@ -19,6 +19,8 @@ import {
 import {
   commissionTotal,
   exportClosingXlsx,
+  exportCoverPdf,
+  exportCoversReportXlsx,
   exportDriverClosingPdf,
   exportMaexAdditionalXlsx,
   exportPajussaraMissingXlsx,
@@ -33,6 +35,8 @@ import {
   type DriverClosingDay,
   type DriverClosingDiscount,
   type DriverClosingExport,
+  type CoverExport,
+  type CoverDocumentExport,
   type PajussaraClosingDocument,
 } from "./excel";
 import {
@@ -48,7 +52,7 @@ import {
   writeClosingStorage,
 } from "./storage";
 
-type Tab = "import" | "romaneios" | "preview" | "export";
+type Tab = "import" | "romaneios" | "covers" | "preview" | "export";
 type CloudStatus = "local" | "loading" | "ready" | "saving" | "error";
 type AuthStatus = "checking" | "signedIn" | "signedOut";
 const cloudStatusText: Record<CloudStatus, string> = {
@@ -107,6 +111,8 @@ type ImportInfo = {
   duplicates?: number;
   latestEmissionDate?: string;
 };
+type CoverKind = "shipment" | "return" | "collection";
+type ScanRecord = string | { scannedAt: string; scannedBy: string };
 type TdeRateRecord = {
   id: string;
   clientName: string;
@@ -155,6 +161,7 @@ type RomaneioDocumentStatusRecord = {
   operationalStatus?: "ET" | "OC";
   reason: string;
   savedAt: string;
+  savedBy?: string;
   day: string;
   driver: string;
   romaneios: string[];
@@ -207,7 +214,6 @@ type RomaneioDailyDocument = {
   referenceType: "MD-e" | "CT-e" | "Documento";
   referenceNumber: string;
   linkedEntries: RomaneioReferenceEntry[];
-  linkWarning: string;
   sourceStatus: string;
   sender: string;
   recipient: string;
@@ -388,10 +394,29 @@ const scanKey = (value?: string) =>
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "");
+const matchesCoverDocumentSearch = (
+  document: CoverDocumentExport,
+  searchValue: string,
+) => {
+  const search = scanKey(searchValue);
+  if (!search) return true;
+  const invoiceSearch = normalizeInvoiceKey(searchValue);
+  return (
+    [document.invoice, document.cte, document.cteKey, document.mde, document.manualCoverNumber].some(
+      (value) => scanKey(value) === search,
+    ) ||
+    Boolean(
+      invoiceSearch && normalizeInvoiceKey(document.invoice) === invoiceSearch,
+    )
+  );
+};
 const numericDocumentId = (value?: string) => {
   const text = String(value ?? "").trim();
   const reference = text.match(/^[MC]\s*-\s*(\d+)(?:\s*-\s*\d+)?$/i);
-  const digits = reference?.[1] || text.replace(/\D/g, "");
+  const withSeries = text.match(
+    /^0*(\d{3,})\s*(?:-|\/|\s+s[eé]rie\s+|\s+)\s*0*\d{1,2}\s*$/i,
+  );
+  const digits = reference?.[1] || withSeries?.[1] || text.replace(/\D/g, "");
   return digits.replace(/^0+/, "") || (digits ? "0" : "");
 };
 const romaneioDocumentReference = (value: string) => {
@@ -412,7 +437,9 @@ const operationalIdentifier = (value?: string) => {
   const text = String(value ?? "").trim();
   const reference = romaneioDocumentReference(text);
   if (reference) return reference.number;
-  const invoiceWithSeries = text.match(/^0*(\d+)\s*-\s*\d+$/);
+  const invoiceWithSeries = text.match(
+    /^0*(\d{3,})\s*(?:-|\/|\s+s[eé]rie\s+|\s+)\s*0*\d{1,2}\s*$/i,
+  );
   if (invoiceWithSeries) return invoiceWithSeries[1];
   const digits = text.replace(/\D/g, "");
   return digits.replace(/^0+/, "") || (digits ? "0" : "");
@@ -427,6 +454,67 @@ const operationalIdentifiers = (value?: string) =>
     operationalIdentifier(value),
     cteNumberFromAccessKey(value),
   ].filter(Boolean);
+const entryOperationalIdentifiers = (entry: {
+  mde?: string;
+  cte?: string;
+  cteKey?: string;
+  invoice?: string;
+  observation?: string;
+}) =>
+  {
+    const observation = String(entry.observation || "");
+    const observationKeys = observation.match(/\d{44}/g) || [];
+    const observationDocuments = [
+      ...observation.matchAll(/documento\s*:\s*0*(\d{3,})/gi),
+    ].map((match) => match[1]);
+    return [
+      operationalIdentifier(entry.mde),
+      operationalIdentifier(entry.cte),
+      operationalIdentifier(entry.cteKey),
+      cteNumberFromAccessKey(entry.cteKey),
+      normalizeInvoiceKey(entry.invoice),
+      operationalIdentifier(entry.invoice),
+      ...observationKeys.flatMap((accessKey) => [
+        operationalIdentifier(accessKey),
+        cteNumberFromAccessKey(accessKey),
+      ]),
+      ...observationDocuments,
+    ].filter(Boolean);
+  };
+const entryMatchesGlobalDocumentScan = (
+  entry: {
+    mde?: string;
+    cte?: string;
+    cteKey?: string;
+    invoice?: string;
+    observation?: string;
+  },
+  raw: string,
+) => {
+  const key = scanKey(raw);
+  if (!key) return false;
+  const invoiceKey = normalizeInvoiceKey(raw);
+  const typedIdentifiers = new Set(operationalIdentifiers(raw));
+  const rawFields = [
+    entry.mde,
+    entry.cte,
+    entry.cteKey,
+    entry.invoice,
+    entry.observation,
+  ];
+
+  return (
+    rawFields.some((value) => scanKey(value) === key) ||
+    // Alguns relatórios trazem a chave do CT-e dentro da observação.
+    rawFields.some((value) => scanKey(value).includes(key)) ||
+    Boolean(
+      invoiceKey && normalizeInvoiceKey(entry.invoice) === invoiceKey,
+    ) ||
+    entryOperationalIdentifiers(entry).some((identifier) =>
+      typedIdentifiers.has(identifier),
+    )
+  );
+};
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const newId = () =>
   globalThis.crypto?.randomUUID?.() ||
@@ -479,23 +567,22 @@ const playRomaneioAttentionSound = () => {
     const start = context.currentTime;
     const master = context.createGain();
     master.gain.setValueAtTime(0.0001, start);
-    master.gain.exponentialRampToValueAtTime(0.8, start + 0.04);
-    master.gain.exponentialRampToValueAtTime(0.0001, start + 0.42);
+    master.gain.exponentialRampToValueAtTime(0.72, start + 0.012);
+    master.gain.setValueAtTime(0.72, start + 0.2);
+    master.gain.exponentialRampToValueAtTime(0.0001, start + 0.28);
     master.connect(context.destination);
-    [220, 294].forEach((frequency, index) => {
+    [390, 465].forEach((frequency) => {
       const oscillator = context.createOscillator();
       const gain = context.createGain();
-      oscillator.type = "sawtooth";
+      oscillator.type = "square";
       oscillator.frequency.setValueAtTime(frequency, start);
-      oscillator.frequency.linearRampToValueAtTime(frequency * 0.86, start + 0.4);
-      oscillator.detune.setValueAtTime(index ? 7 : -7, start);
-      gain.gain.setValueAtTime(index ? 0.32 : 0.48, start);
+      gain.gain.setValueAtTime(0.32, start);
       oscillator.connect(gain);
       gain.connect(master);
       oscillator.start(start);
-      oscillator.stop(start + 0.43);
+      oscillator.stop(start + 0.29);
     });
-    window.setTimeout(() => void context.close(), 700);
+    window.setTimeout(() => void context.close(), 450);
   } catch {
     /* o alerta visual continua funcionando quando o navegador bloqueia áudio */
   }
@@ -718,49 +805,6 @@ const completeRowKey = (row: object) =>
         typeof value === "string" ? value.trim() : value,
       ]),
   );
-const romaneioReferenceMergeKey = (entry: RomaneioReferenceEntry) =>
-  [
-    numericDocumentId(entry.mde),
-    numericDocumentId(entry.cte),
-    scanKey(entry.cteKey),
-    normalizeInvoiceKey(entry.invoice),
-    normalized(entry.sender),
-    normalized(entry.recipient),
-  ].join("|");
-const romaneioReferenceScore = (entry: RomaneioReferenceEntry) =>
-  [
-    entry.sender,
-    entry.recipient,
-    entry.city,
-    entry.mde,
-    entry.cte,
-    entry.cteKey,
-    entry.invoice,
-  ].filter(Boolean).length +
-  (entry.reportedTotal || entry.freight ? 2 : 0);
-const romaneioReferenceIdentifiers = (entry: RomaneioReferenceEntry) =>
-  [
-    numericDocumentId(entry.mde),
-    numericDocumentId(entry.cte),
-    operationalIdentifier(entry.cteKey),
-    cteNumberFromAccessKey(entry.cteKey),
-    normalizeInvoiceKey(entry.invoice),
-  ].filter(Boolean);
-const expandRomaneioScanIdentifiers = (
-  identifiers: string[],
-  references: RomaneioReferenceEntry[],
-) => {
-  const expanded = new Set(identifiers);
-  references.forEach((entry) => {
-    const entryIdentifiers = romaneioReferenceIdentifiers(entry);
-    if (!entryIdentifiers.some((identifier) => expanded.has(identifier))) return;
-    entryIdentifiers.forEach((identifier) => expanded.add(identifier));
-  });
-  return [...expanded];
-};
-const uniqueRomaneioReferences = (entries: RomaneioReferenceEntry[]) => [
-  ...new Map(entries.map((entry) => [entry.id, entry] as const)).values(),
-];
 const romaneioCompleteRowKey = (
   row: ImportedRomaneioRow & Partial<Pick<RomaneioEntry, "id" | "sourceFile">>,
 ) =>
@@ -860,6 +904,8 @@ export default function Home() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [operatorNameInput, setOperatorNameInput] = useState("");
+  const [activeOperator, setActiveOperator] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
   const [importingBackup, setImportingBackup] = useState(false);
@@ -872,8 +918,19 @@ export default function Home() {
   const [scanInput, setScanInput] = useState("");
   const [importingScanTxt, setImportingScanTxt] = useState(false);
   const [scannedCtes, setScannedCtes] = useState<
-    Record<string, Record<string, string>>
+    Record<string, Record<string, ScanRecord>>
   >({});
+  const [covers, setCovers] = useState<CoverExport[]>([]);
+  const [coverGenerators, setCoverGenerators] = useState<string[]>([]);
+  const [coverSection, setCoverSection] = useState<CoverKind | "report">("shipment");
+  const [coverPartnerId, setCoverPartnerId] = useState("");
+  const [coverScanInput, setCoverScanInput] = useState("");
+  const [coverNumberInput, setCoverNumberInput] = useState("");
+  const [coverDrafts, setCoverDrafts] = useState<Record<string, CoverDocumentExport[]>>({});
+  const [coverReportFrom, setCoverReportFrom] = useState("");
+  const [coverReportTo, setCoverReportTo] = useState("");
+  const [coverReportSearch, setCoverReportSearch] = useState("");
+  const [selectedCoverReportIds, setSelectedCoverReportIds] = useState<string[]>([]);
   const [optionalScanPartnerIds, setOptionalScanPartnerIds] = useState<
     string[]
   >([]);
@@ -928,6 +985,47 @@ export default function Home() {
   const [romaneioDocumentDrafts, setRomaneioDocumentDrafts] = useState<
     Record<string, Record<string, RomaneioDocumentDraft>>
   >({});
+  useEffect(() => {
+    const continueWithEnter = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" || event.repeat || event.isComposing) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === "TEXTAREA") return;
+
+      const openDialog = document.querySelector<HTMLElement>(
+        '.romaneio-alert-overlay [role="alertdialog"]',
+      );
+      if (openDialog) {
+        const confirmButton = openDialog.querySelector<HTMLButtonElement>(
+          "button.primary:not(:disabled)",
+        );
+        if (confirmButton) {
+          event.preventDefault();
+          confirmButton.click();
+        }
+        return;
+      }
+
+      if (message) {
+        event.preventDefault();
+        setMessage("");
+        setMessageIsError(false);
+        return;
+      }
+
+      if (target instanceof HTMLInputElement && !target.form) {
+        const section = target.closest("section, article, .card");
+        const actionButton = section?.querySelector<HTMLButtonElement>(
+          "button.primary:not(:disabled)",
+        );
+        if (actionButton) {
+          event.preventDefault();
+          actionButton.click();
+        }
+      }
+    };
+    document.addEventListener("keydown", continueWithEnter);
+    return () => document.removeEventListener("keydown", continueWithEnter);
+  }, [message]);
   const [selectedRomaneioDocumentKeys, setSelectedRomaneioDocumentKeys] =
     useState<Record<string, string[]>>({});
   const [romaneioRouteDrafts, setRomaneioRouteDrafts] = useState<
@@ -971,9 +1069,34 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [message]);
   useEffect(() => {
+    if (!activeOperator) return;
+    setCoverGenerators((current) => {
+      const names = current.some((name) => normalized(name) === normalized(activeOperator))
+        ? current
+        : [...current, activeOperator].sort((a, b) => a.localeCompare(b, "pt-BR"));
+      try {
+        localStorage.setItem("mvflog-operator-names", JSON.stringify(names));
+      } catch {
+        /* o nome continua válido durante a sessão */
+      }
+      return names;
+    });
+  }, [activeOperator, coverGenerators]);
+  useEffect(() => {
     let cancelled = false;
     const restoreSavedData = async () => {
       try {
+        try {
+          const savedOperatorNames = JSON.parse(
+            localStorage.getItem("mvflog-operator-names") || "[]",
+          );
+          if (Array.isArray(savedOperatorNames))
+            setCoverGenerators(
+              savedOperatorNames.filter((name): name is string => typeof name === "string" && Boolean(name.trim())),
+            );
+        } catch {
+          /* começa sem nomes sugeridos se o navegador não tiver cadastro */
+        }
         if (isHostedSite()) {
           if (!cancelled) {
             setCloudHosted(true);
@@ -986,6 +1109,8 @@ export default function Home() {
           | {
               entries: Entry[];
               referenceEntries?: RomaneioReferenceEntry[];
+              covers?: CoverExport[];
+              coverGenerators?: string[];
             }
           | null = null;
         let savedBilledDocuments: Record<string, BilledDocumentRecord> | null =
@@ -996,6 +1121,8 @@ export default function Home() {
             | {
                 entries: Entry[];
                 referenceEntries?: RomaneioReferenceEntry[];
+                covers?: CoverExport[];
+                coverGenerators?: string[];
               }
           >();
           if (Array.isArray(indexedClosing)) {
@@ -1092,6 +1219,9 @@ export default function Home() {
               normalizedEntries,
             ),
           );
+          if (Array.isArray(savedClosing.covers)) setCovers(savedClosing.covers);
+          if (Array.isArray(savedClosing.coverGenerators))
+            setCoverGenerators(savedClosing.coverGenerators);
         }
         if (savedGeneralImportInfo) {
           const parsedGeneralImportInfo = JSON.parse(savedGeneralImportInfo);
@@ -1199,8 +1329,10 @@ export default function Home() {
               entries: Entry[];
               referenceEntries?: RomaneioReferenceEntry[];
               importInfo: ImportInfo | null;
+              covers?: CoverExport[];
+              coverGenerators?: string[];
             }>("closing"),
-            loadCloudStateRecord<Record<string, Record<string, string>>>(
+            loadCloudStateRecord<Record<string, Record<string, ScanRecord>>>(
               "scans",
             ),
             loadCloudStateRecord<{
@@ -1233,12 +1365,20 @@ export default function Home() {
             ),
           );
           setImportInfo(closing.importInfo || null);
+          setCovers(Array.isArray(closing.covers) ? closing.covers : []);
+          setCoverGenerators(
+            Array.isArray(closing.coverGenerators)
+              ? closing.coverGenerators
+              : [...new Set((closing.covers || []).map((cover) => cover.generatedBy).filter(Boolean) as string[])],
+          );
           cloudVersionsRef.current.closing = closingRecord?.version || "";
         } else {
           cloudVersionsRef.current.closing = await saveCloudState("closing", {
             entries: [],
             referenceEntries: [],
             importInfo: null,
+            covers: [],
+            coverGenerators: [],
           });
         }
         const scans = scansRecord?.value;
@@ -1330,7 +1470,7 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated || isHostedSite()) return;
     let cancelled = false;
-    void writeClosingStorage({ entries, referenceEntries: romaneioReferenceEntries })
+    void writeClosingStorage({ entries, referenceEntries: romaneioReferenceEntries, covers })
       .then(() => {
         try {
           localStorage.removeItem(CLOSING_STORAGE_KEY);
@@ -1353,7 +1493,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [entries, hydrated, romaneioReferenceEntries]);
+  }, [covers, entries, hydrated, romaneioReferenceEntries]);
   useEffect(() => {
     if (!hydrated || isHostedSite() || !importInfo) return;
     if (writeLocalStorage(GENERAL_IMPORT_INFO_STORAGE_KEY, importInfo)) return;
@@ -1475,8 +1615,8 @@ export default function Home() {
     romaneioRouteLabels,
   ]);
   const closingCloudState = useMemo(
-    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo }),
-    [entries, importInfo, romaneioReferenceEntries],
+    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo, covers, coverGenerators }),
+    [coverGenerators, covers, entries, importInfo, romaneioReferenceEntries],
   );
   const tdeCloudState = useMemo(
     () => ({ rates: tdeRates, importInfo: tdeImportInfo }),
@@ -1614,6 +1754,8 @@ export default function Home() {
             entries: Entry[];
             referenceEntries?: RomaneioReferenceEntry[];
             importInfo: ImportInfo | null;
+            covers?: CoverExport[];
+            coverGenerators?: string[];
           }>(key);
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
@@ -1629,9 +1771,15 @@ export default function Home() {
             ),
           );
           setImportInfo(record.value.importInfo || null);
+          setCovers(Array.isArray(record.value.covers) ? record.value.covers : []);
+          setCoverGenerators(
+            Array.isArray(record.value.coverGenerators)
+              ? record.value.coverGenerators
+              : [...new Set((record.value.covers || []).map((cover) => cover.generatedBy).filter(Boolean) as string[])],
+          );
         } else if (key === "scans") {
           const record = await loadCloudStateRecord<
-            Record<string, Record<string, string>>
+            Record<string, Record<string, ScanRecord>>
           >(key);
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
@@ -1729,11 +1877,12 @@ export default function Home() {
   const romaneioDocumentMatches = useMemo(() => {
     const mdes = new Map<string, RomaneioReferenceEntry[]>();
     const ctes = new Map<string, RomaneioReferenceEntry[]>();
-    const invoices = new Map<string, RomaneioReferenceEntry[]>();
     const references = [
       ...new Map(
         [
-          ...entriesWithTde.map(asRomaneioReferenceEntry),
+          ...entriesWithTde
+            .filter((entry) => normalized(entry.status) !== "cf")
+            .map(asRomaneioReferenceEntry),
           ...romaneioReferenceEntries,
         ].map((entry) => [entry.id, entry] as const),
       ).values(),
@@ -1742,11 +1891,9 @@ export default function Home() {
       const mde = numericDocumentId(entry.mde);
       const cte = numericDocumentId(entry.cte);
       const cteFromKey = cteNumberFromAccessKey(entry.cteKey);
-      const invoice = normalizeInvoiceKey(entry.invoice);
       if (mde) mdes.set(mde, [...(mdes.get(mde) || []), entry]);
       if (cte) ctes.set(cte, [...(ctes.get(cte) || []), entry]);
       if (cteFromKey) ctes.set(cteFromKey, [...(ctes.get(cteFromKey) || []), entry]);
-      if (invoice) invoices.set(invoice, [...(invoices.get(invoice) || []), entry]);
     });
     const matches = new Map<
       string,
@@ -1759,21 +1906,14 @@ export default function Home() {
     >();
     romaneioEntries.forEach((row) =>
       row.documents.forEach((document) => {
-        const documentKey = romaneioDocumentKey(document);
-        if (matches.has(documentKey)) return;
+        if (matches.has(document)) return;
         const reference = romaneioDocumentReference(document);
         const matchedEntries = reference
           ? reference.type === "MD-e"
-            ? uniqueRomaneioReferences([
-                ...(mdes.get(reference.number) || []),
-                ...(invoices.get(reference.number) || []),
-              ])
-            : uniqueRomaneioReferences([
-                ...(ctes.get(reference.number) || []),
-                ...(invoices.get(reference.number) || []),
-              ])
+            ? mdes.get(reference.number) || []
+            : ctes.get(reference.number) || []
           : [];
-        matches.set(documentKey, {
+        matches.set(document, {
           type: reference?.type || "Documento",
           number: reference?.number || document,
           found: matchedEntries.length > 0,
@@ -1788,7 +1928,8 @@ export default function Home() {
     romaneioEntries.forEach((row) => {
       const day = row.emissionDate.slice(0, 10) || "sem-data";
       const driverIdentity = normalizeCnpj(row.cpf) || normalized(row.driver);
-      const key = `${day}|${driverIdentity || "sem-motorista"}`;
+      const romaneioIdentity = normalized(row.romaneio) || `sem-romaneio-${row.id}`;
+      const key = `${day}|${driverIdentity || "sem-motorista"}|${romaneioIdentity}`;
       const current = groups.get(key) || {
         key,
         day,
@@ -1841,7 +1982,7 @@ export default function Home() {
             existing.routes.push(row.route);
           return;
         }
-        const match = romaneioDocumentMatches.get(documentKey);
+        const match = romaneioDocumentMatches.get(document);
         const linkedEntries = match?.entries || [];
         const linked =
           linkedEntries.find(
@@ -1860,21 +2001,16 @@ export default function Home() {
             operationalIdentifier(entry.cteKey),
             cteNumberFromAccessKey(entry.cteKey),
             normalizeInvoiceKey(entry.invoice),
+            operationalIdentifier(entry.invoice),
           ]),
         ].filter(Boolean) as string[];
         const grossFreight = linked?.reportedTotal ?? linked?.freight ?? 0;
-        const linkWarning = linkedEntries.length
-          ? linked?.sender || linked?.recipient || linked?.city || grossFreight
-            ? `Vinculado pelo relatório. Status de origem ${linked?.sourceStatus || linked?.status || "não informado"} usado só como referência.`
-            : "Vinculado, mas o relatório não trouxe remetente, destinatário, cidade ou frete para preencher a linha."
-          : `${match?.type || "Documento"} ${match?.number || document} não encontrado nos relatórios carregados. O status não bloqueia o vínculo; falta esse número de MD-e/CT-e na base.`;
         current.documents.push({
           key: documentKey,
           document,
           referenceType: match?.type || "Documento",
           referenceNumber: match?.number || document,
           linkedEntries,
-          linkWarning,
           sourceStatus: linked?.sourceStatus || linked?.status || "",
           sender: linked?.sender || "",
           recipient: linked?.recipient || "",
@@ -2418,6 +2554,36 @@ export default function Home() {
     return comparePajussaraDocuments(rows, pajussaraClosing.documents);
   }, [pajussaraClosing, partners]);
   const active = partners.find((p) => p.id === selectedPartner) || partners[0];
+  const coverPartners = useMemo(() => {
+    const map = new Map<string, string>(
+      partnerAliases
+        .filter(([id]) => id !== "unidentified")
+        .map(([id, name]) => [id, name]),
+    );
+    entriesWithTde.forEach((entry) => {
+      if (entry.partnerId !== "unidentified")
+        map.set(entry.partnerId, canonicalPartnerName(entry.partnerId, entry.partnerName));
+    });
+    return [...map].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [entriesWithTde]);
+  const effectiveCoverPartnerId = coverPartnerId || coverPartners[0]?.id || "";
+  const effectiveCoverGenerator = activeOperator;
+  const coverDraftKey = `${coverSection}|${effectiveCoverPartnerId}`;
+  const currentCoverDraft = coverDrafts[coverDraftKey] || [];
+  const reportCovers = useMemo(
+    () => covers.filter((cover) => {
+      const day = cover.createdAt.slice(0, 10);
+      const dateMatches = (!coverReportFrom || day >= coverReportFrom) && (!coverReportTo || day <= coverReportTo);
+      const search = scanKey(coverReportSearch);
+      const coverMatches = !search || scanKey(cover.id).includes(search) || String(cover.sequenceNumber || "").includes(search);
+      const documentMatches = cover.documents.some((document) => matchesCoverDocumentSearch(document, coverReportSearch));
+      return dateMatches && (coverMatches || documentMatches);
+    }),
+    [coverReportFrom, coverReportSearch, coverReportTo, covers],
+  );
+  const selectedReportCovers = reportCovers.filter((cover) =>
+    selectedCoverReportIds.includes(cover.id),
+  );
   const allIds = partners.map((p) => p.id);
   const assignmentPartners = useMemo(() => {
     const options = new Map<string, string>();
@@ -2539,7 +2705,7 @@ export default function Home() {
       ...current,
       [partnerId]: {
         ...(current[partnerId] || {}),
-        [key]: new Date().toISOString(),
+        [key]: { scannedAt: new Date().toISOString(), scannedBy: activeOperator },
       },
     }));
     setScanInput("");
@@ -2590,7 +2756,7 @@ export default function Home() {
         ...current,
         [partnerId]: {
           ...(current[partnerId] || {}),
-          ...Object.fromEntries(readings.map((key) => [key, importedAt])),
+          ...Object.fromEntries(readings.map((key) => [key, { scannedAt: importedAt, scannedBy: activeOperator }])),
         },
       }));
       setMessage(
@@ -2613,7 +2779,7 @@ export default function Home() {
       ...current,
       [entry.partnerId]: {
         ...(current[entry.partnerId] || {}),
-        [key]: new Date().toISOString(),
+        [key]: { scannedAt: new Date().toISOString(), scannedBy: activeOperator },
       },
     }));
     setMessage(
@@ -2636,7 +2802,8 @@ export default function Home() {
       (key) => key && partnerScans[key],
     );
   };
-  const isScanned = (entry: Entry) => Boolean(matchedScanKey(entry));
+  const isScanned = (entry: Entry) =>
+    normalized(entry.status) === "cf" || Boolean(matchedScanKey(entry));
   const usesScanForPartner = (partnerId: string) =>
     scanPartnerIds.has(partnerId) || optionalScanPartnerIds.includes(partnerId);
   const rowsForClosing = (partner: { id: string; rows: Entry[] }) =>
@@ -2661,10 +2828,68 @@ export default function Home() {
     );
     setMessage(
       enabled
-        ? `Bipagem opcional ativada para ${partner?.name || "esta transportadora"}. Somente documentos com OK entrarão na exportação.`
+        ? `Pagamento por bipagem ativado para ${partner?.name || "esta transportadora"}. A soma e a exportação considerarão as notas bipadas aqui ou na aba Capas.`
         : `Bipagem opcional desativada para ${partner?.name || "esta transportadora"}. A exportação voltou a considerar todos os documentos.`,
     );
   }
+  const activeClosingRows = active ? rowsForClosing(active) : [];
+  const activeClosingAudit = activeClosingRows.reduce(
+    (audit, entry) => {
+      const status = normalized(entry.status);
+      const baseFreight = Math.max(0, entry.reportedTotal ?? entry.freight);
+      const tdaValue = Math.max(0, entry.tda || entry.trt || 0);
+      const isComplement = status === "cf";
+      const isRedelivery = entry.isRedelivery || status === "re";
+      audit.total += totalOf(entry);
+      audit.baseFreight += baseFreight;
+      audit.weight += entry.weight || 0;
+      audit.volumes += entry.volumes || 0;
+      if (entry.invoice) audit.invoices.add(normalizeInvoiceKey(entry.invoice));
+      if (entry.cte) audit.ctes.add(scanKey(entry.cte));
+      if (isComplement) {
+        audit.complements.count += 1;
+        audit.complements.value += baseFreight;
+      } else if (isRedelivery) {
+        audit.redeliveries.count += 1;
+        audit.redeliveries.value += totalOf(entry);
+      } else {
+        audit.deliveries.count += 1;
+        audit.deliveries.value += totalOf(entry);
+      }
+      if (entry.tde) {
+        audit.tde.count += 1;
+        audit.tde.value += entry.tde;
+      }
+      if (tdaValue) {
+        audit.tda.count += 1;
+        audit.tda.value += tdaValue;
+      }
+      if (!isComplement && entry.dedicated) {
+        audit.dedicated.count += 1;
+        audit.dedicated.value += entry.dedicated;
+      }
+      if (entry.partnerFreight) {
+        audit.partnerFreight.count += 1;
+        audit.partnerFreight.value += entry.partnerFreight;
+      }
+      return audit;
+    },
+    {
+      total: 0,
+      baseFreight: 0,
+      weight: 0,
+      volumes: 0,
+      invoices: new Set<string>(),
+      ctes: new Set<string>(),
+      deliveries: { count: 0, value: 0 },
+      redeliveries: { count: 0, value: 0 },
+      complements: { count: 0, value: 0 },
+      tde: { count: 0, value: 0 },
+      tda: { count: 0, value: 0 },
+      dedicated: { count: 0, value: 0 },
+      partnerFreight: { count: 0, value: 0 },
+    },
+  );
 
   function setRomaneioDraft(
     groupKey: string,
@@ -2938,13 +3163,7 @@ export default function Home() {
 
   function scanOrSearchRomaneio() {
     const typed = romaneioSearch.trim();
-    const typedIdentifiers = expandRomaneioScanIdentifiers(
-      operationalIdentifiers(typed),
-      [
-        ...entriesWithTde.map(asRomaneioReferenceEntry),
-        ...romaneioReferenceEntries,
-      ],
-    );
+    const typedIdentifiers = operationalIdentifiers(typed);
     if (!typedIdentifiers.length) {
       setMessageIsError(true);
       setMessage(
@@ -2983,6 +3202,7 @@ export default function Home() {
           operationalStatus: "ET",
           reason: "",
           savedAt,
+          savedBy: activeOperator,
         },
       }));
       releaseRomaneioDocumentToClosing(
@@ -3005,13 +3225,34 @@ export default function Home() {
       return;
     }
 
-    const matches = romaneioDailyGroups.flatMap((group) =>
+    let matches = romaneioDailyGroups.flatMap((group) =>
       group.documents
         .filter((document) =>
           typedIdentifiers.some((item) => document.identifiers.includes(item)),
         )
         .map((document) => ({ group, document })),
     );
+    if (!matches.length) {
+      const reportMatches = entriesWithTde.filter((entry) => {
+        if (normalized(entry.status) === "cf") return false;
+        const identifiers = entryOperationalIdentifiers(entry);
+        return typedIdentifiers.some((item) => identifiers.includes(item));
+      });
+      if (reportMatches.length) {
+        const fallbackIdentifiers = new Set(
+          reportMatches.flatMap(entryOperationalIdentifiers),
+        );
+        matches = romaneioDailyGroups.flatMap((group) =>
+          group.documents
+            .filter((document) =>
+              document.identifiers.some((item) =>
+                fallbackIdentifiers.has(item),
+              ),
+            )
+            .map((document) => ({ group, document })),
+        );
+      }
+    }
     const pendingMatch = matches.find(
       ({ group, document }) =>
         !romaneioDocumentStatuses[document.key] &&
@@ -3082,7 +3323,7 @@ export default function Home() {
       if (!draft?.situation) return true;
       return draft.situation === "return" && !draft.reason.trim();
     }).length;
-    if (pendingCount) {
+    if (pendingCount && !allowPending) {
       setMessage("");
       setRomaneioPendingAlert({
         kind: "save-with-pending",
@@ -3145,6 +3386,7 @@ export default function Home() {
             operationalStatus: romaneioOperationalStatus(draft.situation),
             reason: draft.situation === "return" ? draft.reason.trim() : "",
             savedAt,
+            savedBy: activeOperator,
             day: group.day,
             driver: group.driver,
             romaneios: [...group.romaneios],
@@ -3205,13 +3447,7 @@ export default function Home() {
   }
 
   function scanRetainedDocument() {
-    const typedIdentifiers = expandRomaneioScanIdentifiers(
-      operationalIdentifiers(retainedScanInput),
-      [
-        ...entriesWithTde.map(asRomaneioReferenceEntry),
-        ...romaneioReferenceEntries,
-      ],
-    );
+    const typedIdentifiers = operationalIdentifiers(retainedScanInput);
     if (!typedIdentifiers.length) {
       setMessageIsError(true);
       setMessage("Digite ou bipe um MD-e ou CT-e Parceiro válido.");
@@ -3262,6 +3498,7 @@ export default function Home() {
             operationalStatus: "ET",
             reason: "",
             savedAt,
+            savedBy: activeOperator,
           };
       });
       return next;
@@ -3590,6 +3827,8 @@ export default function Home() {
         entries,
         referenceEntries: romaneioReferenceEntries,
         importInfo,
+        covers,
+        coverGenerators,
       },
       scans: scannedCtes,
       tde: { rates: tdeRates, importInfo: tdeImportInfo },
@@ -3634,8 +3873,10 @@ export default function Home() {
           entries?: Entry[];
           referenceEntries?: RomaneioReferenceEntry[];
           importInfo?: ImportInfo | null;
+          covers?: CoverExport[];
+          coverGenerators?: string[];
         };
-        scans?: Record<string, Record<string, string>>;
+        scans?: Record<string, Record<string, ScanRecord>>;
         tde?: {
           rates?: TdeRateRecord[];
           importInfo?: TdeImportInfo | null;
@@ -3670,6 +3911,12 @@ export default function Home() {
       );
       setOptionalScanPartnerIds([]);
       setImportInfo(backup.closing.importInfo || null);
+      setCovers(Array.isArray(backup.closing.covers) ? backup.closing.covers : []);
+      setCoverGenerators(
+        Array.isArray(backup.closing.coverGenerators)
+          ? backup.closing.coverGenerators
+          : [...new Set((backup.closing.covers || []).map((cover) => cover.generatedBy).filter(Boolean) as string[])],
+      );
       setScannedCtes(backup.scans || {});
       setTdeRates(Array.isArray(backup.tde?.rates) ? backup.tde.rates : []);
       setTdeImportInfo(backup.tde?.importInfo || null);
@@ -3876,8 +4123,7 @@ export default function Home() {
             ? savedOperation?.savedAt
             : undefined,
           sourceStatus,
-          sourceEligible:
-            !result.referenceOnly && row.eligible && Boolean(row.cte || row.invoice),
+          sourceEligible: row.eligible && Boolean(row.cte || row.invoice),
         };
       },
       );
@@ -3893,33 +4139,6 @@ export default function Home() {
       const releasedByRomaneio = additions.filter(
         (entry) => entry.romaneioDocumentKey,
       ).length;
-      if (result.referenceOnly) {
-        const merged = new Map<string, RomaneioReferenceEntry>();
-        [...romaneioReferenceEntries, ...referenceEntries].forEach((entry) => {
-          const key = romaneioReferenceMergeKey(entry);
-          if (!key.replace(/\|/g, "")) return;
-          const current = merged.get(key);
-          if (!current || romaneioReferenceScore(entry) > romaneioReferenceScore(current))
-            merged.set(key, entry);
-        });
-        const previousKeys = new Set(
-          romaneioReferenceEntries.map(romaneioReferenceMergeKey),
-        );
-        const addedReferences = [...merged.keys()].filter(
-          (key) => !previousKeys.has(key),
-        ).length;
-        const updatedReferences = [...merged.entries()].filter(([key, entry]) => {
-          const previous = romaneioReferenceEntries.find(
-            (candidate) => romaneioReferenceMergeKey(candidate) === key,
-          );
-          return previous && romaneioReferenceScore(entry) > romaneioReferenceScore(previous);
-        }).length;
-        setRomaneioReferenceEntries([...merged.values()]);
-        setMessage(
-          `${addedReferences} documento(s) novo(s) e ${updatedReferences} documento(s) atualizado(s) do relatório complementar ficaram disponíveis para localizar nos Romaneios.${duplicates ? ` ${duplicates} linha(s) completamente repetida(s) foram ignoradas.` : ""}`,
-        );
-        return;
-      }
       setEntries(additions);
       setRomaneioReferenceEntries(
         referenceEntries.filter((entry) => !entry.sourceEligible),
@@ -4124,6 +4343,171 @@ export default function Home() {
     );
   }
 
+  function registerCoverScan() {
+    if (coverSection === "report" || !effectiveCoverPartnerId) return;
+    const raw = coverScanInput.trim();
+    const key = scanKey(raw);
+    if (!key) {
+      setMessageIsError(true);
+      setMessage("Bipe ou digite uma NF, um CT-e ou uma chave válida.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    const completeReferenceBase = [
+      ...new Map(
+        [...entriesWithTde, ...romaneioReferenceEntries].map((entry) => [entry.id, entry] as const),
+      ).values(),
+    ];
+    const matches = completeReferenceBase.filter((entry) =>
+      entryMatchesGlobalDocumentScan(entry, raw),
+    );
+    if (!matches.length) {
+      setMessageIsError(true);
+      setMessage(`Não encontrei a nota ou CTE ${raw} no relatório importado.`);
+      playRomaneioAttentionSound();
+      return;
+    }
+    const scannedAt = new Date().toISOString();
+    const existing = currentCoverDraft;
+    const additions = matches
+      .map((entry): CoverDocumentExport => ({
+          scannedAt,
+          invoice: entry.invoice,
+          invoiceKey: normalizeInvoiceKey(entry.invoice),
+          cte: cteNumberFromAccessKey(raw) || entry.cte,
+          cteKey: /^\d{44}$/.test(key) ? key : entry.cteKey,
+          mde: entry.mde,
+          sender: entry.sender,
+          recipient: entry.recipient,
+          city: entry.city,
+          date: entry.date,
+          deliveryDate: entry.deliveryDate,
+          status: entry.status,
+        }))
+      .filter((document) => !existing.some((item) =>
+        (scanKey(document.cteKey) && scanKey(document.cteKey) === scanKey(item.cteKey)) ||
+        (
+          scanKey(document.cte) === scanKey(item.cte) &&
+          normalizeInvoiceKey(document.invoice) === normalizeInvoiceKey(item.invoice)
+        ),
+      ));
+    if (!additions.length) {
+      setCoverScanInput("");
+      setMessageIsError(true);
+      setMessage(`A nota ou CTE ${raw} já foi bipado nesta capa.`);
+      playRomaneioAttentionSound();
+      return;
+    }
+    setCoverDrafts((current) => ({
+      ...current,
+      [coverDraftKey]: [...(current[coverDraftKey] || []), ...additions],
+    }));
+    setScannedCtes((current) => {
+      const next = { ...current };
+      matches.forEach((entry) => {
+        const scan = scanKey(entry.cte) || scanKey(entry.cteKey);
+        if (!scan) return;
+        next[entry.partnerId] = {
+          ...(next[entry.partnerId] || {}),
+          [scan]: { scannedAt, scannedBy: activeOperator },
+        };
+      });
+      return next;
+    });
+    setCoverScanInput("");
+    setMessageIsError(false);
+    const repeated = matches.length - additions.length;
+    setMessage(`${additions.length} registro(s) incluído(s) na capa, independentemente da parceira de origem, e disponibilizado(s) para o fechamento por bipagem.${repeated ? ` ${repeated} registro(s) já bipado(s) não foram repetidos.` : ""}`);
+    playRomaneioSuccessSound();
+  }
+
+  function undoRomaneioDraft(groupKey: string, documentKey: string) {
+    setRomaneioDocumentDrafts((current) => {
+      const groupDrafts = { ...(current[groupKey] || {}) };
+      delete groupDrafts[documentKey];
+      return { ...current, [groupKey]: groupDrafts };
+    });
+    setSelectedRomaneioDocumentKeys((current) => ({
+      ...current,
+      [groupKey]: (current[groupKey] || []).filter((key) => key !== documentKey),
+    }));
+    setMessageIsError(false);
+    setMessage("Bipagem desfeita. O documento voltou ao status original.");
+  }
+
+  function removeCoverDraftDocument(index: number) {
+    setCoverDrafts((current) => ({
+      ...current,
+      [coverDraftKey]: (current[coverDraftKey] || []).filter((_, itemIndex) => itemIndex !== index),
+    }));
+  }
+
+  function addManualCoverNumber() {
+    if (coverSection !== "return") return;
+    const raw = coverNumberInput.trim();
+    if (!raw) return;
+    setCoverDrafts((current) => {
+      const existing = current[coverDraftKey] || [];
+      if (existing.some((document) => document.manualCoverNumber === raw))
+        return current;
+      const manualDocument: CoverDocumentExport = {
+        scannedAt: new Date().toISOString(),
+        invoice: "",
+        invoiceKey: "",
+        cte: raw,
+        cteKey: "",
+        mde: "",
+        sender: "",
+        recipient: "",
+        city: "",
+        date: "",
+        deliveryDate: "",
+        status: "CAPA MANUAL",
+        manualCoverNumber: raw,
+      };
+      return { ...current, [coverDraftKey]: [...existing, manualDocument] };
+    });
+    setCoverNumberInput("");
+    setMessageIsError(false);
+    setMessage(`Número de capa ${raw} adicionado manualmente ao documento atual.`);
+    playRomaneioSuccessSound();
+  }
+
+  function generateCover() {
+    if (coverSection === "report" || !currentCoverDraft.length) {
+      setMessage("Bipe ao menos uma nota fiscal antes de gerar a capa.");
+      return;
+    }
+    if (!effectiveCoverGenerator) {
+      setMessageIsError(true);
+      setMessage("A sessão não possui um operador identificado. Saia e informe o nome novamente.");
+      return;
+    }
+    const partnerName = coverPartners.find((partner) => partner.id === effectiveCoverPartnerId)?.name || "Transportadora";
+    const sequenceNumber = Math.max(
+      9999,
+      ...covers.map((savedCover) => savedCover.sequenceNumber || 0),
+    ) + 1;
+    const prefix = coverSection === "shipment" ? "E" : coverSection === "collection" ? "CO" : "CA";
+    const cover: CoverExport = {
+      id: `${prefix}-${sequenceNumber}`,
+      sequenceNumber,
+      partnerId: effectiveCoverPartnerId,
+      partnerName,
+      kind: coverSection,
+      createdAt: new Date().toISOString(),
+      generatedBy: effectiveCoverGenerator,
+      documents: currentCoverDraft,
+    };
+    setCovers((current) => [cover, ...current]);
+    setCoverDrafts((current) => ({ ...current, [coverDraftKey]: [] }));
+    exportCoverPdf(cover);
+    setMessageIsError(false);
+    const kindLabel = coverSection === "shipment" ? "embarque" : coverSection === "collection" ? "coleta" : "capas";
+    setMessage(`${cover.id} de ${kindLabel} gerada por ${effectiveCoverGenerator} e salva no relatório.`);
+    playRomaneioSuccessSound();
+  }
+
   function exportSelected() {
     const chosen = partners.filter(
       (p) => selectedExports.includes(p.id) && p.id !== "unidentified",
@@ -4240,22 +4624,27 @@ export default function Home() {
     setLoggingIn(true);
     setLoginError("");
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          username: loginUsername.trim(),
-          password: loginPassword,
-        }),
-      });
-      const result = (await response.json()) as { error?: string };
-      if (!response.ok)
-        throw new Error(result.error || "Usuário ou senha incorretos.");
-      setLoginPassword("");
-      setAuthStatus("checking");
-      setCloudReady(false);
-      setCloudStatus("loading");
-      setCloudRetry((current) => current + 1);
+      const operator = operatorNameInput.trim();
+      if (!operator) throw new Error("Informe o nome de quem está entrando.");
+      if (cloudHosted && authStatus === "signedOut") {
+        const response = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            username: loginUsername.trim(),
+            password: loginPassword,
+          }),
+        });
+        const result = (await response.json()) as { error?: string };
+        if (!response.ok)
+          throw new Error(result.error || "Usuário ou senha incorretos.");
+        setLoginPassword("");
+        setAuthStatus("checking");
+        setCloudReady(false);
+        setCloudStatus("loading");
+        setCloudRetry((current) => current + 1);
+      }
+      setActiveOperator(operator);
     } catch (error) {
       setLoginError(
         error instanceof Error ? error.message : "Não foi possível entrar.",
@@ -4266,9 +4655,17 @@ export default function Home() {
   }
 
   async function logout() {
+    if (!cloudHosted) {
+      setActiveOperator("");
+      setOperatorNameInput("");
+      setLoginError("");
+      return;
+    }
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } finally {
+      setActiveOperator("");
+      setOperatorNameInput("");
       setAuthStatus("signedOut");
       setCloudReady(false);
       setEntries([]);
@@ -4334,35 +4731,34 @@ export default function Home() {
       </main>
     );
 
-  if (cloudHosted && authStatus === "signedOut")
+  if (
+    (cloudHosted && authStatus === "signedOut") ||
+    (authStatus === "signedIn" && !activeOperator)
+  )
     return (
       <main className="access-shell">
         <section className="access-card login-card">
           <div className="access-mark">GM</div>
           <small>ACESSO RESTRITO</small>
           <h1>Fechamentos GMOBS</h1>
-          <p>Entre para acessar os relatórios e o histórico compartilhado.</p>
+          <p>Identifique quem está entrando para vincular as operações realizadas.</p>
           <form onSubmit={login}>
-            <label htmlFor="login-username">Usuário</label>
-            <input
-              id="login-username"
-              value={loginUsername}
-              autoComplete="username"
-              onChange={(event) => setLoginUsername(event.target.value)}
-            />
-            <label htmlFor="login-password">Senha</label>
-            <input
-              id="login-password"
-              type="password"
-              value={loginPassword}
-              autoComplete="current-password"
-              onChange={(event) => setLoginPassword(event.target.value)}
-            />
+            <label htmlFor="operator-name">Seu nome</label>
+            <input id="operator-name" list="operator-names" value={operatorNameInput} autoComplete="name" placeholder="Escolha ou digite um novo nome" onChange={(event) => setOperatorNameInput(event.target.value)} />
+            <datalist id="operator-names">
+              {coverGenerators.map((name) => <option key={name} value={name} />)}
+            </datalist>
+            {cloudHosted && authStatus === "signedOut" && <>
+              <label htmlFor="login-username">Usuário</label>
+              <input id="login-username" value={loginUsername} autoComplete="username" onChange={(event) => setLoginUsername(event.target.value)} />
+              <label htmlFor="login-password">Senha</label>
+              <input id="login-password" type="password" value={loginPassword} autoComplete="current-password" onChange={(event) => setLoginPassword(event.target.value)} />
+            </>}
             {loginError && <div className="login-error">{loginError}</div>}
             <button
               type="submit"
               className="primary"
-              disabled={loggingIn || !loginUsername.trim() || !loginPassword}
+              disabled={loggingIn || !operatorNameInput.trim() || (cloudHosted && authStatus === "signedOut" && (!loginUsername.trim() || !loginPassword))}
             >
               {loggingIn ? "Entrando..." : "Entrar"}
             </button>
@@ -4407,15 +4803,12 @@ export default function Home() {
           <h1>Fechamentos</h1>
         </div>
         <div className="header-actions">
+          <p className="active-operator">Operador: <strong>{activeOperator}</strong></p>
           <p className={`storage-status ${cloudStatus}`}>
             <span aria-hidden="true" />
             {cloudStatusText[cloudStatus]}
           </p>
-          {cloudHosted && (
-            <button type="button" onClick={logout}>
-              Sair
-            </button>
-          )}
+          <button type="button" onClick={logout}>Sair</button>
         </div>
       </header>
       <nav className="tabs" aria-label="Etapas do fechamento">
@@ -4438,13 +4831,22 @@ export default function Home() {
           <b>2</b>Romaneios
         </button>
         <button
+          className={tab === "covers" ? "active" : ""}
+          onClick={() => {
+            setTab("covers");
+            setMessage("");
+          }}
+        >
+          <b>3</b>Capas
+        </button>
+        <button
           className={tab === "preview" || tab === "export" ? "active" : ""}
           onClick={() => {
             setTab("preview");
             setMessage("");
           }}
         >
-          <b>3</b>Fechamento parceiros
+          <b>4</b>Fechamento parceiros
         </button>
       </nav>
       <section className="panel">
@@ -4986,13 +5388,11 @@ export default function Home() {
                       const previousMissingDocuments = (
                         missingDocumentsByDriver.get(normalized(group.driver)) || []
                       ).filter((record) => record.day < group.day);
-                      const pendingDocuments = group.documents.filter(
-                        (document) => {
-                          if (romaneioDocumentStatuses[document.key]) return false;
-                          const draft = drafts[document.key];
-                          if (!draft?.situation) return true;
-                          return draft.situation === "return";
-                        },
+                      const visibleDocuments = group.documents.filter(
+                        (document) => !romaneioDocumentStatuses[document.key],
+                      );
+                      const pendingDocuments = visibleDocuments.filter(
+                        (document) => !drafts[document.key]?.situation,
                       );
                       const savedProduction = savedRomaneioProduction(group);
                       const operationalDocumentCount =
@@ -5084,7 +5484,7 @@ export default function Home() {
                                 </div>
                               )}
 
-                              {pendingDocuments.length ? (
+                              {visibleDocuments.length ? (
                                 <>
                                   <div className="romaneio-batch-actions">
                                     <label>
@@ -5138,10 +5538,10 @@ export default function Home() {
                                     <div className="daily-document-head">
                                       <span>DOCUMENTO</span><span>REMETENTE</span><span>DESTINATÁRIO / CIDADE</span><span>FRETE DO RELATÓRIO / PRODUÇÃO</span><span>SITUAÇÃO</span>
                                     </div>
-                                    {pendingDocuments.map((document) => {
+                                    {visibleDocuments.map((document) => {
                                       const draft = drafts[document.key] || {situation: "", reason: ""};
                                       return (
-                                        <div className="daily-document-row" key={document.key}>
+                                        <div className={`daily-document-row${draft.situation === "delivered" ? " scanned-delivered" : draft.situation ? " marked-occurrence" : ""}`} key={document.key}>
                                           <span className="document-id">
                                             <label className="romaneio-row-check">
                                               <input
@@ -5161,9 +5561,6 @@ export default function Home() {
                                             </label>
                                             <strong>{document.referenceType} {document.referenceNumber}</strong>
                                             <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}{document.sourceStatus ? ` · Origem ${document.sourceStatus}` : ""}</small>
-                                            <small className={document.linkedEntries.length ? "link-ok" : "link-warning"}>
-                                              Aviso temporario: {document.linkWarning}
-                                            </small>
                                           </span>
                                           <span><strong>{document.sender || "Aguardando relatório"}</strong></span>
                                           <span><strong>{document.recipient || "Aguardando relatório"}</strong><small>{document.city || "Cidade não localizada"}</small></span>
@@ -5180,6 +5577,11 @@ export default function Home() {
                                             </select>
                                             {draft.situation === "return" && (
                                               <input className="return-reason" required value={draft.reason} placeholder="Motivo obrigatório" onChange={(event) => setRomaneioReturnReason(group.key, document.key, event.target.value)} />
+                                            )}
+                                            {draft.situation && (
+                                              <button type="button" className="undo-romaneio-scan" onClick={() => undoRomaneioDraft(group.key, document.key)}>
+                                                Desfazer
+                                              </button>
                                             )}
                                           </span>
                                         </div>
@@ -5359,7 +5761,9 @@ export default function Home() {
                       const operationalDocumentCount =
                         romaneioOperationalDocumentCount(group);
                       const pendingCount = group.documents.filter(
-                        (document) => !romaneioDocumentStatuses[document.key],
+                        (document) =>
+                          !romaneioDocumentStatuses[document.key] &&
+                          !romaneioDocumentDrafts[group.key]?.[document.key]?.situation,
                       ).length;
                       return (
                         <details className="romaneio-card romaneio-full-card" key={group.key}>
@@ -5437,9 +5841,6 @@ export default function Home() {
                                     <span className="document-id">
                                       <strong>{document.referenceType} {document.referenceNumber}</strong>
                                       <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}</small>
-                                      <small className={document.linkedEntries.length ? "link-ok" : "link-warning"}>
-                                        Aviso temporario: {document.linkWarning}
-                                      </small>
                                     </span>
                                     <span><strong>{document.sender || saved?.sender || "Aguardando relatório geral"}</strong></span>
                                     <span><strong>{document.recipient || saved?.recipient || "Aguardando relatório geral"}</strong><small>{city || saved?.city || "Sem cidade"}</small></span>
@@ -5614,6 +6015,100 @@ export default function Home() {
             )}
           </div>
         )}
+        {tab === "covers" && (
+          <div className="covers-view">
+            <div className="intro cover-intro">
+              <div>
+                <small>CAPAS DE TRANSPORTADORAS</small>
+                <h2>Embarque, capas, coleta e histórico</h2>
+                <p>Bipe a nota fiscal, o CTE ou a chave. A capa será gerada com os CTEs encontrados e ficará registrada para consulta.</p>
+              </div>
+              {coverSection !== "report" && (
+                <button type="button" className="primary cover-generate" disabled={!currentCoverDraft.length} onClick={generateCover}>
+                  Gerar capa ({currentCoverDraft.length})
+                </button>
+              )}
+            </div>
+            <div className="romaneio-subtabs cover-subtabs">
+              <button type="button" className={coverSection === "shipment" ? "active" : ""} onClick={() => setCoverSection("shipment")}>Embarque</button>
+              <button type="button" className={coverSection === "return" ? "active" : ""} onClick={() => setCoverSection("return")}>Capas</button>
+              <button type="button" className={coverSection === "collection" ? "active" : ""} onClick={() => setCoverSection("collection")}>Coleta</button>
+              <button type="button" className={coverSection === "report" ? "active" : ""} onClick={() => setCoverSection("report")}>Relatório</button>
+            </div>
+            {coverSection !== "report" ? (
+              <div className="cover-workspace">
+                <section className="cover-scan-card">
+                  <div className="cover-partner-heading">
+                    <small>1. ESCOLHA A PARCEIRA</small>
+                    <strong>Para quem será esta capa?</strong>
+                  </div>
+                  <label htmlFor="cover-partner">Parceira / transportadora</label>
+                  <select id="cover-partner" value={effectiveCoverPartnerId} onChange={(event) => setCoverPartnerId(event.target.value)}>
+                    {coverPartners.map((partner) => <option key={partner.id} value={partner.id}>{partner.name}</option>)}
+                  </select>
+                  <form className="cover-scan-form" onSubmit={(event) => { event.preventDefault(); registerCoverScan(); }}>
+                    <label htmlFor="cover-scan">2. Bipe as notas desta parceira</label>
+                    <div>
+                      <input id="cover-scan" autoFocus inputMode="numeric" value={coverScanInput} onChange={(event) => setCoverScanInput(event.target.value)} placeholder="Bipe a NF, CTE ou chave" />
+                      <button className="primary" disabled={!coverScanInput.trim()}>Adicionar</button>
+                    </div>
+                  </form>
+                  {coverSection === "return" && <>
+                    <div className="cover-input-divider"><span>ou</span></div>
+                    <form className="cover-scan-form cover-number-form" onSubmit={(event) => { event.preventDefault(); addManualCoverNumber(); }}>
+                      <label htmlFor="cover-number">Adicionar número de capa manual</label>
+                      <div>
+                        <input id="cover-number" value={coverNumberInput} onChange={(event) => setCoverNumberInput(event.target.value)} placeholder="Digite o número informado pela parceira" />
+                        <button type="submit" disabled={!coverNumberInput.trim()}>Adicionar capa</button>
+                      </div>
+                      <small>Este número será incluído diretamente na capa e no relatório; ele não procura notas no sistema.</small>
+                    </form>
+                  </>}
+                  <p className="cover-shared-scan-note">Toda nota localizada aqui também fica disponível na prévia da parceira. Se você ativar “Pagar somente notas bipadas”, ela entrará na soma mensal.</p>
+                </section>
+                <section className="cover-list-card">
+                  <div className="cover-list-heading"><div><small>ITENS DA CAPA</small><h3>{coverSection === "shipment" ? "Para embarque" : coverSection === "collection" ? "Para coleta" : "CTEs e capas manuais"}</h3></div><b>{currentCoverDraft.length}</b></div>
+                  <div className="cover-document-list">
+                    {currentCoverDraft.length ? currentCoverDraft.map((document, index) => (
+                      <div key={`${document.cteKey}-${document.cte}-${document.invoice}-${index}`}>
+                        <span>{index + 1}</span>
+                        <div><strong>{document.manualCoverNumber ? `Capa manual ${document.manualCoverNumber}` : `NF ${document.invoice || "não informada"}`}</strong><small>{document.manualCoverNumber ? "Número informado manualmente" : `CTE ${document.cte || "não informado"} · ${document.recipient || document.sender || "sem descrição"}`}</small></div>
+                        <button type="button" onClick={() => removeCoverDraftDocument(index)}>Remover</button>
+                      </div>
+                    )) : <p className="cover-empty">Nenhum documento bipado nesta capa.</p>}
+                  </div>
+                </section>
+              </div>
+            ) : (
+              <div className="cover-report">
+                <section className="cover-report-filters">
+                  <div><small>HISTÓRICO DE CAPAS</small><h3>Filtre, selecione a capa e gere o relatório</h3></div>
+                  <label>De<input type="date" value={coverReportFrom} onChange={(event) => setCoverReportFrom(event.target.value)} /></label>
+                  <label>Até<input type="date" value={coverReportTo} onChange={(event) => setCoverReportTo(event.target.value)} /></label>
+                  <button type="button" className="primary" disabled={!selectedReportCovers.length} onClick={() => exportCoversReportXlsx(selectedReportCovers, coverReportFrom, coverReportTo)}>Gerar relatório ({selectedReportCovers.length})</button>
+                </section>
+                <section className="cover-report-search">
+                  <label htmlFor="cover-report-search">Localizar por identificador da capa ou documento</label>
+                  <div>
+                    <input id="cover-report-search" value={coverReportSearch} onChange={(event) => setCoverReportSearch(event.target.value)} placeholder="Ex.: 10000, E-10000, NF, MD-e, CTE ou chave" />
+                    {coverReportSearch && <button type="button" onClick={() => setCoverReportSearch("")}>Limpar</button>}
+                  </div>
+                  <small>{coverReportSearch ? `${reportCovers.length} capa(s) encontrada(s).` : "A busca mostra a capa pelo número, identificador ou documento incluído."}</small>
+                </section>
+                <div className="cover-history">
+                  {reportCovers.length ? reportCovers.map((cover) => (
+                    <div className={selectedCoverReportIds.includes(cover.id) ? "selected" : ""} key={cover.id}>
+                      <input type="checkbox" aria-label={`Selecionar capa ${cover.id}`} checked={selectedCoverReportIds.includes(cover.id)} onChange={(event) => setSelectedCoverReportIds((current) => event.target.checked ? [...new Set([...current, cover.id])] : current.filter((id) => id !== cover.id))} />
+                      <span className={`cover-kind ${cover.kind}`}>{cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas"}</span>
+                      <div><strong>{cover.partnerName}</strong><small>{new Date(cover.createdAt).toLocaleDateString("pt-BR")} · {cover.documents.length} item(ns) · {cover.id} · Gerado por {cover.generatedBy || "não informado"}</small>{coverReportSearch && cover.documents.filter((document) => matchesCoverDocumentSearch(document, coverReportSearch)).map((document, index) => <small className="cover-match" key={`${cover.id}-match-${index}`}>{document.manualCoverNumber ? `Encontrado: capa manual ${document.manualCoverNumber}` : `Encontrado: NF ${document.invoice || "-"} · CTE ${document.cte || "-"} · Minuta ${document.mde || "-"}`}</small>)}</div>
+                      <button type="button" onClick={() => exportCoverPdf(cover)}>Baixar capa</button>
+                    </div>
+                  )) : <p className="cover-empty">Nenhuma capa salva neste período.</p>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {(tab === "preview" || tab === "export") && (
           <>
             <div className="romaneio-subtabs partner-closing-subtabs">
@@ -5701,7 +6196,7 @@ export default function Home() {
                           <input
                             id={`optional-scan-${active.id}`}
                             type="checkbox"
-                            aria-label="Exportar apenas documentos bipados"
+                            aria-label="Pagar somente notas bipadas"
                             checked={optionalScanPartnerIds.includes(active.id)}
                             onChange={(event) =>
                               toggleOptionalPartnerScan(
@@ -5711,9 +6206,9 @@ export default function Home() {
                             }
                           />
                           <label htmlFor={`optional-scan-${active.id}`}>
-                            <strong>Exportar apenas documentos bipados</strong>
+                            <strong>Pagar somente notas bipadas</strong>
                             <small>
-                              Desmarcado: exporta normalmente, sem exigir bipagem.
+                              Marcado: soma e exporta somente notas bipadas aqui ou em Capas.
                             </small>
                           </label>
                         </div>
@@ -5731,7 +6226,7 @@ export default function Home() {
                           </div>
                           <b>
                             {active.rows.filter(isScanned).length} de{" "}
-                            {active.rows.length} com OK
+                            {active.rows.length} liberados
                             {pendingScanKeys(active).length
                               ? ` · ${pendingScanKeys(active).length} aguardando`
                               : ""}
@@ -5783,20 +6278,20 @@ export default function Home() {
                           {active.rows.filter(isScanned).length ? (
                             active.rows.filter(isScanned).map((entry) => (
                               <div key={entry.id}>
-                                <span className="scan-ok">OK</span>
+                                <span className="scan-ok">{normalized(entry.status) === "cf" ? "CF DIRETO" : "OK"}</span>
                                 <strong>CTE {entry.cte}</strong>
                                 <small>NF {entry.invoice || "não informada"}</small>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    removeScan(
-                                      active.id,
-                                      matchedScanKey(entry) || entry.cte,
-                                    )
-                                  }
-                                >
-                                  Desmarcar
-                                </button>
+                                {normalized(entry.status) !== "cf" && <button
+                                    type="button"
+                                    onClick={() =>
+                                      removeScan(
+                                        active.id,
+                                        matchedScanKey(entry) || entry.cte,
+                                      )
+                                    }
+                                  >
+                                    Desmarcar
+                                  </button>}
                               </div>
                             ))
                           ) : !pendingScanKeys(active).length ? (
@@ -6208,6 +6703,46 @@ export default function Home() {
                       </strong>
                       <p>Valor do Frete + TDE</p>
                     </div>
+                    <section className="closing-audit">
+                      <div className="closing-audit-heading">
+                        <div>
+                          <small>CONTROLE TEMPORÁRIO DA PRÉVIA</small>
+                          <h3>O que está entrando neste fechamento</h3>
+                          <p>Os números abaixo usam exatamente os mesmos documentos da soma e da exportação.</p>
+                        </div>
+                        <span>{activeClosingRows.length} linhas</span>
+                      </div>
+                      <div className="closing-audit-grid">
+                        <article><small>NOTAS FISCAIS</small><strong>{activeClosingAudit.invoices.size}</strong><p>{money(activeClosingAudit.total)} no fechamento</p></article>
+                        <article><small>ENTREGAS NORMAIS</small><strong>{activeClosingAudit.deliveries.count}</strong><p>{money(activeClosingAudit.deliveries.value)}</p></article>
+                        <article><small>REENTREGAS (RE)</small><strong>{activeClosingAudit.redeliveries.count}</strong><p>{money(activeClosingAudit.redeliveries.value)}</p></article>
+                        <article className="audit-highlight"><small>COMPLEMENTOS (CF)</small><strong>{activeClosingAudit.complements.count}</strong><p>{money(activeClosingAudit.complements.value)} integral</p></article>
+                        <article><small>TDE</small><strong>{activeClosingAudit.tde.count}</strong><p>{money(activeClosingAudit.tde.value)}</p></article>
+                        <article><small>TDA / TRT</small><strong>{activeClosingAudit.tda.count}</strong><p>{money(activeClosingAudit.tda.value)}</p></article>
+                        <article><small>DEDICADOS FORA DO CF</small><strong>{activeClosingAudit.dedicated.count}</strong><p>{money(activeClosingAudit.dedicated.value)}</p></article>
+                        <article><small>FRETE DA PARCEIRA</small><strong>{activeClosingAudit.partnerFreight.count}</strong><p>{money(activeClosingAudit.partnerFreight.value)}</p></article>
+                        <article><small>FRETE BASE (BA)</small><strong>{money(activeClosingAudit.baseFreight)}</strong><p>{activeClosingAudit.ctes.size} CTEs únicos</p></article>
+                        <article><small>PESO / VOLUMES</small><strong>{activeClosingAudit.weight.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg</strong><p>{activeClosingAudit.volumes.toLocaleString("pt-BR")} volumes</p></article>
+                        {usesScanForPartner(active.id) && <article><small>FORA POR FALTA DE BIPAGEM</small><strong>{active.rows.filter((entry) => !isScanned(entry)).length}</strong><p>não entram na soma</p></article>}
+                      </div>
+                      <details className="closing-audit-details">
+                        <summary>Ver nota por nota e todos os valores</summary>
+                        <div className="closing-audit-table-wrap">
+                          <table>
+                            <thead><tr><th>NF</th><th>CTE</th><th>Status</th><th>Destinatário</th><th>Cidade</th><th>Frete base</th><th>TDE</th><th>TDA/TRT</th><th>Dedicado</th><th>Total que entra</th></tr></thead>
+                            <tbody>
+                              {activeClosingRows.map((entry) => {
+                                const isComplement = normalized(entry.status) === "cf";
+                                const baseFreight = Math.max(0, entry.reportedTotal ?? entry.freight);
+                                return <tr className={isComplement ? "cf-row" : ""} key={`audit-${entry.id}`}>
+                                  <td>{entry.invoice || "-"}</td><td>{entry.cte || "-"}</td><td>{isComplement ? "CF" : entry.isRedelivery || normalized(entry.status) === "re" ? "RE" : entry.status || "ET"}</td><td>{entry.recipient || "-"}</td><td>{entry.city || "-"}</td><td>{money(baseFreight)}</td><td>{money(entry.tde || 0)}</td><td>{money(entry.tda || entry.trt || 0)}</td><td>{money(isComplement ? baseFreight : entry.dedicated || 0)}</td><td><strong>{money(totalOf(entry))}</strong></td>
+                                </tr>;
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    </section>
                   </div>
                 )}
               </div>
@@ -6580,10 +7115,26 @@ export default function Home() {
                 <p>
                   {romaneioPendingAlert.kind === "change-romaneio"
                     ? "Você tentou bipar um documento de outro romaneio. As marcações atuais ainda não foram gravadas."
-                    : "Esses documentos ainda não receberam uma situação. Todos precisam estar como Entregue ou com ocorrência antes de gravar."}
+                    : "Esses documentos ainda não receberam uma situação. Você pode voltar e conferir tudo ou gravar somente o que já marcou, deixando o restante em aberto para continuar depois."}
                 </p>
               </div>
               <div className="romaneio-alert-actions">
+                {romaneioPendingAlert.kind === "save-with-pending" && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      const alert = romaneioPendingAlert;
+                      setRomaneioPendingAlert(null);
+                      const group = romaneioDailyGroups.find(
+                        (candidate) => candidate.key === alert.groupKey,
+                      );
+                      if (group) saveRomaneioGroup(group, true);
+                    }}
+                  >
+                    Gravar marcados e deixar restantes em aberto
+                  </button>
+                )}
                 <button
                   type="button"
                   className="primary"
