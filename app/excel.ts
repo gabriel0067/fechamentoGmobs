@@ -128,6 +128,9 @@ export type CoverDocumentExport = {
   deliveryDate: string;
   status: string;
   manualCoverNumber?: string;
+  volumes?: number;
+  weight?: number;
+  manualEntry?: boolean;
 };
 
 export type CoverExport = {
@@ -681,7 +684,7 @@ const inferBilledPartner = (fileName: string, rows: unknown[][]) => {
   )
     return "Fitlog";
   if (fileContent.includes("pajussara") || fileContent.includes("pajucara"))
-    return "PAJUSSARA";
+    return "PAJUÇARA";
   if (fileContent.includes("rio vermelho")) return "Rio Vermelho";
   if (
     fileContent.includes("tadex") ||
@@ -900,7 +903,7 @@ export async function readPajussaraClosingFile(file: File) {
 
   if (!best)
     throw new Error(
-      "Não encontrei as colunas CTRC/SUBC e NF no fechamento da Pajussara.",
+      "Não encontrei as colunas CTRC/SUBC e NF no fechamento da Pajuçara.",
     );
 
   const cell = (row: unknown[], column: number) =>
@@ -931,7 +934,7 @@ export async function readPajussaraClosingFile(file: File) {
 
   if (!documents.length)
     throw new Error(
-      "O fechamento da Pajussara foi reconhecido, mas não encontrei documentos abaixo do cabeçalho.",
+      "O fechamento da Pajuçara foi reconhecido, mas não encontrei documentos abaixo do cabeçalho.",
     );
 
   const period = workbook.SheetNames.flatMap((sheetName) =>
@@ -1645,7 +1648,7 @@ export function exportPajussaraMissingXlsx(
     .slice(0, 80);
   XLSX.writeFile(
     workbook,
-    `Pendencias Pajussara - ${safeName || "comparacao"}.xlsx`,
+    `Pendencias Pajuçara - ${safeName || "comparacao"}.xlsx`,
     { compression: true },
   );
 }
@@ -2019,6 +2022,16 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
 
 const coverDate = (value: string) =>
   value ? new Date(value).toLocaleDateString("pt-BR") : new Date().toLocaleDateString("pt-BR");
+const uniqueCoverDocuments = (documents: CoverDocumentExport[]) => [
+  ...new Map(
+    documents.map((document) => [
+      [document.cteKey, document.cte, document.invoiceKey || document.invoice, document.manualCoverNumber]
+        .map((value) => String(value || "").replace(/\W/g, "").toUpperCase())
+        .join("|"),
+      document,
+    ]),
+  ).values(),
+];
 
 export function exportCoverPdf(cover: CoverExport) {
   const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
@@ -2030,75 +2043,154 @@ export function exportCoverPdf(cover: CoverExport) {
       ? "PROTOCOLO DE COLETA"
       : "PROTOCOLO DE CAPAS";
   const protocol = cover.id || Date.now().toString().slice(-8);
-  pdf.setDrawColor(25, 25, 25);
-  pdf.setLineWidth(0.35);
-  pdf.rect(margin, 14, width, 34);
-  pdf.line(margin + 40, 14, margin + 40, 48);
-  pdf.line(margin + 124, 14, margin + 124, 48);
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(17);
-  pdf.text("MVFLOG", margin + 20, 31, { align: "center" });
-  pdf.setFontSize(10);
-  pdf.text(cover.partnerName.toUpperCase(), margin + 82, 23, { align: "center", maxWidth: 80 });
-  pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(8);
-  pdf.text("CAPA DE DOCUMENTOS DA TRANSPORTADORA", margin + 82, 30, { align: "center" });
-  pdf.text(`Gerado em ${coverDate(cover.createdAt)}`, margin + 82, 37, { align: "center" });
-  pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(9);
-  pdf.text(title, margin + 153, 23, { align: "center", maxWidth: 54 });
-  pdf.setFontSize(13);
-  pdf.text(protocol, margin + 153, 33, { align: "center" });
-  pdf.setFontSize(8);
-  pdf.text(`${cover.documents.length} CTE(s)`, margin + 153, 41, { align: "center" });
-  pdf.rect(margin, 48, width, 8);
-  pdf.setFontSize(8.5);
-  pdf.text(`${title} - ${cover.partnerName}`, margin + width / 2, 53.3, { align: "center" });
   const columns = 3;
   const cellWidth = width / columns;
   const headerY = 56;
-  pdf.setFillColor(0, 0, 0);
-  pdf.rect(margin, headerY, width, 7, "F");
-  pdf.setTextColor(255, 255, 255);
-  pdf.setFontSize(8);
-  for (let col = 0; col < columns; col++)
-    pdf.text(cover.kind === "return" ? "CAPA / CTE" : "CTE", margin + cellWidth * col + cellWidth / 2, headerY + 4.8, { align: "center" });
-  pdf.setTextColor(0, 0, 0);
-  let y = headerY + 7;
-  const visibleRows = Math.min(24, Math.max(1, Math.ceil(cover.documents.length / columns)));
-  for (let row = 0; row < visibleRows; row++) {
-    if (row % 2 === 1) {
-      pdf.setFillColor(205, 205, 205);
-      pdf.rect(margin, y, width, 7, "F");
+  const rowsPerPage = 24;
+  const documentsPerPage = rowsPerPage * columns;
+  const documents = uniqueCoverDocuments(cover.documents);
+  const pages = Math.max(1, Math.ceil(documents.length / documentsPerPage));
+
+  for (let page = 0; page < pages; page++) {
+    if (page) pdf.addPage();
+    const pageDocuments = documents.slice(
+      page * documentsPerPage,
+      (page + 1) * documentsPerPage,
+    );
+    pdf.setDrawColor(25, 25, 25);
+    pdf.setLineWidth(0.35);
+    pdf.rect(margin, 14, width, 34);
+    pdf.line(margin + 40, 14, margin + 40, 48);
+    pdf.line(margin + 124, 14, margin + 124, 48);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(17);
+    pdf.text("MVFLOG", margin + 20, 31, { align: "center" });
+    pdf.setFontSize(10);
+    pdf.text(cover.partnerName.toUpperCase(), margin + 82, 23, { align: "center", maxWidth: 80 });
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.text("CAPA DE DOCUMENTOS DA TRANSPORTADORA", margin + 82, 30, { align: "center" });
+    pdf.text(`Gerado em ${coverDate(cover.createdAt)}`, margin + 82, 37, { align: "center" });
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(9);
+    pdf.text(title, margin + 153, 23, { align: "center", maxWidth: 54 });
+    pdf.setFontSize(13);
+    pdf.text(protocol, margin + 153, 33, { align: "center" });
+    pdf.setFontSize(8);
+    pdf.text(`${documents.length} item(ns) · ${page + 1}/${pages}`, margin + 153, 41, { align: "center" });
+    pdf.rect(margin, 48, width, 8);
+    pdf.setFontSize(8.5);
+    pdf.text(`${title} - ${cover.partnerName}`, margin + width / 2, 53.3, { align: "center" });
+    pdf.setFillColor(0, 0, 0);
+    pdf.rect(margin, headerY, width, 7, "F");
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(8);
+    for (let col = 0; col < columns; col++)
+      pdf.text(cover.kind === "return" ? "CAPA / CTE" : "CTE", margin + cellWidth * col + cellWidth / 2, headerY + 4.8, { align: "center" });
+    pdf.setTextColor(0, 0, 0);
+    let y = headerY + 7;
+    const visibleRows = Math.max(1, Math.ceil(pageDocuments.length / columns));
+    for (let row = 0; row < visibleRows; row++) {
+      if (row % 2 === 1) {
+        pdf.setFillColor(205, 205, 205);
+        pdf.rect(margin, y, width, 7, "F");
+      }
+      pdf.rect(margin, y, width, 7);
+      for (let col = 1; col < columns; col++) pdf.line(margin + cellWidth * col, y, margin + cellWidth * col, y + 7);
+      for (let col = 0; col < columns; col++) {
+        const document = pageDocuments[row + col * visibleRows];
+        if (!document) continue;
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(8.5);
+        const documentNumber = document.manualCoverNumber || document.cte || document.invoice || "SEM CTE";
+        pdf.text(documentNumber.padStart(9, "0"), margin + cellWidth * col + cellWidth / 2, y + 4.8, { align: "center" });
+      }
+      y += 7;
     }
-    pdf.rect(margin, y, width, 7);
-    for (let col = 1; col < columns; col++) pdf.line(margin + cellWidth * col, y, margin + cellWidth * col, y + 7);
-    for (let col = 0; col < columns; col++) {
-      const document = cover.documents[row + col * visibleRows];
-      if (!document) continue;
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(8.5);
-      const documentNumber = document.manualCoverNumber || document.cte || document.invoice || "SEM CTE";
-      pdf.text(documentNumber.padStart(9, "0"), margin + cellWidth * col + cellWidth / 2, y + 4.8, { align: "center" });
-    }
-    y += 7;
+    y = Math.max(y + 13, 238);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.text(`Gerado por: ${cover.generatedBy || "Não informado"}`, margin, y);
+    y += 12;
+    pdf.line(margin + 30, y, margin + width - 30, y);
+    pdf.setFontSize(7.5);
+    pdf.text("ASSINATURA DO RESPONSÁVEL / DATA", margin + width / 2, y + 5, { align: "center" });
   }
-  y = Math.max(y + 13, 238);
-  pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(8);
-  pdf.text(`Gerado por: ${cover.generatedBy || "Não informado"}`, margin, y);
-  y += 12;
-  pdf.line(margin + 30, y, margin + width - 30, y);
-  pdf.setFont("helvetica", "normal");
-  pdf.setFontSize(7.5);
-  pdf.text("ASSINATURA DO RESPONSÁVEL / DATA", margin + width / 2, y + 5, { align: "center" });
   const safePartner = cover.partnerName.replace(/[\\/:*?"<>|]+/g, "-");
   const kindLabel = cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas";
   pdf.save(`Capa ${kindLabel} - ${safePartner} - ${coverDate(cover.createdAt).replace(/\//g, "-")}.pdf`);
 }
 
+export function exportCoverDetailedPdf(cover: CoverExport) {
+  const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const margin = 9;
+  const pageWidth = 297;
+  const columns = [
+    { label: "NF", width: 25 },
+    { label: "CT-e", width: 22 },
+    { label: "Chave CT-e", width: 68 },
+    { label: "Remetente", width: 48 },
+    { label: "Destinatário", width: 48 },
+    { label: "Volumes", width: 18 },
+    { label: "Peso", width: 22 },
+    { label: "Cidade", width: 27 },
+  ];
+  const rowHeight = 7;
+  const rowsPerPage = 20;
+  const documents = uniqueCoverDocuments(cover.documents);
+  const pages = Math.max(1, Math.ceil(documents.length / rowsPerPage));
+  for (let page = 0; page < pages; page++) {
+    if (page) pdf.addPage();
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(13);
+    pdf.text(`RELATÓRIO COMPLETO DA CAPA ${cover.id}`, margin, 12);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.text(`${cover.partnerName} · ${coverDate(cover.createdAt)} · Gerado por ${cover.generatedBy || "Não informado"} · Página ${page + 1}/${pages}`, margin, 18);
+    let y = 23;
+    pdf.setFillColor(24, 107, 73);
+    pdf.rect(margin, y, pageWidth - margin * 2, rowHeight, "F");
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFont("helvetica", "bold");
+    let x = margin;
+    columns.forEach((column) => {
+      pdf.text(column.label, x + 1.5, y + 4.7, { maxWidth: column.width - 3 });
+      x += column.width;
+    });
+    pdf.setTextColor(0, 0, 0);
+    y += rowHeight;
+    documents.slice(page * rowsPerPage, (page + 1) * rowsPerPage).forEach((document, index) => {
+      if (index % 2) {
+        pdf.setFillColor(238, 245, 241);
+        pdf.rect(margin, y, pageWidth - margin * 2, rowHeight, "F");
+      }
+      const values = [
+        document.invoice || document.manualCoverNumber || "-",
+        document.cte || "-",
+        document.cteKey || "-",
+        document.sender || "-",
+        document.recipient || "-",
+        String(document.volumes ?? "-"),
+        document.weight === undefined ? "-" : `${document.weight.toLocaleString("pt-BR")} kg`,
+        document.city || "-",
+      ];
+      x = margin;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7);
+      columns.forEach((column, columnIndex) => {
+        pdf.rect(x, y, column.width, rowHeight);
+        pdf.text(values[columnIndex], x + 1.5, y + 4.6, { maxWidth: column.width - 3 });
+        x += column.width;
+      });
+      y += rowHeight;
+    });
+  }
+  const safePartner = cover.partnerName.replace(/[\\/:*?"<>|]+/g, "-");
+  pdf.save(`Relatorio completo ${cover.id} - ${safePartner}.pdf`);
+}
+
 export function exportCoversReportXlsx(covers: CoverExport[], periodFrom: string, periodTo: string) {
-  const rows = covers.flatMap((cover) => cover.documents.map((document) => ({
+  const rows = covers.flatMap((cover) => uniqueCoverDocuments(cover.documents).map((document) => ({
     "Data da capa": coverDate(cover.createdAt),
     Tipo: cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas",
     Transportadora: cover.partnerName,
@@ -2118,6 +2210,8 @@ export function exportCoversReportXlsx(covers: CoverExport[], periodFrom: string
     Emissão: document.date,
     Entrega: document.deliveryDate,
     Status: document.status,
+    Volumes: document.volumes ?? "",
+    "Peso (kg)": document.weight ?? "",
   })));
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Aviso: "Nenhuma nota encontrada no período selecionado." }]);
