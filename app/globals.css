@@ -238,6 +238,11 @@ button {
 .cover-partner-heading small { color: #168755; font-size: 10px; font-weight: 900; letter-spacing: .12em; }
 .cover-partner-heading strong { color: #17231c; font-size: 17px; }
 .cover-scan-card label, .cover-report-filters label { color: #556159; font-size: 12px; font-weight: 800; }
+.cover-partner-label { color: #556159; font-size: 12px; font-weight: 800; }
+.cover-partner-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.cover-partner-options button { min-width: 0; border: 1px solid #c9d5ce; border-radius: 9px; background: #f5f8f6; color: #32483c; padding: 8px 6px; font-size: 12px; font-weight: 850; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cover-partner-options button:hover { border-color: #79a68e; background: #edf6f1; }
+.cover-partner-options button.active { border-color: #146c43; background: #146c43; color: #fff; box-shadow: 0 2px 7px #146c4330; }
 .cover-scan-card select, .cover-scan-form input, .cover-report-filters input { width: 100%; border: 1px solid #ccd6d0; border-radius: 10px; background: #fff; padding: 11px 12px; }
 .cover-scan-form { display: grid; gap: 8px; margin-top: 10px; }
 .cover-scan-form > div { display: flex; gap: 8px; }
@@ -2408,6 +2413,16 @@ button {
   padding: 11px 12px;
   border-top: 1px solid #edf0ee;
 }
+.romaneio-global-scan .romaneio-cancel-scan {
+  border: 1px solid #dba59f;
+  background: #fff1ef;
+  color: #a4372f;
+  white-space: nowrap;
+}
+.romaneio-global-scan .romaneio-cancel-scan:disabled {
+  opacity: .45;
+  cursor: default;
+}
 .daily-document-row.scanned-delivered {
   background: #eaf8ef;
   box-shadow: inset 4px 0 #3aa66a;
@@ -2774,6 +2789,18 @@ button {
   gap: 10px;
   padding-top: 4px;
 }
+.romaneio-alert-actions button {
+  min-height: 44px;
+  border-radius: 10px;
+  padding: 11px 17px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+.romaneio-alert-actions button:active {
+  transform: translateY(1px);
+}
 .romaneio-alert-actions .secondary {
   border: 1px solid #bdc8c2;
   border-radius: 10px;
@@ -2785,6 +2812,15 @@ button {
 .romaneio-alert-actions .secondary:hover {
   border-color: #8c9b93;
   background: #f4f7f5;
+}
+.romaneio-alert-actions .danger {
+  border: 1px solid #bd3b31;
+  background: #bd3b31;
+  color: #fff;
+}
+.romaneio-alert-actions .danger:hover {
+  border-color: #9f2e27;
+  background: #9f2e27;
 }
 @keyframes romaneio-alert-in {
   from {

@@ -912,6 +912,8 @@ export default function Home() {
   const [messageIsError, setMessageIsError] = useState(false);
   const [romaneioPendingAlert, setRomaneioPendingAlert] =
     useState<RomaneioPendingAlert | null>(null);
+  const [romaneioCancelConfirmation, setRomaneioCancelConfirmation] =
+    useState(false);
   const [romaneioSituationConfirmation, setRomaneioSituationConfirmation] =
     useState<RomaneioSituationConfirmation | null>(null);
   const [
@@ -5522,6 +5524,14 @@ export default function Home() {
                       Mostrar todos
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="romaneio-cancel-scan"
+                    disabled={!Object.values(romaneioDocumentDrafts).some((drafts) => Object.keys(drafts).length)}
+                    onClick={() => setRomaneioCancelConfirmation(true)}
+                  >
+                    Cancelar ticagem
+                  </button>
                 </form>
 
                 {!romaneioDailyGroups.length ? (
@@ -6201,10 +6211,21 @@ export default function Home() {
                     <small>1. ESCOLHA A PARCEIRA</small>
                     <strong>Para quem será esta capa?</strong>
                   </div>
-                  <label htmlFor="cover-partner">Parceira / transportadora</label>
-                  <select id="cover-partner" value={effectiveCoverPartnerId} onChange={(event) => setCoverPartnerId(event.target.value)}>
-                    {coverPartners.map((partner) => <option key={partner.id} value={partner.id}>{partner.name}</option>)}
-                  </select>
+                  <span className="cover-partner-label">Parceira / transportadora</span>
+                  <div className="cover-partner-options" role="radiogroup" aria-label="Parceira ou transportadora">
+                    {coverPartners.map((partner) => (
+                      <button
+                        key={partner.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={effectiveCoverPartnerId === partner.id}
+                        className={effectiveCoverPartnerId === partner.id ? "active" : ""}
+                        onClick={() => setCoverPartnerId(partner.id)}
+                      >
+                        {partner.name}
+                      </button>
+                    ))}
+                  </div>
                   <form className="cover-scan-form" onSubmit={(event) => { event.preventDefault(); registerCoverScan(); }}>
                     <label htmlFor="cover-scan">2. Bipe as notas desta parceira</label>
                     <div>
@@ -6276,7 +6297,7 @@ export default function Home() {
                       <div><strong>{cover.partnerName}</strong><small>{new Date(cover.createdAt).toLocaleDateString("pt-BR")} · {cover.documents.length} item(ns) · {cover.id} · Gerado por {cover.generatedBy || "não informado"}</small>{coverReportSearch && cover.documents.filter((document) => matchesCoverDocumentSearch(document, coverReportSearch)).map((document, index) => <small className="cover-match" key={`${cover.id}-match-${index}`}>{document.manualCoverNumber ? `Encontrado: capa manual ${document.manualCoverNumber}` : `Encontrado: NF ${document.invoice || "-"} · CTE ${document.cte || "-"} · Minuta ${document.mde || "-"}`}</small>)}</div>
                       <div className="cover-history-actions">
                         <button type="button" onClick={() => startEditingCover(cover)}>Editar</button>
-                        <button type="button" onClick={() => exportCoverDetailedPdf(cover)}>PDF completo</button>
+                        <button type="button" onClick={() => exportCoversReportXlsx([cover], cover.createdAt.slice(0, 10), cover.createdAt.slice(0, 10))}>Gerar Excel</button>
                         <button type="button" onClick={() => exportCoverPdf(cover)}>Baixar capa</button>
                       </div>
                     </div>
@@ -7296,22 +7317,6 @@ export default function Home() {
                 </p>
               </div>
               <div className="romaneio-alert-actions">
-                {romaneioPendingAlert.kind === "change-romaneio" && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => {
-                      setRomaneioDocumentDrafts({});
-                      setSelectedRomaneioDocumentKeys({});
-                      setRomaneioSearch("");
-                      setRomaneioPendingAlert(null);
-                      setMessageIsError(false);
-                      setMessage("Ticagem cancelada. Você pode começar novamente.");
-                    }}
-                  >
-                    Cancelar ticagem atual
-                  </button>
-                )}
                 {romaneioPendingAlert.kind === "save-with-pending" && (
                   <button
                     type="button"
@@ -7334,6 +7339,36 @@ export default function Home() {
                   onClick={() => setRomaneioPendingAlert(null)}
                 >
                   Voltar e conferir
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {romaneioCancelConfirmation && (
+          <div className="romaneio-alert-overlay">
+            <div className="romaneio-alert-dialog" role="alertdialog" aria-modal="true" aria-labelledby="romaneio-cancel-title">
+              <span className="romaneio-alert-icon" aria-hidden="true">!</span>
+              <div className="romaneio-alert-copy">
+                <small>CONFIRMAR CANCELAMENTO</small>
+                <h2 id="romaneio-cancel-title">Cancelar a ticagem atual?</h2>
+                <p>As marcações ainda não gravadas serão desfeitas. Depois você poderá começar outra ticagem do zero.</p>
+              </div>
+              <div className="romaneio-alert-actions">
+                <button type="button" className="secondary" onClick={() => setRomaneioCancelConfirmation(false)}>Voltar</button>
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => {
+                    setRomaneioDocumentDrafts({});
+                    setSelectedRomaneioDocumentKeys({});
+                    setRomaneioSearch("");
+                    setRomaneioPendingAlert(null);
+                    setRomaneioCancelConfirmation(false);
+                    setMessageIsError(false);
+                    setMessage("Ticagem cancelada. Você pode começar novamente.");
+                  }}
+                >
+                  Sim, cancelar ticagem
                 </button>
               </div>
             </div>
