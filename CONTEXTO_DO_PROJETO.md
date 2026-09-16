@@ -1,5 +1,7 @@
 # Contexto do projeto — Fechamentos GMOBS
 
+> Migração em preparação (16/09/2026): esta cópia de trabalho está na branch `migration/neon-vercel`. O site Cloudflare em produção e a branch `main` permanecem intocados. A versão de migração usa Next.js nativo, Neon PostgreSQL e transferência do estado em partes compatíveis com a Vercel. O backup real dos seis conjuntos D1 e a validação no Neon ainda são obrigatórios antes de qualquer corte. Consulte `MIGRACAO_NEON_VERCEL.md`. A troca de hospedagem, por si só, não elimina o custo de carregar e salvar conjuntos inteiros.
+
 ## Objetivo
 
 Este projeto transforma o processo de fechamento de transportadoras/parceiras em um fluxo web simples. O usuário importa um relatório geral em Excel ou CSV, confere os registros separados por parceira e exporta um arquivo Excel separado para cada transportadora escolhida.

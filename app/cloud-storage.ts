@@ -10,6 +10,7 @@ export type CloudStateRecord<T> = { value: T; version: string };
 type CloudEncoding = "gzip-base64" | "json";
 
 const CLOUD_STATE_ENDPOINT = "/api/cloud-state";
+const TRANSFER_CHUNK_SIZE = 700_000;
 
 export function isHostedSite() {
   if (typeof window === "undefined") return false;
@@ -75,18 +76,36 @@ function cloudError(response: Response) {
 }
 
 export async function loadCloudStateRecord<T>(stateKey: CloudStateKey) {
-  const response = await fetch(
+  const head = await fetch(
     `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
-    { cache: "no-store" },
+    { method: "HEAD", cache: "no-store" },
   );
-  if (response.status === 204) return undefined;
-  if (!response.ok) throw cloudError(response);
-  const encoding = response.headers.get("x-gmobs-encoding") as CloudEncoding;
+  if (head.status === 204) return undefined;
+  if (!head.ok) throw cloudError(head);
+  const encoding = head.headers.get("x-gmobs-encoding") as CloudEncoding;
   if (encoding !== "gzip-base64" && encoding !== "json")
     throw new Error("O banco retornou um formato de dados desconhecido.");
+  const version = head.headers.get("x-gmobs-version") || "";
+  const count = Number(head.headers.get("x-gmobs-chunks"));
+  if (!version || !Number.isInteger(count) || count < 1 || count > 100)
+    throw new Error("O banco retornou um tamanho inválido.");
+  const chunks: string[] = [];
+  for (let start = 0; start < count; start += 4) {
+    const batch = await Promise.all(
+      Array.from({ length: Math.min(4, count - start) }, async (_, offset) => {
+        const response = await fetch(
+          `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}&index=${start + offset}&version=${encodeURIComponent(version)}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) throw cloudError(response);
+        return response.text();
+      }),
+    );
+    chunks.push(...batch);
+  }
   return {
-    value: await decodeState<T>(encoding, await response.text()),
-    version: response.headers.get("x-gmobs-version") || "",
+    value: await decodeState<T>(encoding, chunks.join("")),
+    version,
   } satisfies CloudStateRecord<T>;
 }
 
@@ -109,17 +128,28 @@ export async function saveCloudState(
   value: unknown,
 ) {
   const { encoding, payload } = await encodeState(value);
-  const response = await fetch(
-    `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
-    {
-      method: "PUT",
-      headers: {
-        "content-type": "text/plain;charset=UTF-8",
-        "x-gmobs-encoding": encoding,
-      },
-      body: payload,
-    },
-  );
+  const uploadId = crypto.randomUUID();
+  const units = encoding === "json" ? Array.from(payload) : payload;
+  const chunks: string[] = [];
+  for (let offset = 0; offset < units.length; offset += TRANSFER_CHUNK_SIZE)
+    chunks.push(encoding === "json"
+      ? (units as string[]).slice(offset, offset + TRANSFER_CHUNK_SIZE).join("")
+      : (units as string).slice(offset, offset + TRANSFER_CHUNK_SIZE));
+  if (!chunks.length) chunks.push("");
+  if (chunks.length > 100)
+    throw new Error("O conjunto de dados excede o limite de transferência; não foi salvo.");
+  for (let index = 0; index < chunks.length; index++) {
+    const response = await fetch(
+      `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}&upload=${uploadId}&index=${index}`,
+      { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8", "x-gmobs-encoding": encoding }, body: chunks[index] },
+    );
+    if (!response.ok) throw cloudError(response);
+  }
+  const response = await fetch(`${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ uploadId, chunkCount: chunks.length, encoding }),
+  });
   if (!response.ok) throw cloudError(response);
   const result = (await response.json()) as { updatedAt?: string };
   return result.updatedAt || "";

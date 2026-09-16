@@ -1,5 +1,3 @@
-import { env } from "cloudflare:workers";
-
 const SESSION_COOKIE = "gmobs_session";
 const SESSION_SECONDS = 8 * 60 * 60;
 
@@ -12,7 +10,7 @@ type AuthEnv = {
 const encoder = new TextEncoder();
 
 function authEnv() {
-  const runtime = env as unknown as AuthEnv;
+  const runtime = process.env as AuthEnv;
   const username = runtime.GMOBS_LOGIN_USER;
   const password = runtime.GMOBS_LOGIN_PASSWORD;
   const secret = runtime.GMOBS_SESSION_SECRET;

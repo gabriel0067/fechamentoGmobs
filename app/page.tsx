@@ -4535,6 +4535,12 @@ export default function Home() {
         importInfo,
         covers,
         coverGenerators,
+        closingAdditionals,
+        billingInvoices,
+        pickupRecords,
+        dedicatedRecords,
+        financialEntries,
+        financialAccountNames,
       },
       scans: scannedCtes,
       tde: { rates: tdeRates, importInfo: tdeImportInfo },
@@ -4582,6 +4588,11 @@ export default function Home() {
           covers?: CoverExport[];
           coverGenerators?: string[];
           closingAdditionals?: ClosingAdditional[];
+          billingInvoices?: BillingInvoice[];
+          pickupRecords?: PickupRecord[];
+          dedicatedRecords?: DedicatedRecord[];
+          financialEntries?: FinancialEntry[];
+          financialAccountNames?: string[];
         };
         scans?: Record<string, Record<string, ScanRecord>>;
         tde?: {
@@ -4624,6 +4635,12 @@ export default function Home() {
           ? backup.closing.coverGenerators
           : [...new Set((backup.closing.covers || []).map((cover) => cover.generatedBy).filter(Boolean) as string[])],
       );
+      if (Array.isArray(backup.closing.closingAdditionals)) setClosingAdditionals(backup.closing.closingAdditionals);
+      if (Array.isArray(backup.closing.billingInvoices)) setBillingInvoices(backup.closing.billingInvoices);
+      if (Array.isArray(backup.closing.pickupRecords)) setPickupRecords(backup.closing.pickupRecords);
+      if (Array.isArray(backup.closing.dedicatedRecords)) setDedicatedRecords(backup.closing.dedicatedRecords);
+      if (Array.isArray(backup.closing.financialEntries)) setFinancialEntries(backup.closing.financialEntries);
+      if (Array.isArray(backup.closing.financialAccountNames)) setFinancialAccountNames(backup.closing.financialAccountNames);
       setScannedCtes(backup.scans || {});
       setTdeRates(Array.isArray(backup.tde?.rates) ? backup.tde.rates : []);
       setTdeImportInfo(backup.tde?.importInfo || null);
@@ -5012,7 +5029,7 @@ export default function Home() {
       return;
     }
     const discountAmount = withDiscount
-      ? parseMoney(driverClosingDiscountPrompt?.amount || "")
+      ? (parseMoney(driverClosingDiscountPrompt?.amount || "") ?? 0)
       : 0;
     const installments = withDiscount
       ? Math.max(
@@ -5584,7 +5601,7 @@ export default function Home() {
       return;
     }
     const parsedValue = dedicatedValue.trim() ? parseMoney(dedicatedValue) : undefined;
-    if (dedicatedValue.trim() && (parsedValue === null || parsedValue < 0)) {
+    if (dedicatedValue.trim() && (parsedValue === null || parsedValue === undefined || parsedValue < 0)) {
       setMessageIsError(true);
       setMessage("Informe um valor válido ou deixe o valor do dedicado em branco.");
       return;

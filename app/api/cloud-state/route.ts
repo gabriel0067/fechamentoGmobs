@@ -1,204 +1,146 @@
-import { env } from "cloudflare:workers";
+import { neon } from "@neondatabase/serverless";
 import { authenticatedUsername } from "../../auth";
 
-const ALLOWED_STATE_KEYS = new Set([
-  "closing",
-  "scans",
-  "tde",
-  "maex",
-  "billed",
-  "romaneios",
-]);
-const ALLOWED_ENCODINGS = new Set(["gzip-base64", "json"]);
-const CHUNK_SIZE = 1_500_000;
-const MAX_PAYLOAD_SIZE = 60_000_000;
+export const runtime = "nodejs";
 
-let schemaReady: Promise<unknown> | null = null;
+const OWNER = "shared:fechamentos-gmobs";
+const CHUNK_SIZE = 700_000;
+const MAX_CHUNKS = 100;
+const KEYS = new Set(["closing", "scans", "tde", "maex", "billed", "romaneios"]);
+const ENCODINGS = new Set(["gzip-base64", "json"]);
+let client: ReturnType<typeof neon> | undefined;
+let schemaReady: Promise<void> | undefined;
+
+function sql() {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL não configurada.");
+  return (client ??= neon(url));
+}
 
 function ensureSchema() {
-  schemaReady ??= env.DB.batch([
-    env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS cloud_state_chunks (
-        owner_id TEXT NOT NULL,
-        state_key TEXT NOT NULL,
-        chunk_index INTEGER NOT NULL,
-        encoding TEXT NOT NULL,
-        payload TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (owner_id, state_key, chunk_index)
-      )
-    `),
-    env.DB.prepare("PRAGMA optimize"),
-  ]).catch((error) => {
-    schemaReady = null;
-    throw error;
-  });
+  schemaReady ??= (async () => {
+    await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_records (
+      owner_id TEXT NOT NULL, state_key TEXT NOT NULL, version TEXT NOT NULL,
+      encoding TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY (owner_id, state_key))`);
+    await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_upload_chunks (
+      owner_id TEXT NOT NULL, state_key TEXT NOT NULL, upload_id TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL, encoding TEXT NOT NULL, payload TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (owner_id, state_key, upload_id, chunk_index))`);
+  })().catch((error) => { schemaReady = undefined; throw error; });
   return schemaReady;
 }
 
-async function ownerId(request: Request) {
-  const hostname = new URL(request.url).hostname;
-  if (["localhost", "127.0.0.1", "0.0.0.0"].includes(hostname))
-    return "local-development";
-  return (await authenticatedUsername(request))
-    ? "shared:fechamentos-gmobs"
-    : null;
+async function check(request: Request) {
+  if (!(await authenticatedUsername(request)))
+    return { response: Response.json({ error: "É necessário entrar no site." }, { status: 401 }) };
+  const key = new URL(request.url).searchParams.get("key") || "";
+  if (!KEYS.has(key))
+    return { response: Response.json({ error: "Tipo de dado inválido." }, { status: 400 }) };
+  return { key };
 }
 
-function requestedStateKey(request: Request) {
-  const stateKey = new URL(request.url).searchParams.get("key") || "";
-  return ALLOWED_STATE_KEYS.has(stateKey) ? stateKey : null;
-}
-
-function unauthorized() {
-  return Response.json(
-    { error: "É necessário entrar no site para acessar estes dados." },
-    { status: 401 },
-  );
-}
-
-function versionHeaders(updatedAt: string) {
-  return {
-    "cache-control": "no-store",
-    "last-modified": new Date(updatedAt).toUTCString(),
-    "x-gmobs-version": updatedAt,
-  };
-}
-
-async function migrateLegacyState(stateKey: string) {
-  const sharedExists = await env.DB.prepare(
-    `SELECT 1
-     FROM cloud_state_chunks
-     WHERE owner_id = ? AND state_key = ?
-     LIMIT 1`,
-  )
-    .bind("shared:fechamentos-gmobs", stateKey)
-    .first();
-  if (sharedExists) return;
-
-  const legacy = await env.DB.prepare(
-    `SELECT owner_id
-     FROM cloud_state_chunks
-     WHERE owner_id NOT IN (?, ?) AND state_key = ?
-     ORDER BY updated_at DESC
-     LIMIT 1`,
-  )
-    .bind("shared:fechamentos-gmobs", "local-development", stateKey)
-    .first<{ owner_id: string }>();
-  if (!legacy?.owner_id) return;
-
-  await env.DB.prepare(
-    `INSERT OR IGNORE INTO cloud_state_chunks
-       (owner_id, state_key, chunk_index, encoding, payload, updated_at)
-     SELECT ?, state_key, chunk_index, encoding, payload, updated_at
-     FROM cloud_state_chunks
-     WHERE owner_id = ? AND state_key = ?`,
-  )
-    .bind("shared:fechamentos-gmobs", legacy.owner_id, stateKey)
-    .run();
+function failure(error: unknown) {
+  console.error("Falha ao acessar o estado no Neon", error);
+  return Response.json({ error: "Não foi possível acessar os dados." }, { status: 500 });
 }
 
 export async function HEAD(request: Request) {
-  const owner = await ownerId(request);
-  if (!owner) return unauthorized();
-  const stateKey = requestedStateKey(request);
-  if (!stateKey)
-    return Response.json({ error: "Tipo de dado inválido." }, { status: 400 });
-
+  const access = await check(request);
+  if (access.response) return access.response;
   try {
     await ensureSchema();
-    if (owner === "shared:fechamentos-gmobs")
-      await migrateLegacyState(stateKey);
-    const row = await env.DB.prepare(
-      `SELECT updated_at
-       FROM cloud_state_chunks
-       WHERE owner_id = ? AND state_key = ?
-       ORDER BY chunk_index
-       LIMIT 1`,
-    )
-      .bind(owner, stateKey)
-      .first<{ updated_at: string }>();
-    if (!row) return new Response(null, { status: 204 });
-    return new Response(null, { status: 200, headers: versionHeaders(row.updated_at) });
-  } catch (error) {
-    console.error("Falha ao consultar versão do estado do GMOBS", error);
-    return Response.json({ error: "Não foi possível consultar os dados." }, { status: 500 });
-  }
+    const rows = await sql().query(
+      "SELECT version, encoding, length(payload) AS size FROM cloud_state_records WHERE owner_id = $1 AND state_key = $2",
+      [OWNER, access.key],
+    ) as Record<string, unknown>[];
+    if (!rows.length) return new Response(null, { status: 204 });
+    return new Response(null, { headers: {
+      "cache-control": "no-store",
+      "x-gmobs-version": String(rows[0].version),
+      "x-gmobs-encoding": String(rows[0].encoding),
+      "x-gmobs-chunks": String(Math.max(1, Math.ceil(Number(rows[0].size) / CHUNK_SIZE))),
+    } });
+  } catch (error) { return failure(error); }
 }
 
 export async function GET(request: Request) {
-  const owner = await ownerId(request);
-  if (!owner) return unauthorized();
-  const stateKey = requestedStateKey(request);
-  if (!stateKey)
-    return Response.json({ error: "Tipo de dado inválido." }, { status: 400 });
-
+  const access = await check(request);
+  if (access.response) return access.response;
+  const url = new URL(request.url);
+  const index = Number(url.searchParams.get("index"));
+  if (!Number.isInteger(index) || index < 0 || index >= MAX_CHUNKS)
+    return Response.json({ error: "Parte inválida." }, { status: 400 });
   try {
     await ensureSchema();
-    if (owner === "shared:fechamentos-gmobs")
-      await migrateLegacyState(stateKey);
-    const result = await env.DB.prepare(
-      `SELECT encoding, payload, updated_at
-       FROM cloud_state_chunks
-       WHERE owner_id = ? AND state_key = ?
-       ORDER BY chunk_index`,
-    )
-      .bind(owner, stateKey)
-      .all<{ encoding: string; payload: string; updated_at: string }>();
-    if (!result.results.length) return new Response(null, { status: 204 });
+    const rows = await sql().query(
+      "SELECT version, substr(payload, $3, $4) AS chunk FROM cloud_state_records WHERE owner_id = $1 AND state_key = $2",
+      [OWNER, access.key, index * CHUNK_SIZE + 1, CHUNK_SIZE],
+    ) as Record<string, unknown>[];
+    if (!rows.length) return new Response(null, { status: 204 });
+    if (url.searchParams.get("version") !== rows[0].version)
+      return Response.json({ error: "Os dados mudaram durante a leitura. Tente novamente." }, { status: 409 });
+    return new Response(String(rows[0].chunk), { headers: {
+      "cache-control": "no-store", "content-type": "text/plain;charset=UTF-8",
+    } });
+  } catch (error) { return failure(error); }
+}
 
-    return new Response(result.results.map((row) => row.payload).join(""), {
-      headers: {
-        ...versionHeaders(result.results[0].updated_at),
-        "content-type": "text/plain;charset=UTF-8",
-        "x-gmobs-encoding": result.results[0].encoding,
-      },
-    });
-  } catch (error) {
-    console.error("Falha ao carregar estado do GMOBS", error);
-    return Response.json({ error: "Não foi possível carregar os dados." }, { status: 500 });
-  }
+export async function POST(request: Request) {
+  const access = await check(request);
+  if (access.response) return access.response;
+  const url = new URL(request.url);
+  const uploadId = url.searchParams.get("upload") || "";
+  const index = Number(url.searchParams.get("index"));
+  const encoding = request.headers.get("x-gmobs-encoding") || "";
+  if (!/^[0-9a-f-]{36}$/i.test(uploadId) || !Number.isInteger(index) || index < 0 || index >= MAX_CHUNKS || !ENCODINGS.has(encoding))
+    return Response.json({ error: "Envio inválido." }, { status: 400 });
+  const chunk = await request.text();
+  if (Array.from(chunk).length > CHUNK_SIZE)
+    return Response.json({ error: "Parte excede o limite." }, { status: 413 });
+  try {
+    await ensureSchema();
+    await sql().query(
+      `INSERT INTO cloud_state_upload_chunks (owner_id, state_key, upload_id, chunk_index, encoding, payload)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (owner_id, state_key, upload_id, chunk_index)
+       DO UPDATE SET encoding = EXCLUDED.encoding, payload = EXCLUDED.payload`,
+      [OWNER, access.key, uploadId, index, encoding, chunk],
+    );
+    return new Response(null, { status: 204 });
+  } catch (error) { return failure(error); }
 }
 
 export async function PUT(request: Request) {
-  const owner = await ownerId(request);
-  if (!owner) return unauthorized();
-  const stateKey = requestedStateKey(request);
-  if (!stateKey)
-    return Response.json({ error: "Tipo de dado inválido." }, { status: 400 });
-
-  const encoding = request.headers.get("x-gmobs-encoding") || "";
-  if (!ALLOWED_ENCODINGS.has(encoding))
-    return Response.json({ error: "Codificação inválida." }, { status: 400 });
-
-  const payload = await request.text();
-  if (payload.length > MAX_PAYLOAD_SIZE)
-    return Response.json({ error: "Os dados excedem o limite de segurança." }, { status: 413 });
-
+  const access = await check(request);
+  if (access.response) return access.response;
+  let input: { uploadId?: string; chunkCount?: number; encoding?: string };
+  try { input = await request.json(); }
+  catch { return Response.json({ error: "Confirmação inválida." }, { status: 400 }); }
+  const { uploadId, chunkCount, encoding } = input;
+  if (!uploadId || !/^[0-9a-f-]{36}$/i.test(uploadId) || !Number.isInteger(chunkCount) || !chunkCount || chunkCount > MAX_CHUNKS || !encoding || !ENCODINGS.has(encoding))
+    return Response.json({ error: "Confirmação inválida." }, { status: 400 });
   try {
     await ensureSchema();
-    const updatedAt = new Date().toISOString();
-    const chunks: string[] = [];
-    for (let offset = 0; offset < payload.length; offset += CHUNK_SIZE)
-      chunks.push(payload.slice(offset, offset + CHUNK_SIZE));
-    if (!chunks.length) chunks.push("");
-
-    await env.DB.batch([
-      env.DB.prepare(
-        "DELETE FROM cloud_state_chunks WHERE owner_id = ? AND state_key = ?",
-      ).bind(owner, stateKey),
-      ...chunks.map((chunk, chunkIndex) =>
-        env.DB.prepare(
-          `INSERT INTO cloud_state_chunks
-             (owner_id, state_key, chunk_index, encoding, payload, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        ).bind(owner, stateKey, chunkIndex, encoding, chunk, updatedAt),
-      ),
-    ]);
-
-    return Response.json({ saved: true, chunks: chunks.length, updatedAt });
-  } catch (error) {
-    console.error("Falha ao salvar estado do GMOBS", error);
-    return Response.json({ error: "Não foi possível salvar os dados." }, { status: 500 });
-  }
+    const rows = await sql().query(
+      `INSERT INTO cloud_state_records (owner_id, state_key, version, encoding, payload, updated_at)
+       SELECT $1, $2, $3, $4, string_agg(payload, '' ORDER BY chunk_index), $5
+       FROM cloud_state_upload_chunks
+       WHERE owner_id = $1 AND state_key = $2 AND upload_id = $3 AND encoding = $4
+       HAVING count(*) = $6 AND min(chunk_index) = 0 AND max(chunk_index) = $6 - 1
+       ON CONFLICT (owner_id, state_key)
+       DO UPDATE SET version = EXCLUDED.version, encoding = EXCLUDED.encoding,
+                     payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+       RETURNING version`,
+      [OWNER, access.key, uploadId, encoding, new Date().toISOString(), chunkCount],
+    ) as Record<string, unknown>[];
+    if (!rows.length)
+      return Response.json({ error: "Envio incompleto; os dados anteriores foram preservados." }, { status: 409 });
+    await sql().query(
+      "DELETE FROM cloud_state_upload_chunks WHERE owner_id = $1 AND state_key = $2 AND upload_id = $3",
+      [OWNER, access.key, uploadId],
+    );
+    return Response.json({ saved: true, updatedAt: uploadId });
+  } catch (error) { return failure(error); }
 }
