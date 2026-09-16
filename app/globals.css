@@ -2560,21 +2560,25 @@ button {
 .retained-view-tabs { display: inline-flex; width: fit-content; gap: 4px; padding: 5px; border-radius: 12px; background: #e8efeb; }
 .retained-view-tabs button { border: 0; border-radius: 9px; background: transparent; color: #52645a; padding: 10px 14px; font-weight: 800; cursor: pointer; }
 .retained-view-tabs button.active { background: #fff; color: #087447; box-shadow: 0 2px 8px rgba(23, 53, 39, .1); }
-.retained-ranking { display: grid; gap: 9px; }
+.retained-ranking { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .retained-ranking-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-radius: 12px; background: #f4f7f5; }
+.retained-ranking-summary, .retained-ranking > .empty { grid-column: 1 / -1; }
 .retained-ranking-summary span { display: grid; gap: 3px; }
 .retained-ranking-summary small { color: #087447; font-size: 11px; font-weight: 900; letter-spacing: .08em; }
 .retained-ranking-summary strong { font-size: 16px; }
 .retained-ranking-summary > b { color: #52645a; font-size: 13px; }
-.retained-ranking article { display: grid; grid-template-columns: 56px minmax(0, 1fr) 54px; align-items: center; gap: 12px; padding: 13px 16px; border: 1px solid #dbe4df; border-radius: 12px; background: #fff; }
+.retained-ranking article { display: grid; grid-template-columns: 42px minmax(0, 1fr) 38px; align-items: center; gap: 8px; padding: 9px 11px; border: 1px solid #dbe4df; border-radius: 10px; background: #fff; }
 .retained-ranking article.top-1 { border-color: #e5c45a; background: #fffbee; }
 .retained-ranking article.top-2 { border-color: #bfc9c4; background: #f7f9f8; }
 .retained-ranking article.top-3 { border-color: #d9aa78; background: #fff8f1; }
-.retained-ranking-position { color: #087447; font-size: 18px; font-weight: 900; }
+.retained-ranking-position { color: #087447; font-size: 16px; font-weight: 900; }
 .retained-ranking-driver { display: grid; gap: 2px; min-width: 0; }
 .retained-ranking-driver strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .retained-ranking-driver small { color: #65766d; }
-.retained-ranking article > b { justify-self: end; color: #087447; font-size: 22px; }
+.retained-ranking article > b { justify-self: end; color: #087447; font-size: 18px; }
+@media (max-width: 700px) {
+  .retained-ranking { grid-template-columns: 1fr; }
+}
 .progressive-list-control { position: sticky; top: 8px; z-index: 4; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 9px 12px; border: 1px solid #bcd7c8; border-radius: 10px; background: #f3faf6; color: #40544a; font-size: 12px; font-weight: 700; }
 .progressive-list-control button { padding: 7px 10px; white-space: nowrap; }
 .tabs.switching { cursor: progress; }
