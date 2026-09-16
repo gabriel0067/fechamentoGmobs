@@ -417,10 +417,12 @@ Na mesma data, os campos de motivo de Retorno, nota manual de romaneio, frete br
 
 ## Ajustes operacionais de coletas e capas (16/09/2026)
 
-- A guia Coletas mantém solicitações em aberto no painel. Na baixa, o operador escolhe `Coleta realizada`, `Volta` ou `Cancelamento`. As três opções encerram o registro e o enviam ao relatório; volta e cancelamento aparecem com destaque de ocorrência. Data da baixa é obrigatória; motorista continua obrigatório para realizada e volta, mas é opcional para cancelamento. Uma observação pode ser registrada na ocorrência. Registros antigos sem esse novo campo continuam aparecendo como `Realizada`.
+- A guia Coletas mantém solicitações em aberto no painel. Na baixa, o operador escolhe `Coleta realizada`, `Volta` ou `Cancelamento`. As três opções encerram o registro e o enviam ao relatório; volta e cancelamento aparecem com destaque de ocorrência. Data da baixa é obrigatória; motorista aparece e é obrigatório somente para coleta realizada. Uma observação pode ser registrada na ocorrência. Registros antigos sem esse novo campo continuam aparecendo como `Realizada`.
 - A navegação principal passou da faixa superior para uma lateral esquerda em telas largas. Em telas estreitas, ela vira uma faixa horizontal rolável para não comprimir o conteúdo.
 - Na guia Capas, a escolha do tipo de operação e da parceira é obrigatória antes da bipagem. Ao finalizar uma capa, a caixa de escolha abre novamente antes de iniciar outra. Os atalhos de tipo e parceira ficam numa faixa horizontal acima da bipagem e reabrem a confirmação em vez de mudar o contexto silenciosamente. O relatório continua acessível sem criar uma capa. O botão de gerar/salvar fica fixo no canto inferior direito durante a preparação.
 - Essas alterações não mudam o formato do banco: os campos de situação e observação da coleta são opcionais no registro já salvo em `closing`, preservando o histórico existente.
+- A escolha inicial de Capas oferece `Relatório` no mesmo padrão visual dos controles do sistema.
+- Na importação geral, uma linha nova com a mesma chave/CT-e de uma nota anterior continua fora das cobranças duplicadas, mas sua linha completa é guardada como referência do romaneio. Assim, reentregas, voltas e retornos que saem em um novo romaneio podem ser associados ao relatório e localizados pela NF, CT-e ou chave. As referências são preferidas pela proximidade da data de emissão do romaneio. Linhas que já haviam sido descartadas por versões anteriores precisam ser reimportadas para voltar à base de consulta; a reimportação não apaga os registros já salvos.
 
 ## Regra de manutenção deste documento
 

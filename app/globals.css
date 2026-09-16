@@ -25,6 +25,8 @@
 .cover-choice-kinds button, .cover-choice-partners button { border: 1px solid #c9d5ce; border-radius: 9px; background: #f5f8f6; color: #32483c; padding: 10px 13px; font-weight: 850; }
 .cover-choice-kinds button.active, .cover-choice-partners button.active { border-color: #146c43; background: #146c43; color: #fff; }
 .cover-choice-dialog .confirmation-actions .primary:disabled { opacity: .5; cursor: default; }
+.cover-choice-dialog .cover-report-action { border: 1px solid #bed3c6; border-radius: 10px; background: #eff7f2; color: #126340; padding: 10px 16px; font-weight: 850; }
+.cover-choice-dialog .cover-report-action:hover { background: #e1f0e7; }
 
 /* Ocorrências de coleta são baixas, mas não se confundem com realizadas. */
 .pickup-completion-fields { grid-template-columns: minmax(150px, 1fr) 145px 155px auto; }

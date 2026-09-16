@@ -654,6 +654,15 @@ const entryStableIdentity = (entry: Pick<Entry, "partnerId" | "cteKey" | "cte" |
   if (mde) return `MDE:${mde}`;
   return `NF:${entry.partnerId}:${normalizeInvoiceKey(entry.invoice)}:${normalized(entry.sender)}:${normalized(entry.recipient)}`;
 };
+// A mesma chave pode aparecer novamente em uma reentrega. Ela não deve gerar
+// outra cobrança por si só, mas a linha completa precisa continuar consultável.
+const romaneioReferenceIdentity = (entry: RomaneioReferenceEntry) =>
+  JSON.stringify([
+    entry.partnerId, entry.status, entry.sourceStatus, entry.date,
+    entry.deliveryDate, entry.mde, entry.cte, entry.cteKey, entry.invoice,
+    entry.sender, entry.recipient, entry.city, entry.observation,
+    entry.reportedTotal, entry.freight,
+  ].map((value) => String(value ?? "").trim()));
 const newId = () =>
   globalThis.crypto?.randomUUID?.() ||
   `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -681,15 +690,19 @@ const romaneioStatusForDocument = (
   statuses: Record<string, RomaneioDocumentStatusRecord>,
   group: RomaneioDailyGroup,
   document: RomaneioDailyDocument,
-) =>
-  Object.values(statuses)
+ ) => {
+  const exact = statuses[`${group.key}|${document.key}`];
+  if (exact) return exact;
+  return Object.values(statuses)
     .filter(
       (record) =>
         record.day === group.day &&
         record.romaneios.some((number) => group.romaneios.includes(number)) &&
-        record.identifiers.some((identifier) => document.identifiers.includes(identifier)),
+        record.referenceType === document.referenceType &&
+        record.referenceNumber === document.referenceNumber,
     )
     .sort((a, b) => b.savedAt.localeCompare(a.savedAt))[0];
+};
 const playRomaneioSuccessSound = () => {
   try {
     const context = new AudioContext();
@@ -862,12 +875,10 @@ const normalizeRomaneioReferenceEntries = (
   fallbackEntries: Entry[],
 ) =>
   (Array.isArray(savedEntries) &&
-  savedEntries.every((entry) => typeof entry?.id === "string")
+    savedEntries.every((entry) => typeof entry?.id === "string")
     ? savedEntries
-    : fallbackEntries
-  )
-    .map(asRomaneioReferenceEntry)
-    .filter((entry) => !entry.sourceEligible);
+    : fallbackEntries.map(asRomaneioReferenceEntry).filter((entry) => !entry.sourceEligible)
+  ).map(asRomaneioReferenceEntry);
 const unidentifiedKey = (entry: Entry) =>
   normalized(entry.partnerCnpj || entry.partnerRaw || entry.sender || "sem-dados");
 const maexSenderKey = (entry: Entry) => {
@@ -2394,18 +2405,29 @@ export default function Home() {
     >();
     romaneioEntries.forEach((row) =>
       row.documents.forEach((document) => {
-        if (matches.has(document)) return;
+        const matchKey = `${row.id}|${document}`;
+        if (matches.has(matchKey)) return;
         const reference = romaneioDocumentReference(document);
         const matchedEntries = reference
           ? reference.type === "MD-e"
             ? mdes.get(reference.number) || []
             : ctes.get(reference.number) || []
           : [];
-        matches.set(document, {
+        const tripDay = row.emissionDate.slice(0, 10);
+        const orderedEntries = [...matchedEntries].sort((left, right) => {
+          const rank = (entry: RomaneioReferenceEntry) => {
+            const day = String(entry.date || entry.deliveryDate || "").slice(0, 10);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{4}-\d{2}-\d{2}$/.test(tripDay)) return Number.MAX_SAFE_INTEGER;
+            const distance = Math.abs(Date.parse(`${tripDay}T00:00:00`) - Date.parse(`${day}T00:00:00`));
+            return distance + (day > tripDay ? 86400000 : 0);
+          };
+          return rank(left) - rank(right);
+        });
+        matches.set(matchKey, {
           type: reference?.type || "Documento",
           number: reference?.number || document,
-          found: matchedEntries.length > 0,
-          entries: matchedEntries,
+          found: orderedEntries.length > 0,
+          entries: orderedEntries,
         });
       }),
     );
@@ -2470,7 +2492,7 @@ export default function Home() {
             existing.routes.push(row.route);
           return;
         }
-        const match = romaneioDocumentMatches.get(document);
+        const match = romaneioDocumentMatches.get(`${row.id}|${document}`);
         const linkedEntries = match?.entries || [];
         const linked =
           linkedEntries.find(
@@ -2939,7 +2961,7 @@ export default function Home() {
   }, [romaneioDailyGroups]);
   const reportFallbackIdentifiersByIdentifier = useMemo(() => {
     const matches = new Map<string, Set<string>>();
-    entriesWithTde.forEach((entry) => {
+    [...entriesWithTde, ...romaneioReferenceEntries].forEach((entry) => {
       if (normalized(entry.status) === "cf") return;
       const identifiers = entryOperationalIdentifiers(entry);
       identifiers.forEach((identifier) => {
@@ -2949,7 +2971,7 @@ export default function Home() {
       });
     });
     return matches;
-  }, [entriesWithTde]);
+  }, [entriesWithTde, romaneioReferenceEntries]);
   const retainedRomaneioByIdentifier = useMemo(() => {
     const matches = new Map<string, RomaneioDocumentStatusRecord>();
     retainedRomaneioDocuments.forEach((record) => {
@@ -4838,9 +4860,17 @@ export default function Home() {
         (entry) => entry.romaneioDocumentKey,
       ).length;
       setEntries((current) => [...current, ...additions]);
-      const referenceAdditions = referenceEntries.filter(
-        (entry) => !entry.sourceEligible && !existingKeys.has(entryStableIdentity(entry)),
+      const referenceKeys = new Set(
+        [...entries, ...romaneioReferenceEntries, ...additions]
+          .map(asRomaneioReferenceEntry)
+          .map(romaneioReferenceIdentity),
       );
+      const referenceAdditions = referenceEntries.filter((entry) => {
+        const key = romaneioReferenceIdentity(entry);
+        if (referenceKeys.has(key)) return false;
+        referenceKeys.add(key);
+        return true;
+      });
       setRomaneioReferenceEntries((current) => [...current, ...referenceAdditions]);
       setImportInfo({
         file: file.name,
@@ -5506,14 +5536,14 @@ export default function Home() {
 
   function completePickup(record: PickupRecord) {
     const draft = pickupCompletionDrafts[record.id] || { driver: "", date: "", outcome: "completed", note: "" };
-    if ((!draft.driver.trim() && draft.outcome !== "cancelled") || !draft.date) {
+    if ((draft.outcome === "completed" && !draft.driver.trim()) || !draft.date) {
       setMessageIsError(true);
-      setMessage(draft.outcome === "cancelled" ? "Informe a data do cancelamento antes de dar baixa." : "Informe o motorista e a data da baixa antes de finalizar a coleta.");
+      setMessage(draft.outcome === "completed" ? "Informe o motorista e a data da baixa antes de finalizar a coleta." : "Informe a data da ocorrência antes de dar baixa.");
       return;
     }
     setPickupRecords((current) => current.map((item) => item.id === record.id ? {
       ...item,
-      driver: draft.driver.trim(),
+      driver: draft.outcome === "completed" ? draft.driver.trim() : "",
       completedAt: draft.date,
       completedBy: activeOperator,
       status: "completed",
@@ -7426,7 +7456,7 @@ export default function Home() {
                 {([["shipment", "Embarque"], ["return", "Capas"], ["collection", "Coleta"]] as const).map(([kind, label]) => <button key={kind} type="button" role="radio" aria-checked={coverChoiceKind === kind} className={coverChoiceKind === kind ? "active" : ""} onClick={() => setCoverChoiceKind(kind)}>{label}</button>)}
               </div>
               <span className="cover-partner-label">Parceira / transportadora</span><div className="cover-choice-partners" role="radiogroup" aria-label="Parceira da capa">{coverPartners.map((partner) => <button key={partner.id} type="button" role="radio" aria-checked={coverChoicePartnerId === partner.id} className={coverChoicePartnerId === partner.id ? "active" : ""} onClick={() => setCoverChoicePartnerId(partner.id)}>{partner.name}</button>)}</div>
-              <div className="confirmation-actions"><button type="button" onClick={() => { setCoverChoiceOpen(false); setCoverSection("report"); }}>Ver relatório</button><button type="button" className="primary" disabled={!coverChoiceKind || !coverChoicePartnerId} onClick={confirmCoverChoice}>Confirmar e começar</button></div>
+              <div className="confirmation-actions"><button type="button" className="cover-report-action" onClick={() => { setCoverChoiceOpen(false); setCoverSection("report"); }}>Relatório</button><button type="button" className="primary" disabled={!coverChoiceKind || !coverChoicePartnerId} onClick={confirmCoverChoice}>Confirmar e começar</button></div>
             </section></div>}
           </div>
         )}
@@ -7543,7 +7573,7 @@ export default function Home() {
                       <div className="pickup-card-title"><span><small>PENDENTE · COLETA</small><strong>{record.number}</strong><small className="pickup-created-by">Lançado por {record.createdBy || "Não informado"}</small></span><div className="pickup-compact-summary"><span><small>PARCEIRO</small><strong>{record.partnerName}</strong></span><span><small>CLIENTE</small><strong>{record.clientName}</strong></span><span><small>NOTA FISCAL</small><strong>{record.invoice || "Sem nota"}</strong></span><span><small>VOLS</small><strong>{record.volumes}</strong></span><span><small>INSERIDA EM</small><strong>{formatRomaneioDay(record.createdAt)}</strong></span></div><button type="button" onClick={() => setExpandedPickupIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : [...current, record.id])}>{expanded ? "Fechar detalhes" : "Abrir detalhes"}</button></div>
                       {expanded && <>
                       <div className="pickup-completion-fields">
-                        <label>Motorista<input value={draft.driver} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, driver: event.target.value } }))} placeholder="Com qual motorista saiu?" /></label>
+                        {draft.outcome === "completed" && <label>Motorista<input value={draft.driver} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, driver: event.target.value } }))} placeholder="Com qual motorista saiu?" /></label>}
                         <label>Data da baixa<input type="date" value={draft.date} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, date: event.target.value } }))} /></label>
                         <label>Situação<select value={draft.outcome} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, outcome: event.target.value as "completed" | "return" | "cancelled" } }))}><option value="completed">Coleta realizada</option><option value="return">Volta</option><option value="cancelled">Cancelamento</option></select></label>
                         {draft.outcome !== "completed" && <label className="pickup-occurrence-note">Observação da ocorrência<input value={draft.note} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, note: event.target.value } }))} placeholder="Motivo ou detalhes, se houver" /></label>}
