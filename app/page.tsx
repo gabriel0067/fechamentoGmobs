@@ -497,6 +497,8 @@ type PickupRecord = {
   driver: string;
   completedAt: string;
   status: "open" | "completed";
+  outcome?: "completed" | "return" | "cancelled";
+  occurrenceNote?: string;
   createdAt: string;
   createdBy: string;
   completedBy?: string;
@@ -1223,6 +1225,13 @@ export default function Home() {
   const [coverGenerators, setCoverGenerators] = useState<string[]>([]);
   const [coverSection, setCoverSection] = useState<CoverKind | "report">("shipment");
   const [coverPartnerId, setCoverPartnerId] = useState("");
+  const [coverChoiceOpen, setCoverChoiceOpen] = useState(false);
+  const [coverChoiceKind, setCoverChoiceKind] = useState<CoverKind | "">("");
+  const [coverChoicePartnerId, setCoverChoicePartnerId] = useState("");
+  useEffect(() => {
+    if (tab !== "covers" || !coverChoiceOpen) return;
+    document.querySelector<HTMLButtonElement>(".cover-choice-dialog .cover-choice-kinds button")?.focus();
+  }, [coverChoiceOpen, tab]);
   const coverScanInputRef = useRef<HTMLInputElement>(null);
   const [coverNumberInput, setCoverNumberInput] = useState("");
   const [coverDrafts, setCoverDrafts] = useState<Record<string, CoverDocumentExport[]>>({});
@@ -1276,7 +1285,7 @@ export default function Home() {
   const [pickupReportDriverFilter, setPickupReportDriverFilter] = useState("");
   const [pickupReportFrom, setPickupReportFrom] = useState("");
   const [pickupReportTo, setPickupReportTo] = useState("");
-  const [pickupCompletionDrafts, setPickupCompletionDrafts] = useState<Record<string, { driver: string; date: string }>>({});
+  const [pickupCompletionDrafts, setPickupCompletionDrafts] = useState<Record<string, { driver: string; date: string; outcome: "completed" | "return" | "cancelled"; note: string }>>({});
   const [expandedPickupIds, setExpandedPickupIds] = useState<string[]>([]);
   const [dedicatedRecords, setDedicatedRecords] = useState<DedicatedRecord[]>([]);
   const [dedicatedSection, setDedicatedSection] = useState<"panel" | "report">("panel");
@@ -3136,7 +3145,7 @@ export default function Home() {
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, []);
-  const effectiveCoverPartnerId = coverPartnerId || coverPartners[0]?.id || "";
+  const effectiveCoverPartnerId = coverPartnerId;
   const effectiveCoverGenerator = activeOperator;
   const coverDraftKey = `${coverSection}|${effectiveCoverPartnerId}`;
   const currentCoverDraft = coverDrafts[coverDraftKey] || [];
@@ -5243,6 +5252,7 @@ export default function Home() {
     setCoverDrafts(next);
     setCoverSection(cover.kind);
     setCoverPartnerId(partnerId);
+    setCoverChoiceOpen(false);
     setEditingCoverId(cover.id);
     setSelectedCoverReportIds([]);
     setMessageIsError(false);
@@ -5459,6 +5469,9 @@ export default function Home() {
       .sort((a, b) => b.completedAt.localeCompare(a.completedAt) || a.partnerName.localeCompare(b.partnerName, "pt-BR"));
   }, [pickupRecords, pickupReportDriverFilter, pickupReportFrom, pickupReportPartnerFilter, pickupReportTo]);
 
+  const pickupOutcomeLabel = (outcome?: PickupRecord["outcome"]) =>
+    outcome === "return" ? "Volta" : outcome === "cancelled" ? "Cancelamento" : "Realizada";
+
   function addPickup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const partner = partnerAliases.find(([id]) => id === pickupPartnerId);
@@ -5492,10 +5505,10 @@ export default function Home() {
   }
 
   function completePickup(record: PickupRecord) {
-    const draft = pickupCompletionDrafts[record.id] || { driver: "", date: "" };
-    if (!draft.driver.trim() || !draft.date) {
+    const draft = pickupCompletionDrafts[record.id] || { driver: "", date: "", outcome: "completed", note: "" };
+    if ((!draft.driver.trim() && draft.outcome !== "cancelled") || !draft.date) {
       setMessageIsError(true);
-      setMessage("Informe o motorista e a data realizada antes de dar baixa.");
+      setMessage(draft.outcome === "cancelled" ? "Informe a data do cancelamento antes de dar baixa." : "Informe o motorista e a data da baixa antes de finalizar a coleta.");
       return;
     }
     setPickupRecords((current) => current.map((item) => item.id === record.id ? {
@@ -5504,6 +5517,8 @@ export default function Home() {
       completedAt: draft.date,
       completedBy: activeOperator,
       status: "completed",
+      outcome: draft.outcome,
+      occurrenceNote: draft.note.trim(),
     } : item));
     setPickupCompletionDrafts((current) => {
       const next = { ...current };
@@ -5511,7 +5526,7 @@ export default function Home() {
       return next;
     });
     setMessageIsError(false);
-    setMessage(`Coleta ${record.number} concluída e enviada ao relatório.`);
+    setMessage(`Coleta ${record.number} baixada como ${pickupOutcomeLabel(draft.outcome).toLowerCase()} e enviada ao relatório.`);
   }
 
   const openDedicatedRecords = useMemo(
@@ -5639,6 +5654,25 @@ export default function Home() {
     setCoverPartnerId(partnerId);
   }
 
+  function openCoverChoice(kind: CoverKind | "" = "", partnerId = "") {
+    setCoverChoiceKind(kind);
+    setCoverChoicePartnerId(partnerId);
+    setCoverChoiceOpen(true);
+  }
+
+  function confirmCoverChoice() {
+    if (!coverChoiceKind || !coverChoicePartnerId) return;
+    if (editingCoverId && coverChoiceKind === coverSection)
+      selectCoverPartner(coverChoicePartnerId);
+    else {
+      if (editingCoverId) setEditingCoverId("");
+      setCoverSection(coverChoiceKind);
+      setCoverPartnerId(coverChoicePartnerId);
+    }
+    setCoverChoiceOpen(false);
+    window.setTimeout(() => coverScanInputRef.current?.focus(), 0);
+  }
+
   function cancelCoverEdit() {
     const next = { ...coverDraftsRef.current, [coverDraftKey]: [] };
     coverDraftsRef.current = next;
@@ -5674,7 +5708,7 @@ export default function Home() {
   }
 
   function generateCover() {
-    if (coverSection === "report" || !currentCoverDraft.length) {
+    if (coverChoiceOpen || !effectiveCoverPartnerId || coverSection === "report" || !currentCoverDraft.length) {
       setMessage("Bipe ao menos uma nota fiscal antes de gerar a capa.");
       return;
     }
@@ -5707,6 +5741,7 @@ export default function Home() {
     coverDraftsRef.current = next;
     setCoverDrafts(next);
     setEditingCoverId("");
+    openCoverChoice();
     exportCoverPdf(cover);
     setMessageIsError(false);
     const kindLabel = coverSection === "shipment" ? "embarque" : coverSection === "collection" ? "coleta" : "capas";
@@ -5938,6 +5973,10 @@ export default function Home() {
 
   function navigateTab(nextTab: Tab) {
     setMessage("");
+    if (nextTab === "covers") {
+      if (!editingCoverId) setCoverPartnerId("");
+      openCoverChoice();
+    }
     startTabTransition(() => setTab(nextTab));
   }
 
@@ -7278,46 +7317,29 @@ export default function Home() {
                 <h2>Embarque, capas, coleta e histórico</h2>
                 <p>Bipe a nota fiscal, o CTE ou a chave. A capa será gerada com os CTEs encontrados e ficará registrada para consulta.</p>
               </div>
-              {coverSection !== "report" && (
+              {coverSection !== "report" && !coverChoiceOpen && (
                 <div className="cover-top-actions">
                   <button type="button" disabled={!currentCoverDraft.length} onClick={exportCurrentCoverDetails}>PDF completo</button>
                   {editingCoverId && <button type="button" onClick={cancelCoverEdit}>Cancelar edição</button>}
-                  <button type="button" className="primary cover-generate" disabled={!currentCoverDraft.length} onClick={generateCover}>
-                    {editingCoverId ? `Salvar ${editingCoverId}` : "Gerar capa"} ({currentCoverDraft.length})
-                  </button>
                 </div>
               )}
             </div>
-            <div className="romaneio-subtabs cover-subtabs">
-              <button type="button" className={coverSection === "shipment" ? "active" : ""} onClick={() => setCoverSection("shipment")}>Embarque</button>
-              <button type="button" className={coverSection === "return" ? "active" : ""} onClick={() => setCoverSection("return")}>Capas</button>
-              <button type="button" className={coverSection === "collection" ? "active" : ""} onClick={() => setCoverSection("collection")}>Coleta</button>
-              <button type="button" className={coverSection === "report" ? "active" : ""} onClick={() => setCoverSection("report")}>Relatório</button>
+            <div className="cover-control-bar">
+              <div className="cover-control-row"><span>O que fazer</span><div className="romaneio-subtabs cover-subtabs">
+                <button type="button" className={coverSection === "shipment" && !coverChoiceOpen ? "active" : ""} onClick={() => openCoverChoice("shipment")}>Embarque</button>
+                <button type="button" className={coverSection === "return" && !coverChoiceOpen ? "active" : ""} onClick={() => openCoverChoice("return")}>Capas</button>
+                <button type="button" className={coverSection === "collection" && !coverChoiceOpen ? "active" : ""} onClick={() => openCoverChoice("collection")}>Coleta</button>
+                <button type="button" className={coverSection === "report" ? "active" : ""} onClick={() => { setCoverChoiceOpen(false); setCoverSection("report"); }}>Relatório</button>
+              </div></div>
+              {coverSection !== "report" && <div className="cover-control-row cover-partner-row"><span>Parceira</span><div className="cover-partner-options" role="group" aria-label="Parceira ou transportadora">
+                {coverPartners.map((partner) => <button key={partner.id} type="button" className={effectiveCoverPartnerId === partner.id && !coverChoiceOpen ? "active" : ""} onClick={() => openCoverChoice(coverSection, partner.id)}>{partner.name}</button>)}
+              </div></div>}
             </div>
             {coverSection !== "report" ? (
               <div className="cover-workspace">
                 <section className="cover-scan-card">
-                  <div className="cover-partner-heading">
-                    <small>1. ESCOLHA A PARCEIRA</small>
-                    <strong>Para quem será esta capa?</strong>
-                  </div>
-                  <span className="cover-partner-label">Parceira / transportadora</span>
-                  <div className="cover-partner-options" role="radiogroup" aria-label="Parceira ou transportadora">
-                    {coverPartners.map((partner) => (
-                      <button
-                        key={partner.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={effectiveCoverPartnerId === partner.id}
-                        className={effectiveCoverPartnerId === partner.id ? "active" : ""}
-                        onClick={() => selectCoverPartner(partner.id)}
-                      >
-                        {partner.name}
-                      </button>
-                    ))}
-                  </div>
                   <form className="cover-scan-form" onSubmit={(event) => { event.preventDefault(); registerCoverScan(); }}>
-                    <label htmlFor="cover-scan">2. Bipe as notas desta parceira</label>
+                    <label htmlFor="cover-scan">Bipe as notas de {coverPartners.find((partner) => partner.id === effectiveCoverPartnerId)?.name || "sua parceira"}</label>
                     <div>
                       <input id="cover-scan" ref={coverScanInputRef} autoFocus inputMode="numeric" required placeholder="Bipe a NF, CTE ou chave" />
                       <button className="primary">Adicionar</button>
@@ -7397,6 +7419,15 @@ export default function Home() {
                 </div>
               </div>
             )}
+            {coverSection !== "report" && !coverChoiceOpen && <button type="button" className="primary cover-floating-generate" disabled={!currentCoverDraft.length} onClick={generateCover}>{editingCoverId ? `Salvar ${editingCoverId}` : "Gerar capa"} ({currentCoverDraft.length})</button>}
+            {coverChoiceOpen && <div className="confirmation-backdrop"><section className="confirmation-dialog cover-choice-dialog" role="dialog" aria-modal="true" aria-labelledby="cover-choice-title">
+              <small>ANTES DE COMEÇAR</small><h3 id="cover-choice-title">Qual capa você vai preparar?</h3><p>Escolha o tipo e a parceira. Confira os dois antes de começar a bipar.</p>
+              <span className="cover-partner-label">Tipo de operação</span><div className="cover-choice-kinds" role="radiogroup" aria-label="Tipo de capa">
+                {([["shipment", "Embarque"], ["return", "Capas"], ["collection", "Coleta"]] as const).map(([kind, label]) => <button key={kind} type="button" role="radio" aria-checked={coverChoiceKind === kind} className={coverChoiceKind === kind ? "active" : ""} onClick={() => setCoverChoiceKind(kind)}>{label}</button>)}
+              </div>
+              <span className="cover-partner-label">Parceira / transportadora</span><div className="cover-choice-partners" role="radiogroup" aria-label="Parceira da capa">{coverPartners.map((partner) => <button key={partner.id} type="button" role="radio" aria-checked={coverChoicePartnerId === partner.id} className={coverChoicePartnerId === partner.id ? "active" : ""} onClick={() => setCoverChoicePartnerId(partner.id)}>{partner.name}</button>)}</div>
+              <div className="confirmation-actions"><button type="button" onClick={() => { setCoverChoiceOpen(false); setCoverSection("report"); }}>Ver relatório</button><button type="button" className="primary" disabled={!coverChoiceKind || !coverChoicePartnerId} onClick={confirmCoverChoice}>Confirmar e começar</button></div>
+            </section></div>}
           </div>
         )}
         {tab === "billing" && (
@@ -7506,15 +7537,17 @@ export default function Home() {
                 <section className="pickup-panel">
                   <div className="pickup-panel-heading"><div><small>COLETAS EM ABERTO</small><h3>Painel de coleta</h3></div><label>Filtrar por parceiro<select value={pickupPartnerFilter} onChange={(event) => setPickupPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label></div>
                   {openPickupRecords.length ? <div className="pickup-cards">{openPickupRecords.map((record) => {
-                    const draft = pickupCompletionDrafts[record.id] || { driver: "", date: "" };
+                    const draft = pickupCompletionDrafts[record.id] || { driver: "", date: "", outcome: "completed" as const, note: "" };
                     const expanded = expandedPickupIds.includes(record.id);
                     return <article className={expanded ? "expanded" : "compact"} key={record.id}>
                       <div className="pickup-card-title"><span><small>PENDENTE · COLETA</small><strong>{record.number}</strong><small className="pickup-created-by">Lançado por {record.createdBy || "Não informado"}</small></span><div className="pickup-compact-summary"><span><small>PARCEIRO</small><strong>{record.partnerName}</strong></span><span><small>CLIENTE</small><strong>{record.clientName}</strong></span><span><small>NOTA FISCAL</small><strong>{record.invoice || "Sem nota"}</strong></span><span><small>VOLS</small><strong>{record.volumes}</strong></span><span><small>INSERIDA EM</small><strong>{formatRomaneioDay(record.createdAt)}</strong></span></div><button type="button" onClick={() => setExpandedPickupIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : [...current, record.id])}>{expanded ? "Fechar detalhes" : "Abrir detalhes"}</button></div>
                       {expanded && <>
                       <div className="pickup-completion-fields">
                         <label>Motorista<input value={draft.driver} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, driver: event.target.value } }))} placeholder="Com qual motorista saiu?" /></label>
-                        <label>Data realizada<input type="date" value={draft.date} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, date: event.target.value } }))} /></label>
-                        <label className="pickup-check"><input type="checkbox" checked={false} onChange={(event) => { if (event.target.checked) completePickup(record); }} /><span>Marcar como realizada e dar baixa</span></label>
+                        <label>Data da baixa<input type="date" value={draft.date} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, date: event.target.value } }))} /></label>
+                        <label>Situação<select value={draft.outcome} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, outcome: event.target.value as "completed" | "return" | "cancelled" } }))}><option value="completed">Coleta realizada</option><option value="return">Volta</option><option value="cancelled">Cancelamento</option></select></label>
+                        {draft.outcome !== "completed" && <label className="pickup-occurrence-note">Observação da ocorrência<input value={draft.note} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, note: event.target.value } }))} placeholder="Motivo ou detalhes, se houver" /></label>}
+                        <label className={draft.outcome === "completed" ? "pickup-check" : "pickup-check occurrence"}><input type="checkbox" checked={false} onChange={(event) => { if (event.target.checked) completePickup(record); }} /><span>Dar baixa: {pickupOutcomeLabel(draft.outcome)}</span></label>
                       </div>
                       </>}
                     </article>;
@@ -7523,15 +7556,15 @@ export default function Home() {
               </div>
             ) : (
               <section className="pickup-report">
-                <div className="pickup-report-heading"><div><small>HISTÓRICO SALVO</small><h3>Coletas realizadas</h3></div><b>{completedPickupRecords.length} registro(s)</b></div>
+                <div className="pickup-report-heading"><div><small>HISTÓRICO SALVO</small><h3>Coletas finalizadas</h3></div><b>{completedPickupRecords.length} registro(s)</b></div>
                 <div className="pickup-report-filters">
                   <label>De<input type="date" value={pickupReportFrom} onChange={(event) => setPickupReportFrom(event.target.value)} /></label>
                   <label>Até<input type="date" value={pickupReportTo} onChange={(event) => setPickupReportTo(event.target.value)} /></label>
                   <label>Parceiro<select value={pickupReportPartnerFilter} onChange={(event) => setPickupReportPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
                   <label>Motorista<input type="search" value={pickupReportDriverFilter} onChange={(event) => setPickupReportDriverFilter(event.target.value)} placeholder="Filtrar por motorista" /></label>
                 </div>
-                {completedPickupRecords.length ? <div className="pickup-report-list">{completedPickupRecords.map((record) => <article key={record.id}>
-                  <span><small>COLETA</small><strong>{record.number}</strong></span><span><small>NOTA FISCAL</small><strong>{record.invoice || "Sem nota"}</strong></span><span><small>PARCEIRO</small><strong>{record.partnerName}</strong></span><span><small>CLIENTE</small><strong>{record.clientName}</strong></span><span><small>VOLUMES</small><strong>{record.volumes}</strong></span><span><small>INSERIDA EM</small><strong>{formatRomaneioDay(record.createdAt)}</strong></span><span><small>MOTORISTA</small><strong>{record.driver}</strong></span><span><small>REALIZADA EM</small><strong>{formatRomaneioDay(record.completedAt)}</strong></span><span><small>BAIXA POR</small><strong>{record.completedBy || "Não informado"}</strong></span>
+                {completedPickupRecords.length ? <div className="pickup-report-list">{completedPickupRecords.map((record) => <article key={record.id} className={record.outcome === "return" || record.outcome === "cancelled" ? "pickup-occurred" : "pickup-done"}>
+                  <span><small>COLETA</small><strong>{record.number}</strong></span><span><small>NOTA FISCAL</small><strong>{record.invoice || "Sem nota"}</strong></span><span><small>PARCEIRO</small><strong>{record.partnerName}</strong></span><span><small>CLIENTE</small><strong>{record.clientName}</strong></span><span><small>VOLUMES</small><strong>{record.volumes}</strong></span><span><small>INSERIDA EM</small><strong>{formatRomaneioDay(record.createdAt)}</strong></span><span><small>MOTORISTA</small><strong>{record.driver || "Não informado"}</strong></span><span><small>SITUAÇÃO</small><strong>{pickupOutcomeLabel(record.outcome)}</strong></span><span><small>BAIXA EM</small><strong>{formatRomaneioDay(record.completedAt)}</strong></span><span><small>BAIXA POR</small><strong>{record.completedBy || "Não informado"}</strong></span>{record.occurrenceNote && <span className="pickup-report-note"><small>OBSERVAÇÃO</small><strong>{record.occurrenceNote}</strong></span>}
                 </article>)}</div> : <div className="empty pickup-empty"><span>⌕</span><h3>Nenhuma coleta realizada encontrada</h3><p>Altere os filtros ou dê baixa em uma coleta do painel.</p></div>}
               </section>
             )}

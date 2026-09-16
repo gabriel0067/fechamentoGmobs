@@ -1,6 +1,58 @@
 * {
   box-sizing: border-box;
 }
+
+/* Navegação lateral: mantém o painel principal intacto e aproveita a largura livre. */
+.shell { width: min(1480px, calc(100% - 32px)); display: grid; grid-template-columns: 190px minmax(0, 1fr); column-gap: 18px; align-items: start; }
+.shell > .header { grid-column: 1 / -1; }
+.shell > .tabs { grid-column: 1; grid-row: 2; position: sticky; top: 18px; width: 100%; display: flex; flex-direction: column; align-items: stretch; margin: 0; background: #e9edf0; }
+.shell > .tabs button { width: 100%; display: flex; align-items: center; text-align: left; white-space: normal; line-height: 1.25; padding: 11px 10px; font-size: 13px; }
+.shell > .tabs button b { flex: 0 0 22px; }
+.shell > .panel { grid-column: 2; grid-row: 2; min-width: 0; }
+
+/* A escolha da capa fica antes da área de bipagem. */
+.cover-control-bar { display: grid; gap: 10px; margin: 18px 0; padding: 13px; border: 1px solid #dce7e0; border-radius: 14px; background: #f5f9f6; }
+.cover-control-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.cover-control-row > span { flex: 0 0 82px; color: #42604d; font-size: 12px; font-weight: 900; }
+.cover-control-row .cover-subtabs { margin: 0; flex-wrap: wrap; width: auto; }
+.cover-partner-row .cover-partner-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.cover-partner-row .cover-partner-options button { padding: 8px 11px; font-size: 12px; }
+.cover-floating-generate { position: fixed; z-index: 70; right: max(22px, calc((100vw - 1480px) / 2 + 22px)); bottom: 22px; border-radius: 12px; padding: 13px 20px; box-shadow: 0 10px 28px #0c3e2a45; font-weight: 900; }
+.cover-floating-generate:disabled { opacity: .65; }
+.cover-choice-dialog { width: min(650px, 100%); }
+.cover-choice-dialog > small { color: #087447; font-weight: 900; letter-spacing: .09em; }
+.cover-choice-kinds, .cover-choice-partners { display: flex; flex-wrap: wrap; gap: 7px; }
+.cover-choice-kinds button, .cover-choice-partners button { border: 1px solid #c9d5ce; border-radius: 9px; background: #f5f8f6; color: #32483c; padding: 10px 13px; font-weight: 850; }
+.cover-choice-kinds button.active, .cover-choice-partners button.active { border-color: #146c43; background: #146c43; color: #fff; }
+.cover-choice-dialog .confirmation-actions .primary:disabled { opacity: .5; cursor: default; }
+
+/* Ocorrências de coleta são baixas, mas não se confundem com realizadas. */
+.pickup-completion-fields { grid-template-columns: minmax(150px, 1fr) 145px 155px auto; }
+.pickup-completion-fields select { min-width: 0; border: 1px solid #c9d5ce; border-radius: 10px; background: #fff; padding: 10px 11px; }
+.pickup-occurrence-note { grid-column: 1 / -1; }
+.pickup-check.occurrence { border-color: #dda985; background: #fff4e8; color: #96571e !important; }
+.pickup-check.occurrence input { accent-color: #ab641f; }
+.pickup-report-list article { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.pickup-report-list article.pickup-occurred { border-color: #e4b58e; border-left: 5px solid #b96b29; background: #fff7ed; }
+.pickup-report-list article.pickup-done { border-left: 5px solid #168755; background: #f8fcfa; }
+.pickup-report-note { grid-column: 1 / -1; }
+
+@media (max-width: 1020px) {
+  .shell { grid-template-columns: 1fr; }
+  .shell > .header, .shell > .tabs, .shell > .panel { grid-column: 1; grid-row: auto; }
+  .shell > .tabs { position: static; flex-direction: row; overflow-x: auto; width: 100%; margin-bottom: 16px; }
+  .shell > .tabs button { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  .pickup-completion-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 650px) {
+  .shell { width: calc(100% - 20px); }
+  .cover-control-row { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .cover-control-row > span { flex-basis: auto; }
+  .cover-control-row .cover-subtabs { width: 100%; }
+  .cover-control-row .cover-subtabs button { flex: 1; justify-content: center; }
+  .cover-floating-generate { right: 12px; bottom: 12px; max-width: calc(100vw - 24px); }
+  .pickup-completion-fields, .pickup-report-list article { grid-template-columns: 1fr 1fr; }
+}
 body {
   margin: 0;
   background: #f4f6f8;
@@ -3468,4 +3520,17 @@ button {
   .grand-total strong {
     font-size: 30px;
   }
+}
+
+/* Ajustes finais para prevalecer sobre os estilos antigos das mesmas áreas. */
+.shell { width: min(1480px, calc(100% - 32px)); }
+.pickup-completion-fields { grid-template-columns: minmax(150px, 1fr) 145px 155px auto; }
+.pickup-report-list article { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1020px) {
+  .shell { grid-template-columns: 1fr; }
+  .pickup-completion-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 650px) {
+  .shell { width: calc(100% - 20px); }
+  .pickup-completion-fields, .pickup-report-list article { grid-template-columns: 1fr 1fr; }
 }
