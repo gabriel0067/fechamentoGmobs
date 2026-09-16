@@ -1282,25 +1282,6 @@ export default function Home() {
   const cloudVersionsRef = useRef<Partial<Record<CloudStateKey, string>>>({});
   const skipCloudSaveRef = useRef(new Set<CloudStateKey>());
   const lastLocalChangeRef = useRef(0);
-  const lastUserActivityRef = useRef(Date.now());
-  useEffect(() => {
-    const markActivity = () => {
-      lastUserActivityRef.current = Date.now();
-    };
-    const options: AddEventListenerOptions = { capture: true, passive: true };
-    window.addEventListener("pointerdown", markActivity, options);
-    window.addEventListener("keydown", markActivity, true);
-    window.addEventListener("input", markActivity, true);
-    window.addEventListener("change", markActivity, true);
-    window.addEventListener("submit", markActivity, true);
-    return () => {
-      window.removeEventListener("pointerdown", markActivity, options);
-      window.removeEventListener("keydown", markActivity, true);
-      window.removeEventListener("input", markActivity, true);
-      window.removeEventListener("change", markActivity, true);
-      window.removeEventListener("submit", markActivity, true);
-    };
-  }, []);
   useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => {
@@ -2013,13 +1994,11 @@ export default function Home() {
     const hasUnsavedRomaneioDrafts = Object.values(romaneioDocumentDrafts).some(
       (drafts) => Object.values(drafts).some((draft) => draft.situation),
     );
-    const userIsActive = Date.now() - lastUserActivityRef.current < 120_000;
     if (
       !cloudReady ||
       cloudWritesRef.current > 0 ||
       cloudSaveFailedRef.current ||
       hasUnsavedRomaneioDrafts ||
-      userIsActive ||
       Date.now() - lastLocalChangeRef.current < 15_000 ||
       document.visibilityState !== "visible"
     )
@@ -2038,7 +2017,9 @@ export default function Home() {
       );
       if (
         cloudWritesRef.current > 0 ||
-        Date.now() - lastUserActivityRef.current < 120_000 ||
+        Object.values(romaneioDocumentDrafts).some((drafts) =>
+          Object.values(drafts).some((draft) => draft.situation),
+        ) ||
         Date.now() - lastLocalChangeRef.current < 15_000
       )
         return;
@@ -2050,7 +2031,6 @@ export default function Home() {
         .map(([key]) => key);
       if (!changedKeys.length) return;
 
-      setCloudStatus("loading");
       for (const key of changedKeys) {
         if (key === "closing") {
           const record = await loadCachedCloudStateRecord<{
@@ -2167,7 +2147,7 @@ export default function Home() {
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refreshCloudData();
     };
-    const interval = window.setInterval(refreshWhenVisible, 60_000);
+    const interval = window.setInterval(refreshWhenVisible, 20_000);
     window.addEventListener("focus", refreshWhenVisible);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
