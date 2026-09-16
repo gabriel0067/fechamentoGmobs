@@ -4,6 +4,7 @@ import {
   ChangeEvent,
   FormEvent,
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -54,6 +55,8 @@ import {
   readClosingStorage,
   writeBilledStorage,
   writeClosingStorage,
+  readCloudStateCache,
+  writeCloudStateCache,
 } from "./storage";
 
 type Tab = "import" | "romaneios" | "covers" | "preview" | "export" | "adjustments" | "billing" | "collections" | "dedicated";
@@ -992,7 +995,10 @@ function useCloudStateSync<T>(
     const timer = window.setTimeout(() => {
       requested = true;
       void saveCloudState(stateKey, value)
-        .then((version) => onFinish(stateKey, true, version))
+        .then((version) => {
+          void writeCloudStateCache(stateKey, version, value).catch(() => undefined);
+          onFinish(stateKey, true, version);
+        })
         .catch(() => onFinish(stateKey, false));
     }, 600);
     return () => {
@@ -1008,6 +1014,17 @@ function useCloudStateSync<T>(
     stateKey,
     value,
   ]);
+}
+
+async function loadCachedCloudStateRecord<T>(stateKey: CloudStateKey) {
+  const version = await getCloudStateVersion(stateKey);
+  const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
+  if (version && cached?.version === version)
+    return { value: cached.value, version };
+  const record = await loadCloudStateRecord<T>(stateKey);
+  if (record)
+    void writeCloudStateCache(stateKey, record.version, record.value).catch(() => undefined);
+  return record;
 }
 
 export default function Home() {
@@ -1164,6 +1181,8 @@ export default function Home() {
     useState<DriverClosingDiscountPrompt | null>(null);
   const [romaneioSearch, setRomaneioSearch] = useState("");
   const [romaneioFullSearch, setRomaneioFullSearch] = useState("");
+  const deferredRomaneioSearch = useDeferredValue(romaneioSearch);
+  const deferredRomaneioFullSearch = useDeferredValue(romaneioFullSearch);
   const [romaneioListLimit, setRomaneioListLimit] = useState(40);
   const [romaneioFullListLimit, setRomaneioFullListLimit] = useState(40);
   const [focusedRomaneioKey, setFocusedRomaneioKey] = useState("");
@@ -1550,7 +1569,7 @@ export default function Home() {
           billedRecord,
           romaneiosRecord,
         ] = await Promise.all([
-            loadCloudStateRecord<{
+            loadCachedCloudStateRecord<{
               entries: Entry[];
               referenceEntries?: RomaneioReferenceEntry[];
               importInfo: ImportInfo | null;
@@ -1563,16 +1582,16 @@ export default function Home() {
               financialEntries?: FinancialEntry[];
               financialAccountNames?: string[];
             }>("closing"),
-            loadCloudStateRecord<Record<string, Record<string, ScanRecord>>>(
+            loadCachedCloudStateRecord<Record<string, Record<string, ScanRecord>>>(
               "scans",
             ),
-            loadCloudStateRecord<{
+            loadCachedCloudStateRecord<{
             rates: TdeRateRecord[];
             importInfo: TdeImportInfo | null;
             }>("tde"),
-            loadCloudStateRecord<Record<string, MaexAdditionalSender>>("maex"),
-            loadCloudStateRecord<Record<string, BilledDocumentRecord>>("billed"),
-            loadCloudStateRecord<{
+            loadCachedCloudStateRecord<Record<string, MaexAdditionalSender>>("maex"),
+            loadCachedCloudStateRecord<Record<string, BilledDocumentRecord>>("billed"),
+            loadCachedCloudStateRecord<{
               entries: RomaneioEntry[];
               importInfo: RomaneioImportInfo | null;
               documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
@@ -1999,7 +2018,7 @@ export default function Home() {
       setCloudStatus("loading");
       for (const key of changedKeys) {
         if (key === "closing") {
-          const record = await loadCloudStateRecord<{
+          const record = await loadCachedCloudStateRecord<{
             entries: Entry[];
             referenceEntries?: RomaneioReferenceEntry[];
             importInfo: ImportInfo | null;
@@ -2039,7 +2058,7 @@ export default function Home() {
           setFinancialEntries(Array.isArray(record.value.financialEntries) ? record.value.financialEntries : []);
           setFinancialAccountNames(Array.isArray(record.value.financialAccountNames) ? record.value.financialAccountNames : []);
         } else if (key === "scans") {
-          const record = await loadCloudStateRecord<
+          const record = await loadCachedCloudStateRecord<
             Record<string, Record<string, ScanRecord>>
           >(key);
           if (!record) continue;
@@ -2047,7 +2066,7 @@ export default function Home() {
           cloudVersionsRef.current[key] = record.version;
           setScannedCtes(record.value || {});
         } else if (key === "tde") {
-          const record = await loadCloudStateRecord<{
+          const record = await loadCachedCloudStateRecord<{
             rates: TdeRateRecord[];
             importInfo: TdeImportInfo | null;
           }>(key);
@@ -2062,7 +2081,7 @@ export default function Home() {
           );
           setTdeImportInfo(record.value.importInfo || null);
         } else if (key === "maex") {
-          const record = await loadCloudStateRecord<
+          const record = await loadCachedCloudStateRecord<
             Record<string, MaexAdditionalSender>
           >(key);
           if (!record) continue;
@@ -2070,7 +2089,7 @@ export default function Home() {
           cloudVersionsRef.current[key] = record.version;
           setMaexAdditionalSenders(record.value || {});
         } else if (key === "billed") {
-          const record = await loadCloudStateRecord<
+          const record = await loadCachedCloudStateRecord<
             Record<string, BilledDocumentRecord>
           >(key);
           if (!record) continue;
@@ -2078,7 +2097,7 @@ export default function Home() {
           cloudVersionsRef.current[key] = record.version;
           setBilledDocuments(normalizeBilledDocuments(record.value || {}));
         } else if (key === "romaneios") {
-          const record = await loadCloudStateRecord<{
+          const record = await loadCachedCloudStateRecord<{
             entries: RomaneioEntry[];
             importInfo: RomaneioImportInfo | null;
             documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
@@ -2344,7 +2363,7 @@ export default function Home() {
     );
   }, [romaneioDocumentMatches, romaneioEntries]);
   const visibleRomaneioGroups = useMemo(() => {
-    const term = normalized(romaneioSearch);
+    const term = normalized(deferredRomaneioSearch);
     return romaneioDailyGroups.filter((group) => {
       if (!term && focusedRomaneioKey) return group.key === focusedRomaneioKey;
       if (!term) return true;
@@ -2368,9 +2387,9 @@ export default function Home() {
         ].join(" "),
       ).includes(term);
     });
-  }, [focusedRomaneioKey, romaneioDailyGroups, romaneioSearch]);
+  }, [deferredRomaneioSearch, focusedRomaneioKey, romaneioDailyGroups]);
   const visibleFullRomaneioGroups = useMemo(() => {
-    const term = normalized(romaneioFullSearch);
+    const term = normalized(deferredRomaneioFullSearch);
     if (!term) return romaneioDailyGroups;
     return romaneioDailyGroups.filter((group) =>
       normalized(
@@ -2402,7 +2421,7 @@ export default function Home() {
   }, [
     romaneioDailyGroups,
     romaneioDocumentStatuses,
-    romaneioFullSearch,
+    deferredRomaneioFullSearch,
     romaneioGroupNotes,
     romaneioRouteLabels,
   ]);

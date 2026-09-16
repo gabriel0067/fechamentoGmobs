@@ -3,6 +3,7 @@ const DATABASE_VERSION = 1;
 const STORE_NAME = "application-state";
 export const CLOSING_STORAGE_KEY = "gmobs-closing-v3";
 export const BILLED_STORAGE_KEY = "gmobs-billed-documents-v1";
+const CLOUD_CACHE_PREFIX = "gmobs-cloud-cache-v1:";
 
 let closingWriteQueue: Promise<void> = Promise.resolve();
 let billedWriteQueue: Promise<void> = Promise.resolve();
@@ -54,6 +55,10 @@ export function readBilledStorage<T>() {
   return readStorage<T>(BILLED_STORAGE_KEY);
 }
 
+export function readCloudStateCache<T>(stateKey: string) {
+  return readStorage<{ version: string; value: T }>(`${CLOUD_CACHE_PREFIX}${stateKey}`);
+}
+
 const writeStorageNow = async (key: string, value: unknown) => {
   const database = await openDatabase();
   try {
@@ -90,4 +95,8 @@ export function writeBilledStorage(value: unknown) {
     .then(() => writeStorageNow(BILLED_STORAGE_KEY, value));
   billedWriteQueue = nextWrite;
   return nextWrite;
+}
+
+export function writeCloudStateCache(stateKey: string, version: string, value: unknown) {
+  return writeStorageNow(`${CLOUD_CACHE_PREFIX}${stateKey}`, { version, value });
 }
