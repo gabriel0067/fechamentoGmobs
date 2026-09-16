@@ -990,20 +990,20 @@ function useCloudStateSync<T>(
     }
     if (skipSaveRef.current.delete(stateKey)) return;
 
-    onStart();
-    let requested = false;
+    let started = false;
     const timer = window.setTimeout(() => {
-      requested = true;
+      started = true;
+      onStart();
       void saveCloudState(stateKey, value)
         .then((version) => {
           void writeCloudStateCache(stateKey, version, value).catch(() => undefined);
           onFinish(stateKey, true, version);
         })
         .catch(() => onFinish(stateKey, false));
-    }, 600);
+    }, 1_200);
     return () => {
       window.clearTimeout(timer);
-      if (!requested) onCancel();
+      if (!started) return;
     };
   }, [
     enabled,
@@ -1281,6 +1281,26 @@ export default function Home() {
   const cloudSaveFailedRef = useRef(false);
   const cloudVersionsRef = useRef<Partial<Record<CloudStateKey, string>>>({});
   const skipCloudSaveRef = useRef(new Set<CloudStateKey>());
+  const lastLocalChangeRef = useRef(0);
+  const lastUserActivityRef = useRef(Date.now());
+  useEffect(() => {
+    const markActivity = () => {
+      lastUserActivityRef.current = Date.now();
+    };
+    const options: AddEventListenerOptions = { capture: true, passive: true };
+    window.addEventListener("pointerdown", markActivity, options);
+    window.addEventListener("keydown", markActivity, true);
+    window.addEventListener("input", markActivity, true);
+    window.addEventListener("change", markActivity, true);
+    window.addEventListener("submit", markActivity, true);
+    return () => {
+      window.removeEventListener("pointerdown", markActivity, options);
+      window.removeEventListener("keydown", markActivity, true);
+      window.removeEventListener("input", markActivity, true);
+      window.removeEventListener("change", markActivity, true);
+      window.removeEventListener("submit", markActivity, true);
+    };
+  }, []);
   useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => {
@@ -1915,6 +1935,7 @@ export default function Home() {
     ],
   );
   const markCloudSaveStart = useCallback(() => {
+    lastLocalChangeRef.current = Date.now();
     if (cloudWritesRef.current === 0) cloudSaveFailedRef.current = false;
     cloudWritesRef.current += 1;
     setCloudStatus("saving");
@@ -1989,10 +2010,17 @@ export default function Home() {
     markCloudSaveFinish,
   );
   const refreshCloudData = useCallback(async () => {
+    const hasUnsavedRomaneioDrafts = Object.values(romaneioDocumentDrafts).some(
+      (drafts) => Object.values(drafts).some((draft) => draft.situation),
+    );
+    const userIsActive = Date.now() - lastUserActivityRef.current < 120_000;
     if (
       !cloudReady ||
       cloudWritesRef.current > 0 ||
       cloudSaveFailedRef.current ||
+      hasUnsavedRomaneioDrafts ||
+      userIsActive ||
+      Date.now() - lastLocalChangeRef.current < 15_000 ||
       document.visibilityState !== "visible"
     )
       return;
@@ -2008,7 +2036,12 @@ export default function Home() {
       const versions = await Promise.all(
         keys.map(async (key) => [key, await getCloudStateVersion(key)] as const),
       );
-      if (cloudWritesRef.current > 0) return;
+      if (
+        cloudWritesRef.current > 0 ||
+        Date.now() - lastUserActivityRef.current < 120_000 ||
+        Date.now() - lastLocalChangeRef.current < 15_000
+      )
+        return;
       const changedKeys = versions
         .filter(
           ([key, version]) =>
@@ -2128,7 +2161,7 @@ export default function Home() {
       setCloudReady(false);
       setCloudStatus("error");
     }
-  }, [cloudReady]);
+  }, [cloudReady, romaneioDocumentDrafts]);
   useEffect(() => {
     if (!cloudHosted || !cloudReady || authStatus !== "signedIn") return;
     const refreshWhenVisible = () => {
@@ -3587,9 +3620,9 @@ export default function Home() {
     situation: RomaneioSituation,
     day: string,
     savedAt: string,
-  ) {
+  ): Entry[] {
     const document = currentRomaneioDocumentsByKey.get(documentKey);
-    if (!document) return;
+    if (!document) return [];
     const operationalStatus = romaneioOperationalStatus(situation);
     const promoted = document.linkedEntries
       .filter((entry) =>
@@ -3605,7 +3638,7 @@ export default function Home() {
           romaneioSavedAt: savedAt,
         }),
       );
-    if (!promoted.length) return;
+    if (!promoted.length) return [];
     const promotedIds = new Set(promoted.map((entry) => entry.id));
     setEntries((current) => [
       ...current.filter(
@@ -3614,6 +3647,49 @@ export default function Home() {
           !promotedIds.has(entry.id),
       ),
       ...promoted,
+    ]);
+    return promoted;
+  }
+
+  function releaseRomaneioDocumentsToClosing(
+    releases: Array<{
+      documentKey: string;
+      situation: RomaneioSituation;
+      day: string;
+      savedAt: string;
+    }>,
+  ) {
+    const promotedEntries = releases.flatMap(
+      ({ documentKey, situation, day, savedAt }) => {
+        const document = currentRomaneioDocumentsByKey.get(documentKey);
+        if (!document) return [];
+        const operationalStatus = romaneioOperationalStatus(situation);
+        return document.linkedEntries
+          .filter((entry) =>
+            ["lt", "rm"].includes(normalized(entry.sourceStatus || entry.status)),
+          )
+          .map(
+            (entry): Entry => ({
+              ...entry,
+              status: operationalStatus,
+              deliveryDate: day || entry.deliveryDate,
+              romaneioDocumentKey: documentKey,
+              romaneioSourceStatus: entry.sourceStatus || entry.status,
+              romaneioSavedAt: savedAt,
+            }),
+          );
+      },
+    );
+    if (!promotedEntries.length) return;
+    const promotedIds = new Set(promotedEntries.map((entry) => entry.id));
+    const documentKeys = new Set(releases.map((release) => release.documentKey));
+    setEntries((current) => [
+      ...current.filter(
+        (entry) =>
+          !documentKeys.has(entry.romaneioDocumentKey || "") &&
+          !promotedIds.has(entry.id),
+      ),
+      ...promotedEntries,
     ]);
   }
 
@@ -3879,15 +3955,19 @@ export default function Home() {
         });
         return next;
       });
-    selectedDrafts.forEach(([documentKey, draft]) => {
-      if (!draft.situation || draft.situation === "driver-missing") return;
-      releaseRomaneioDocumentToClosing(
-        documentKey,
-        draft.situation,
-        group.day,
-        savedAt,
-      );
-    });
+    releaseRomaneioDocumentsToClosing(
+      selectedDrafts
+        .filter(
+          ([, draft]) =>
+            Boolean(draft.situation) && draft.situation !== "driver-missing",
+        )
+        .map(([documentKey, draft]) => ({
+          documentKey,
+          situation: draft.situation as RomaneioSituation,
+          day: group.day,
+          savedAt,
+        })),
+    );
     if (routeChanged || romaneioRouteDrafts[group.key] !== undefined)
       setRomaneioRouteLabels((current) => ({
         ...current,
@@ -3917,8 +3997,11 @@ export default function Home() {
       playRomaneioAttentionSound();
       return;
     }
-    const matching = retainedRomaneioDocuments.find((record) =>
-      typedIdentifiers.some((item) => record.identifiers.includes(item)),
+    const matching = typedIdentifiers.reduce<
+      RomaneioDocumentStatusRecord | undefined
+    >(
+      (found, item) => found || retainedRomaneioByIdentifier.get(item),
+      undefined,
     );
     if (!matching) {
       setMessageIsError(true);
@@ -3966,15 +4049,14 @@ export default function Home() {
       });
       return next;
     });
-    selectedKeys.forEach((key) => {
-      const record = romaneioDocumentStatuses[key];
-      releaseRomaneioDocumentToClosing(
-        key,
-        "delivered",
-        record?.day || "",
+    releaseRomaneioDocumentsToClosing(
+      selectedKeys.map((key) => ({
+        documentKey: key,
+        situation: "delivered",
+        day: romaneioDocumentStatuses[key]?.day || "",
         savedAt,
-      );
-    });
+      })),
+    );
     setRetainedResolutionDrafts({});
     setMessage(
       `${selectedKeys.length} documento(s) retirado(s) dos retidos e gravado(s) como Entregue.`,

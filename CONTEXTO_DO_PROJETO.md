@@ -21,6 +21,7 @@ Este documento existe para permitir a continuidade do trabalho em outra máquina
 - Em `Romaneios > Fechamento`, o fechamento de motorista agora abre uma prévia antes da geração, permite ajustar a cidade atendida e adicionar observação por dia, e exporta um PDF separado para cada motorista selecionado.
 - O endereço publicado é acessível pela internet, mas a interface e a API exigem login próprio. A sessão é assinada no servidor e mantida em cookie HttpOnly.
 - Em 16/09/2026, a importação do relatório geral foi corrigida para remover uma referência indevida a `backup` que gerava o aviso técnico `backup is not defined` e impedia a nova planilha de substituir a anterior. Na mesma correção, a bipagem da prévia e dos romaneios passou a usar índices em memória para evitar varreduras repetidas em listas grandes, reduzindo o atraso entre bipar e marcar o documento.
+- Ainda em 16/09/2026, a sincronização automática foi ajustada para não aplicar recarregamento do banco enquanto o operador está usando a tela ou tem marcações de romaneio não gravadas. O salvamento em nuvem continua ativo, mas a leitura remota fica adiada até a tela ficar ociosa para não derrubar a operação entre computadores.
 
 ## O que foi construído
 
