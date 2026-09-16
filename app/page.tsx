@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
 } from "react";
 import {
   getCloudStateVersion,
@@ -1011,6 +1012,7 @@ function useCloudStateSync<T>(
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("import");
+  const [tabPending, startTabTransition] = useTransition();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [romaneioReferenceEntries, setRomaneioReferenceEntries] = useState<
     RomaneioReferenceEntry[]
@@ -1162,6 +1164,8 @@ export default function Home() {
     useState<DriverClosingDiscountPrompt | null>(null);
   const [romaneioSearch, setRomaneioSearch] = useState("");
   const [romaneioFullSearch, setRomaneioFullSearch] = useState("");
+  const [romaneioListLimit, setRomaneioListLimit] = useState(40);
+  const [romaneioFullListLimit, setRomaneioFullListLimit] = useState(40);
   const [focusedRomaneioKey, setFocusedRomaneioKey] = useState("");
   const [romaneioView, setRomaneioView] = useState<"operation" | "retained">(
     "operation",
@@ -2402,6 +2406,14 @@ export default function Home() {
     romaneioGroupNotes,
     romaneioRouteLabels,
   ]);
+  const displayedRomaneioGroups = useMemo(
+    () => visibleRomaneioGroups.slice(0, romaneioListLimit),
+    [romaneioListLimit, visibleRomaneioGroups],
+  );
+  const displayedFullRomaneioGroups = useMemo(
+    () => visibleFullRomaneioGroups.slice(0, romaneioFullListLimit),
+    [romaneioFullListLimit, visibleFullRomaneioGroups],
+  );
   const retainedRomaneioDocuments = useMemo(
     () =>
       Object.values(romaneioDocumentStatuses)
@@ -5587,6 +5599,11 @@ export default function Home() {
     }
   }
 
+  function navigateTab(nextTab: Tab) {
+    setMessage("");
+    startTabTransition(() => setTab(nextTab));
+  }
+
   if (!hydrated)
     return (
       <main className="access-shell">
@@ -5678,67 +5695,46 @@ export default function Home() {
           <button type="button" onClick={logout}>Sair</button>
         </div>
       </header>
-      <nav className="tabs" aria-label="Etapas do fechamento">
+      <nav className={`tabs ${tabPending ? "switching" : ""}`} aria-label="Etapas do fechamento" aria-busy={tabPending}>
         <button
           className={tab === "import" ? "active" : ""}
-          onClick={() => {
-            setTab("import");
-            setMessage("");
-          }}
+          onClick={() => navigateTab("import")}
         >
           <b>1</b>Importar
         </button>
         <button
           className={tab === "romaneios" ? "active" : ""}
-          onClick={() => {
-            setTab("romaneios");
-            setMessage("");
-          }}
+          onClick={() => navigateTab("romaneios")}
         >
           <b>2</b>Romaneios
         </button>
         <button
           className={tab === "covers" ? "active" : ""}
-          onClick={() => {
-            setTab("covers");
-            setMessage("");
-          }}
+          onClick={() => navigateTab("covers")}
         >
           <b>3</b>Capas
         </button>
         <button
           className={tab === "preview" || tab === "export" || tab === "adjustments" ? "active" : ""}
-          onClick={() => {
-            setTab("preview");
-            setMessage("");
-          }}
+          onClick={() => navigateTab("preview")}
         >
           <b>4</b>Fechamento parceiros
         </button>
         <button
           className={tab === "billing" ? "active" : ""}
-          onClick={() => {
-            setTab("billing");
-            setMessage("");
-          }}
+          onClick={() => navigateTab("billing")}
         >
           <b>5</b>Faturamento
         </button>
         <button
           className={tab === "collections" ? "active" : ""}
-          onClick={() => {
-            setTab("collections");
-            setMessage("");
-          }}
+          onClick={() => navigateTab("collections")}
         >
           <b>6</b>Coletas
         </button>
         <button
           className={tab === "dedicated" ? "active" : ""}
-          onClick={() => {
-            setTab("dedicated");
-            setMessage("");
-          }}
+          onClick={() => navigateTab("dedicated")}
         >
           <b>7</b>Acompanhamento de dedicados
         </button>
@@ -6285,7 +6281,8 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="romaneio-list daily-list">
-                    {visibleRomaneioGroups.map((group) => {
+                    {visibleRomaneioGroups.length > romaneioListLimit && <div className="progressive-list-control"><span>Mostrando {displayedRomaneioGroups.length} de {visibleRomaneioGroups.length} romaneios para manter a tela rápida.</span><button type="button" onClick={() => setRomaneioListLimit((current) => current + 40)}>Mostrar mais 40</button></div>}
+                    {displayedRomaneioGroups.map((group) => {
                       const drafts = romaneioDocumentDrafts[group.key] || {};
                       const previousMissingDocuments = (
                         missingDocumentsByDriver.get(normalized(group.driver)) || []
@@ -6682,7 +6679,8 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="romaneio-full-list">
-                    {visibleFullRomaneioGroups.map((group) => {
+                    {visibleFullRomaneioGroups.length > romaneioFullListLimit && <div className="progressive-list-control"><span>Mostrando {displayedFullRomaneioGroups.length} de {visibleFullRomaneioGroups.length} romaneios para manter a tela rápida.</span><button type="button" onClick={() => setRomaneioFullListLimit((current) => current + 40)}>Mostrar mais 40</button></div>}
+                    {displayedFullRomaneioGroups.map((group) => {
                       const routeLabel =
                         romaneioRouteLabels[group.key] ||
                         group.routes.join(" · ") ||

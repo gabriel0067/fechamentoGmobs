@@ -2575,6 +2575,11 @@ button {
 .retained-ranking-driver strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .retained-ranking-driver small { color: #65766d; }
 .retained-ranking article > b { justify-self: end; color: #087447; font-size: 22px; }
+.progressive-list-control { position: sticky; top: 8px; z-index: 4; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 9px 12px; border: 1px solid #bcd7c8; border-radius: 10px; background: #f3faf6; color: #40544a; font-size: 12px; font-weight: 700; }
+.progressive-list-control button { padding: 7px 10px; white-space: nowrap; }
+.tabs.switching { cursor: progress; }
+.tabs.switching button { pointer-events: none; opacity: .72; }
+.romaneio-list > details, .romaneio-full-list > details, .retained-list > label, .cover-report-card, .billing-list > article, .financial-list > article, .pickup-cards > article, .dedicated-list > article { content-visibility: auto; contain-intrinsic-size: auto 78px; }
 .billing-view { display: grid; gap: 20px; }
 .billing-access-card { width: min(440px, 100%); margin: 42px auto; display: grid; gap: 10px; padding: 30px; border: 1px solid #d9e3dd; border-radius: 18px; background: #fff; box-shadow: 0 16px 45px rgba(26, 50, 37, .1); text-align: center; }
 .billing-lock { width: 54px; height: 54px; margin: 0 auto 4px; display: grid; place-items: center; border-radius: 16px; background: #e7f3ec; color: #087447; font-size: 25px; }
