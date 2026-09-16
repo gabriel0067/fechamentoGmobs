@@ -1180,6 +1180,8 @@ export default function Home() {
   const [driverClosingDiscountPrompt, setDriverClosingDiscountPrompt] =
     useState<DriverClosingDiscountPrompt | null>(null);
   const [romaneioSearch, setRomaneioSearch] = useState("");
+  const romaneioScanRef = useRef<HTMLInputElement>(null);
+  const romaneioSearchTimerRef = useRef<number | null>(null);
   const [romaneioFullSearch, setRomaneioFullSearch] = useState("");
   const deferredRomaneioSearch = useDeferredValue(romaneioSearch);
   const deferredRomaneioFullSearch = useDeferredValue(romaneioFullSearch);
@@ -2362,6 +2364,30 @@ export default function Home() {
         a.driver.localeCompare(b.driver, "pt-BR"),
     );
   }, [romaneioDocumentMatches, romaneioEntries]);
+  const romaneioScanIndex = useMemo(() => {
+    const index = new Map<string, { group: RomaneioDailyGroup; document: RomaneioDailyDocument; order: number }[]>();
+    let order = 0;
+    for (const group of romaneioDailyGroups) {
+      for (const document of group.documents) {
+        for (const identifier of document.identifiers) {
+          const matches = index.get(identifier) || [];
+          matches.push({ group, document, order });
+          index.set(identifier, matches);
+        }
+        order++;
+      }
+    }
+    return index;
+  }, [romaneioDailyGroups]);
+  function findRomaneioScanMatches(identifiers: string[]) {
+    const found = new Map<string, { group: RomaneioDailyGroup; document: RomaneioDailyDocument; order: number }>();
+    for (const identifier of identifiers)
+      for (const match of romaneioScanIndex.get(identifier) || [])
+        found.set(`${match.group.key}|${match.document.key}`, match);
+    return [...found.values()]
+      .sort((left, right) => left.order - right.order)
+      .map(({ group, document }) => ({ group, document }));
+  }
   const visibleRomaneioGroups = useMemo(() => {
     const term = normalized(deferredRomaneioSearch);
     return romaneioDailyGroups.filter((group) => {
@@ -3506,15 +3532,24 @@ export default function Home() {
     ]);
   }
 
-  function showPendingRomaneioAlert() {
+  function clearRomaneioSearch() {
+    if (romaneioSearchTimerRef.current !== null) {
+      window.clearTimeout(romaneioSearchTimerRef.current);
+      romaneioSearchTimerRef.current = null;
+    }
+    if (romaneioScanRef.current) romaneioScanRef.current.value = "";
     setRomaneioSearch("");
+  }
+
+  function showPendingRomaneioAlert() {
+    clearRomaneioSearch();
     setMessage("");
     setRomaneioPendingAlert({ kind: "change-romaneio" });
     playRomaneioAttentionSound();
   }
 
   function scanOrSearchRomaneio() {
-    const typed = romaneioSearch.trim();
+    const typed = romaneioScanRef.current?.value.trim() || "";
     const typedIdentifiers = operationalIdentifiers(typed);
     if (!typedIdentifiers.length) {
       setMessageIsError(true);
@@ -3534,12 +3569,10 @@ export default function Home() {
     const retained = retainedRomaneioDocuments.find((record) =>
       typedIdentifiers.some((item) => record.identifiers.includes(item)),
     );
-    const pendingNewTrip = romaneioDailyGroups.some((group) =>
-      group.documents.some(
-        (document) =>
-          typedIdentifiers.some((item) => document.identifiers.includes(item)) &&
-          !romaneioStatusForDocument(romaneioDocumentStatuses, group, document),
-      ),
+    let matches = findRomaneioScanMatches(typedIdentifiers);
+    const pendingNewTrip = matches.some(
+      ({ group, document }) =>
+        !romaneioStatusForDocument(romaneioDocumentStatuses, group, document),
     );
     if (retained && !pendingNewTrip) {
       const retainedGroup = romaneioDailyGroups.find((group) =>
@@ -3575,7 +3608,7 @@ export default function Home() {
         delete next[retained.key];
         return next;
       });
-      setRomaneioSearch("");
+      clearRomaneioSearch();
       setMessageIsError(false);
       setMessage(
         `Documento retido localizado: ${retained.referenceType} ${retained.referenceNumber} já foi retirado do relatório de Retidos e gravado como Entregue.`,
@@ -3584,13 +3617,6 @@ export default function Home() {
       return;
     }
 
-    let matches = romaneioDailyGroups.flatMap((group) =>
-      group.documents
-        .filter((document) =>
-          typedIdentifiers.some((item) => document.identifiers.includes(item)),
-        )
-        .map((document) => ({ group, document })),
-    );
     if (!matches.length) {
       const reportMatches = entriesWithTde.filter((entry) => {
         if (normalized(entry.status) === "cf") return false;
@@ -3601,15 +3627,7 @@ export default function Home() {
         const fallbackIdentifiers = new Set(
           reportMatches.flatMap(entryOperationalIdentifiers),
         );
-        matches = romaneioDailyGroups.flatMap((group) =>
-          group.documents
-            .filter((document) =>
-              document.identifiers.some((item) =>
-                fallbackIdentifiers.has(item),
-              ),
-            )
-            .map((document) => ({ group, document })),
-        );
+        matches = findRomaneioScanMatches([...fallbackIdentifiers]);
       }
     }
     const pendingMatch = matches.find(
@@ -3619,7 +3637,7 @@ export default function Home() {
     );
     const match = pendingMatch || matches[0];
     if (!match) {
-      setRomaneioSearch("");
+      clearRomaneioSearch();
       setMessageIsError(true);
       setMessage(
         `Documento não encontrado: ${typed} não foi localizado nos romaneios nem no relatório de Retidos.`,
@@ -3639,7 +3657,7 @@ export default function Home() {
     setFocusedRomaneioKey(group.key);
     setOpenRomaneios((current) => ({ ...current, [group.key]: true }));
     if (!pendingMatch) {
-      setRomaneioSearch("");
+      clearRomaneioSearch();
       setMessageIsError(true);
       setMessage(
         `${document.referenceType} ${document.referenceNumber} já possui uma situação marcada. O romaneio vinculado foi aberto.`,
@@ -3648,7 +3666,7 @@ export default function Home() {
       return;
     }
     setRomaneioDraft(group.key, document.key, "delivered");
-    setRomaneioSearch("");
+    clearRomaneioSearch();
     setMessageIsError(false);
     setMessage(
       `${document.referenceType} ${document.referenceNumber} localizado no romaneio ${group.romaneios.join(" · ")} e marcado como Entregue. Clique em Gravar conferência para confirmar.`,
@@ -4373,7 +4391,7 @@ export default function Home() {
         importedAt: new Date().toISOString(),
         duplicates,
       });
-      setRomaneioSearch("");
+      clearRomaneioSearch();
       setTab("romaneios");
       setMessage(
         `${additions.length} linha(s) nova(s) adicionada(s). Agora há ${distinctRomaneios} romaneio(s) e ${combinedEntries.length} linha(s) salvas.${duplicates ? ` ${duplicates} linha(s) completamente repetida(s) foram ignoradas.` : ""}${errors.length ? ` ${errors.length} arquivo(s) não puderam ser lidos.` : ""}`,
@@ -6256,15 +6274,25 @@ export default function Home() {
                     </p>
                   </div>
                   <input
+                    ref={romaneioScanRef}
                     type="search"
-                    value={romaneioSearch}
                     placeholder="MD-e, CT-e Parceiro, chave AK, NF, motorista ou romaneio"
-                    onChange={(event) => setRomaneioSearch(event.target.value)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (romaneioSearchTimerRef.current !== null)
+                        window.clearTimeout(romaneioSearchTimerRef.current);
+                      // O leitor envia muitos caracteres seguidos; não redesenhe os romaneios a cada dígito.
+                      if (!/[a-zA-ZÀ-ÿ]/.test(value)) {
+                        if (romaneioSearch) setRomaneioSearch("");
+                        return;
+                      }
+                      romaneioSearchTimerRef.current = window.setTimeout(() => {
+                        setRomaneioSearch(value);
+                        romaneioSearchTimerRef.current = null;
+                      }, 300);
+                    }}
                   />
-                  <button
-                    className="primary"
-                    disabled={!romaneioSearch.trim()}
-                  >
+                  <button className="primary">
                     Localizar / marcar Entregue
                   </button>
                   {focusedRomaneioKey && !romaneioSearch.trim() && (
@@ -8348,7 +8376,7 @@ export default function Home() {
                   onClick={() => {
                     setRomaneioDocumentDrafts({});
                     setSelectedRomaneioDocumentKeys({});
-                    setRomaneioSearch("");
+                    clearRomaneioSearch();
                     setRomaneioPendingAlert(null);
                     setRomaneioCancelConfirmation(false);
                     setMessageIsError(false);
