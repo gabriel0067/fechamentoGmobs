@@ -20,6 +20,7 @@ Este documento existe para permitir a continuidade do trabalho em outra máquina
 - A importação e a tela separada de romaneios estão implementadas e validadas localmente, mas ainda não foram publicadas; aguardam aprovação visual do usuário.
 - Em `Romaneios > Fechamento`, o fechamento de motorista agora abre uma prévia antes da geração, permite ajustar a cidade atendida e adicionar observação por dia, e exporta um PDF separado para cada motorista selecionado.
 - O endereço publicado é acessível pela internet, mas a interface e a API exigem login próprio. A sessão é assinada no servidor e mantida em cookie HttpOnly.
+- Em 16/09/2026, a importação do relatório geral foi corrigida para remover uma referência indevida a `backup` que gerava o aviso técnico `backup is not defined` e impedia a nova planilha de substituir a anterior. Na mesma correção, a bipagem da prévia e dos romaneios passou a usar índices em memória para evitar varreduras repetidas em listas grandes, reduzindo o atraso entre bipar e marcar o documento.
 
 ## O que foi construído
 

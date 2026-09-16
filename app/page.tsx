@@ -2732,6 +2732,45 @@ export default function Home() {
     );
     return documents;
   }, [romaneioDailyGroups]);
+  const romaneioMatchesByIdentifier = useMemo(() => {
+    const matches = new Map<
+      string,
+      Array<{ group: RomaneioDailyGroup; document: RomaneioDailyDocument }>
+    >();
+    romaneioDailyGroups.forEach((group) => {
+      group.documents.forEach((document) => {
+        document.identifiers.forEach((identifier) => {
+          if (!identifier) return;
+          const current = matches.get(identifier) || [];
+          current.push({ group, document });
+          matches.set(identifier, current);
+        });
+      });
+    });
+    return matches;
+  }, [romaneioDailyGroups]);
+  const reportFallbackIdentifiersByIdentifier = useMemo(() => {
+    const matches = new Map<string, Set<string>>();
+    entriesWithTde.forEach((entry) => {
+      if (normalized(entry.status) === "cf") return;
+      const identifiers = entryOperationalIdentifiers(entry);
+      identifiers.forEach((identifier) => {
+        const current = matches.get(identifier) || new Set<string>();
+        identifiers.forEach((linkedIdentifier) => current.add(linkedIdentifier));
+        matches.set(identifier, current);
+      });
+    });
+    return matches;
+  }, [entriesWithTde]);
+  const retainedRomaneioByIdentifier = useMemo(() => {
+    const matches = new Map<string, RomaneioDocumentStatusRecord>();
+    retainedRomaneioDocuments.forEach((record) => {
+      record.identifiers.forEach((identifier) => {
+        if (!matches.has(identifier)) matches.set(identifier, record);
+      });
+    });
+    return matches;
+  }, [retainedRomaneioDocuments]);
   const manualClientOptions = useMemo(() => {
     const options = new Map<string, ManualClientOption>();
     const addOption = (
@@ -2905,6 +2944,13 @@ export default function Home() {
     return comparePajussaraDocuments(rows, pajussaraClosing.documents);
   }, [pajussaraClosing, partners]);
   const active = partners.find((p) => p.id === selectedPartner) || partners[0];
+  const scannedLookupByPartner = useMemo(() => {
+    const lookup = new Map<string, Set<string>>();
+    Object.entries(scannedCtes).forEach(([partnerId, scans]) => {
+      lookup.set(partnerId, new Set(Object.keys(scans || {})));
+    });
+    return lookup;
+  }, [scannedCtes]);
   const coverPartners = useMemo(() => {
     return partnerAliases
       .filter(([id]) => id !== "unidentified")
@@ -3141,28 +3187,77 @@ export default function Home() {
     });
   }
 
-  const matchedScanKey = (entry: Entry) => {
-    const partnerScans = scannedCtes[entry.partnerId] || {};
-    return [scanKey(entry.cteKey), scanKey(entry.cte)].find(
-      (key) => key && partnerScans[key],
+  const matchedScanKey = useCallback(
+    (entry: Entry) => {
+      const partnerScans = scannedLookupByPartner.get(entry.partnerId);
+      if (!partnerScans) return undefined;
+      return [scanKey(entry.cteKey), scanKey(entry.cte)].find(
+        (key) => key && partnerScans.has(key),
+      );
+    },
+    [scannedLookupByPartner],
+  );
+  const isScanned = useCallback(
+    (entry: Entry) =>
+      normalized(entry.status) === "cf" || Boolean(matchedScanKey(entry)),
+    [matchedScanKey],
+  );
+  const usesScanForPartner = useCallback(
+    (partnerId: string) =>
+      scanPartnerIds.has(partnerId) ||
+      optionalScanPartnerIds.includes(partnerId),
+    [optionalScanPartnerIds],
+  );
+  const closingRowsByPartner = useMemo(() => {
+    const rows = new Map<string, Entry[]>();
+    partners.forEach((partner) => {
+      rows.set(
+        partner.id,
+        usesScanForPartner(partner.id)
+          ? partner.rows.filter(isScanned)
+          : partner.rows,
+      );
+    });
+    return rows;
+  }, [isScanned, partners, usesScanForPartner]);
+  const closingTotalsByPartner = useMemo(() => {
+    const totals = new Map<string, { count: number; total: number }>();
+    closingRowsByPartner.forEach((rows, partnerId) => {
+      totals.set(partnerId, {
+        count: rows.length,
+        total: rows.reduce((sum, row) => sum + totalOf(row), 0),
+      });
+    });
+    return totals;
+  }, [closingRowsByPartner]);
+  const rowsForClosing = useCallback(
+    (partner: { id: string; rows: Entry[] }) =>
+      closingRowsByPartner.get(partner.id) || [],
+    [closingRowsByPartner],
+  );
+  const activeScanState = useMemo(() => {
+    if (!active)
+      return {
+        scannedRows: [] as Entry[],
+        missingRows: [] as Entry[],
+        pendingKeys: [] as string[],
+      };
+    const presentKeys = new Set<string>();
+    const scannedRows: Entry[] = [];
+    const missingRows: Entry[] = [];
+    active.rows.forEach((entry) => {
+      const entryKeys = [scanKey(entry.cteKey), scanKey(entry.cte)].filter(
+        Boolean,
+      ) as string[];
+      entryKeys.forEach((key) => presentKeys.add(key));
+      if (isScanned(entry)) scannedRows.push(entry);
+      else missingRows.push(entry);
+    });
+    const pendingKeys = [...(scannedLookupByPartner.get(active.id) || [])].filter(
+      (key) => !presentKeys.has(key),
     );
-  };
-  const isScanned = (entry: Entry) =>
-    normalized(entry.status) === "cf" || Boolean(matchedScanKey(entry));
-  const usesScanForPartner = (partnerId: string) =>
-    scanPartnerIds.has(partnerId) || optionalScanPartnerIds.includes(partnerId);
-  const rowsForClosing = (partner: { id: string; rows: Entry[] }) =>
-    usesScanForPartner(partner.id)
-      ? partner.rows.filter(isScanned)
-      : partner.rows;
-  const pendingScanKeys = (partner: { id: string; rows: Entry[] }) =>
-    Object.keys(scannedCtes[partner.id] || {}).filter(
-      (key) =>
-        !partner.rows.some(
-          (entry) =>
-            scanKey(entry.cteKey) === key || scanKey(entry.cte) === key,
-        ),
-    );
+    return { scannedRows, missingRows, pendingKeys };
+  }, [active, isScanned, scannedLookupByPartner]);
 
   function toggleOptionalPartnerScan(partnerId: string, enabled: boolean) {
     const partner = partners.find((item) => item.id === partnerId);
@@ -3177,63 +3272,70 @@ export default function Home() {
         : `Bipagem opcional desativada para ${partner?.name || "esta transportadora"}. A exportação voltou a considerar todos os documentos.`,
     );
   }
-  const activeClosingRows = active ? rowsForClosing(active) : [];
-  const activeClosingAudit = activeClosingRows.reduce(
-    (audit, entry) => {
-      const status = normalized(entry.status);
-      const baseFreight = Math.max(0, entry.reportedTotal ?? entry.freight);
-      const tdaValue = Math.max(0, entry.tda || entry.trt || 0);
-      const isComplement = status === "cf";
-      const isRedelivery = entry.isRedelivery || status === "re";
-      audit.total += totalOf(entry);
-      audit.baseFreight += baseFreight;
-      audit.weight += entry.weight || 0;
-      audit.volumes += entry.volumes || 0;
-      if (entry.invoice) audit.invoices.add(normalizeInvoiceKey(entry.invoice));
-      if (entry.cte) audit.ctes.add(scanKey(entry.cte));
-      if (isComplement) {
-        audit.complements.count += 1;
-        audit.complements.value += baseFreight;
-      } else if (isRedelivery) {
-        audit.redeliveries.count += 1;
-        audit.redeliveries.value += totalOf(entry);
-      } else {
-        audit.deliveries.count += 1;
-        audit.deliveries.value += totalOf(entry);
-      }
-      if (entry.tde) {
-        audit.tde.count += 1;
-        audit.tde.value += entry.tde;
-      }
-      if (tdaValue) {
-        audit.tda.count += 1;
-        audit.tda.value += tdaValue;
-      }
-      if (!isComplement && entry.dedicated) {
-        audit.dedicated.count += 1;
-        audit.dedicated.value += entry.dedicated;
-      }
-      if (entry.partnerFreight) {
-        audit.partnerFreight.count += 1;
-        audit.partnerFreight.value += entry.partnerFreight;
-      }
-      return audit;
-    },
-    {
-      total: 0,
-      baseFreight: 0,
-      weight: 0,
-      volumes: 0,
-      invoices: new Set<string>(),
-      ctes: new Set<string>(),
-      deliveries: { count: 0, value: 0 },
-      redeliveries: { count: 0, value: 0 },
-      complements: { count: 0, value: 0 },
-      tde: { count: 0, value: 0 },
-      tda: { count: 0, value: 0 },
-      dedicated: { count: 0, value: 0 },
-      partnerFreight: { count: 0, value: 0 },
-    },
+  const activeClosingRows = useMemo(
+    () => (active ? rowsForClosing(active) : []),
+    [active, rowsForClosing],
+  );
+  const activeClosingAudit = useMemo(
+    () =>
+      activeClosingRows.reduce(
+        (audit, entry) => {
+          const status = normalized(entry.status);
+          const baseFreight = Math.max(0, entry.reportedTotal ?? entry.freight);
+          const tdaValue = Math.max(0, entry.tda || entry.trt || 0);
+          const isComplement = status === "cf";
+          const isRedelivery = entry.isRedelivery || status === "re";
+          audit.total += totalOf(entry);
+          audit.baseFreight += baseFreight;
+          audit.weight += entry.weight || 0;
+          audit.volumes += entry.volumes || 0;
+          if (entry.invoice) audit.invoices.add(normalizeInvoiceKey(entry.invoice));
+          if (entry.cte) audit.ctes.add(scanKey(entry.cte));
+          if (isComplement) {
+            audit.complements.count += 1;
+            audit.complements.value += baseFreight;
+          } else if (isRedelivery) {
+            audit.redeliveries.count += 1;
+            audit.redeliveries.value += totalOf(entry);
+          } else {
+            audit.deliveries.count += 1;
+            audit.deliveries.value += totalOf(entry);
+          }
+          if (entry.tde) {
+            audit.tde.count += 1;
+            audit.tde.value += entry.tde;
+          }
+          if (tdaValue) {
+            audit.tda.count += 1;
+            audit.tda.value += tdaValue;
+          }
+          if (!isComplement && entry.dedicated) {
+            audit.dedicated.count += 1;
+            audit.dedicated.value += entry.dedicated;
+          }
+          if (entry.partnerFreight) {
+            audit.partnerFreight.count += 1;
+            audit.partnerFreight.value += entry.partnerFreight;
+          }
+          return audit;
+        },
+        {
+          total: 0,
+          baseFreight: 0,
+          weight: 0,
+          volumes: 0,
+          invoices: new Set<string>(),
+          ctes: new Set<string>(),
+          deliveries: { count: 0, value: 0 },
+          redeliveries: { count: 0, value: 0 },
+          complements: { count: 0, value: 0 },
+          tde: { count: 0, value: 0 },
+          tda: { count: 0, value: 0 },
+          dedicated: { count: 0, value: 0 },
+          partnerFreight: { count: 0, value: 0 },
+        },
+      ),
+    [activeClosingRows],
   );
 
   function setRomaneioDraft(
@@ -3531,15 +3633,33 @@ export default function Home() {
       )
       .map(([groupKey]) => groupKey);
 
-    const retained = retainedRomaneioDocuments.find((record) =>
-      typedIdentifiers.some((item) => record.identifiers.includes(item)),
+    const collectMatches = (identifiers: string[]) => {
+      const found: Array<{
+        group: RomaneioDailyGroup;
+        document: RomaneioDailyDocument;
+      }> = [];
+      const seen = new Set<string>();
+      identifiers.forEach((identifier) => {
+        (romaneioMatchesByIdentifier.get(identifier) || []).forEach((match) => {
+          const key = `${match.group.key}|${match.document.key}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          found.push(match);
+        });
+      });
+      return found;
+    };
+
+    const retained = typedIdentifiers.reduce<
+      RomaneioDocumentStatusRecord | undefined
+    >(
+      (found, item) => found || retainedRomaneioByIdentifier.get(item),
+      undefined,
     );
-    const pendingNewTrip = romaneioDailyGroups.some((group) =>
-      group.documents.some(
-        (document) =>
-          typedIdentifiers.some((item) => document.identifiers.includes(item)) &&
-          !romaneioStatusForDocument(romaneioDocumentStatuses, group, document),
-      ),
+    const directMatches = collectMatches(typedIdentifiers);
+    const pendingNewTrip = directMatches.some(
+      ({ group, document }) =>
+        !romaneioStatusForDocument(romaneioDocumentStatuses, group, document),
     );
     if (retained && !pendingNewTrip) {
       const retainedGroup = romaneioDailyGroups.find((group) =>
@@ -3584,33 +3704,16 @@ export default function Home() {
       return;
     }
 
-    let matches = romaneioDailyGroups.flatMap((group) =>
-      group.documents
-        .filter((document) =>
-          typedIdentifiers.some((item) => document.identifiers.includes(item)),
-        )
-        .map((document) => ({ group, document })),
-    );
+    let matches = directMatches;
     if (!matches.length) {
-      const reportMatches = entriesWithTde.filter((entry) => {
-        if (normalized(entry.status) === "cf") return false;
-        const identifiers = entryOperationalIdentifiers(entry);
-        return typedIdentifiers.some((item) => identifiers.includes(item));
+      const fallbackIdentifiers = new Set<string>();
+      typedIdentifiers.forEach((identifier) => {
+        (reportFallbackIdentifiersByIdentifier.get(identifier) || []).forEach(
+          (linkedIdentifier) => fallbackIdentifiers.add(linkedIdentifier),
+        );
       });
-      if (reportMatches.length) {
-        const fallbackIdentifiers = new Set(
-          reportMatches.flatMap(entryOperationalIdentifiers),
-        );
-        matches = romaneioDailyGroups.flatMap((group) =>
-          group.documents
-            .filter((document) =>
-              document.identifiers.some((item) =>
-                fallbackIdentifiers.has(item),
-              ),
-            )
-            .map((document) => ({ group, document })),
-        );
-      }
+      if (fallbackIdentifiers.size)
+        matches = collectMatches([...fallbackIdentifiers]);
     }
     const pendingMatch = matches.find(
       ({ group, document }) =>
@@ -4492,7 +4595,6 @@ export default function Home() {
       const importedCandidates = referenceEntries.filter(
         (entry) => entry.sourceEligible || Boolean(entry.romaneioDocumentKey),
       );
-      setClosingAdditionals(Array.isArray(backup.closing.closingAdditionals) ? backup.closing.closingAdditionals : []);
       const existingKeys = new Set(
         [...entries, ...romaneioReferenceEntries].map(entryStableIdentity),
       );
@@ -7410,10 +7512,10 @@ export default function Home() {
                             </p>
                           </div>
                           <b>
-                            {active.rows.filter(isScanned).length} de{" "}
+                            {activeScanState.scannedRows.length} de{" "}
                             {active.rows.length} liberados
-                            {pendingScanKeys(active).length
-                              ? ` · ${pendingScanKeys(active).length} aguardando`
+                            {activeScanState.pendingKeys.length
+                              ? ` · ${activeScanState.pendingKeys.length} aguardando`
                               : ""}
                           </b>
                         </div>
@@ -7460,8 +7562,8 @@ export default function Home() {
                           </small>
                         </div>
                         <div className="scan-list">
-                          {active.rows.filter(isScanned).length ? (
-                            active.rows.filter(isScanned).map((entry) => (
+                          {activeScanState.scannedRows.length ? (
+                            activeScanState.scannedRows.map((entry) => (
                               <div key={entry.id}>
                                 <span className="scan-ok">{normalized(entry.status) === "cf" ? "CF DIRETO" : "OK"}</span>
                                 <strong>CTE {entry.cte}</strong>
@@ -7479,10 +7581,10 @@ export default function Home() {
                                   </button>}
                               </div>
                             ))
-                          ) : !pendingScanKeys(active).length ? (
+                          ) : !activeScanState.pendingKeys.length ? (
                             <p>Nenhum documento bipado neste período.</p>
                           ) : null}
-                          {pendingScanKeys(active).map((key) => (
+                          {activeScanState.pendingKeys.map((key) => (
                             <div className="scan-pending" key={`pending-${key}`}>
                               <span>AGUARDANDO</span>
                               <strong>CTE {key}</strong>
@@ -7496,7 +7598,7 @@ export default function Home() {
                             </div>
                           ))}
                         </div>
-                        {active.rows.some((entry) => !isScanned(entry)) && (
+                        {activeScanState.missingRows.length > 0 && (
                           <div className="scan-missing">
                             <div className="scan-missing-heading">
                               <div>
@@ -7505,16 +7607,13 @@ export default function Home() {
                               </div>
                               <b>
                                 {
-                                  active.rows.filter(
-                                    (entry) => !isScanned(entry),
-                                  ).length
+                                  activeScanState.missingRows.length
                                 }{" "}
                                 sem OK
                               </b>
                             </div>
                             <div className="scan-checklist">
-                              {active.rows
-                                .filter((entry) => !isScanned(entry))
+                              {activeScanState.missingRows
                                 .map((entry) => (
                                   <label
                                     aria-label={`Marcar CTE ${entry.cte || entry.cteKey || "não informado"} com OK`}
@@ -7850,7 +7949,7 @@ export default function Home() {
                         <strong>
                           {
                             new Set(
-                              rowsForClosing(active)
+                              activeClosingRows
                                 .map((r) => r.invoice)
                                 .filter(Boolean),
                             ).size
@@ -7862,7 +7961,7 @@ export default function Home() {
                         <strong>
                           {
                             new Set(
-                              rowsForClosing(active)
+                              activeClosingRows
                                 .map((r) => r.cte)
                                 .filter(Boolean),
                             ).size
@@ -7872,7 +7971,7 @@ export default function Home() {
                       <article>
                         <small>Reentregas</small>
                         <strong>
-                          {rowsForClosing(active).filter((r) => r.isRedelivery).length}
+                          {activeClosingRows.filter((r) => r.isRedelivery).length}
                         </strong>
                       </article>
                     </div>
@@ -7880,7 +7979,7 @@ export default function Home() {
                       <small>VALOR DO FECHAMENTO</small>
                       <strong>
                         {money(
-                          rowsForClosing(active).reduce(
+                          activeClosingRows.reduce(
                             (sum, row) => sum + totalOf(row),
                             0,
                           ),
@@ -7908,7 +8007,7 @@ export default function Home() {
                         <article><small>FRETE DA PARCEIRA</small><strong>{activeClosingAudit.partnerFreight.count}</strong><p>{money(activeClosingAudit.partnerFreight.value)}</p></article>
                         <article><small>FRETE BASE (BA)</small><strong>{money(activeClosingAudit.baseFreight)}</strong><p>{activeClosingAudit.ctes.size} CTEs únicos</p></article>
                         <article><small>PESO / VOLUMES</small><strong>{activeClosingAudit.weight.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg</strong><p>{activeClosingAudit.volumes.toLocaleString("pt-BR")} volumes</p></article>
-                        {usesScanForPartner(active.id) && <article><small>FORA POR FALTA DE BIPAGEM</small><strong>{active.rows.filter((entry) => !isScanned(entry)).length}</strong><p>não entram na soma</p></article>}
+                        {usesScanForPartner(active.id) && <article><small>FORA POR FALTA DE BIPAGEM</small><strong>{activeScanState.missingRows.length}</strong><p>não entram na soma</p></article>}
                       </div>
                       <details className="closing-audit-details">
                         <summary>Ver nota por nota e todos os valores</summary>
@@ -7955,40 +8054,38 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="check-list">
-                  {partners.map((partner) => (
-                    <label
-                      key={partner.id}
-                      className={
-                        partner.id === "unidentified" ? "disabled" : ""
-                      }
-                    >
-                      <input
-                        type="checkbox"
-                        disabled={partner.id === "unidentified"}
-                        checked={selectedExports.includes(partner.id)}
-                        onChange={() =>
-                          setSelectedExports((current) =>
-                            current.includes(partner.id)
-                              ? current.filter((id) => id !== partner.id)
-                              : [...current, partner.id],
-                          )
+                  {partners.map((partner) => {
+                    const closingTotal = closingTotalsByPartner.get(partner.id);
+                    return (
+                      <label
+                        key={partner.id}
+                        className={
+                          partner.id === "unidentified" ? "disabled" : ""
                         }
-                      />
-                      <span>{partner.name.slice(0, 2).toUpperCase()}</span>
-                      <div>
-                        <strong>{partner.name}</strong>
-                        <small>
-                          {rowsForClosing(partner).length} registros ·{" "}
-                          {money(
-                            rowsForClosing(partner).reduce(
-                              (sum, row) => sum + totalOf(row),
-                              0,
-                            ),
-                          )}
-                        </small>
-                      </div>
-                    </label>
-                  ))}
+                      >
+                        <input
+                          type="checkbox"
+                          disabled={partner.id === "unidentified"}
+                          checked={selectedExports.includes(partner.id)}
+                          onChange={() =>
+                            setSelectedExports((current) =>
+                              current.includes(partner.id)
+                                ? current.filter((id) => id !== partner.id)
+                                : [...current, partner.id],
+                            )
+                          }
+                        />
+                        <span>{partner.name.slice(0, 2).toUpperCase()}</span>
+                        <div>
+                          <strong>{partner.name}</strong>
+                          <small>
+                            {closingTotal?.count || 0} registros ·{" "}
+                            {money(closingTotal?.total || 0)}
+                          </small>
+                        </div>
+                      </label>
+                    );
+                  })}
                 </div>
                 <div className="export-footer">
                   <div>
@@ -7997,8 +8094,13 @@ export default function Home() {
                       {money(
                         partners
                           .filter((p) => selectedExports.includes(p.id))
-                          .flatMap(rowsForClosing)
-                          .reduce((sum, row) => sum + totalOf(row), 0),
+                          .reduce(
+                            (sum, partner) =>
+                              sum +
+                              (closingTotalsByPartner.get(partner.id)?.total ||
+                                0),
+                            0,
+                          ),
                       )}
                     </strong>
                   </div>
