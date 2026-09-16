@@ -413,6 +413,8 @@ Ao final do teste, revisar a velocidade de importação, abertura, bipagem, salv
 
 Em 16 de setembro de 2026, após lentidão geral no site publicado, o salvamento em nuvem passou a aguardar uma pequena folga do navegador antes de serializar/enviar estados grandes (`closing`, `romaneios` e `billed`), a fila marca alteração local assim que o estado muda para impedir refresh remoto no meio de uma gravação pendente, e o refresh compartilhado espera alguns segundos quando há interação recente do usuário. O login foi separado do componente principal e os campos de bipagem de fechamento/capas deixaram de atualizar React a cada caractere, processando somente no envio.
 
+Na mesma data, os campos de motivo de Retorno, nota manual de romaneio, frete bruto manual e quantidade de coleta do alerta antes de gravar passaram a ser lidos somente no momento da ação, evitando recálculo da tela de romaneios a cada caractere digitado.
+
 ## Regra de manutenção deste documento
 
 Atualize este arquivo sempre que houver uma decisão relevante, mudança de regra de negócio, nova funcionalidade, alteração de arquitetura ou novo próximo passo. Não registre senhas, tokens, dados de clientes ou informações confidenciais.

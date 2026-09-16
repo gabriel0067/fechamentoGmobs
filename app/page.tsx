@@ -1302,8 +1302,17 @@ export default function Home() {
   const [manualRomaneioFreights, setManualRomaneioFreights] = useState<
     Record<string, ManualRomaneioFreight[]>
   >({});
-  const [manualRomaneioFreightDrafts, setManualRomaneioFreightDrafts] =
-    useState<Record<string, { invoice: string; grossFreight: string }>>({});
+  const manualRomaneioFreightInputRefs = useRef<
+    Record<
+      string,
+      {
+        invoice?: HTMLInputElement | null;
+        grossFreight?: HTMLInputElement | null;
+      }
+    >
+  >({});
+  const romaneioReturnReasonRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const romaneioPickupQuantityRef = useRef<HTMLInputElement>(null);
   const [romaneioPickupQuantities, setRomaneioPickupQuantities] = useState<
     Record<string, number>
   >({});
@@ -3647,24 +3656,6 @@ export default function Home() {
     playRomaneioAttentionSound();
   }
 
-  function setRomaneioReturnReason(
-    groupKey: string,
-    documentKey: string,
-    reason: string,
-  ) {
-    setRomaneioDocumentDrafts((current) => ({
-      ...current,
-      [groupKey]: {
-        ...(current[groupKey] || {}),
-        [documentKey]: {
-          situation:
-            current[groupKey]?.[documentKey]?.situation || "return",
-          reason,
-        },
-      },
-    }));
-  }
-
   function requestMarkAllRomaneioDelivered(group: RomaneioDailyGroup) {
     const drafts = romaneioDocumentDrafts[group.key] || {};
     const pendingCount = group.documents.filter((document) => {
@@ -3704,12 +3695,9 @@ export default function Home() {
   }
 
   function addManualRomaneioFreight(groupKey: string) {
-    const draft = manualRomaneioFreightDrafts[groupKey] || {
-      invoice: "",
-      grossFreight: "",
-    };
-    const invoice = draft.invoice.trim();
-    const grossFreight = parseMoney(draft.grossFreight);
+    const inputs = manualRomaneioFreightInputRefs.current[groupKey] || {};
+    const invoice = (inputs.invoice?.value || "").trim();
+    const grossFreight = parseMoney(inputs.grossFreight?.value || "");
     if (!invoice) {
       setMessageIsError(true);
       setMessage("Informe a nota fiscal manual.");
@@ -3729,10 +3717,8 @@ export default function Home() {
         { id: newId(), invoice, grossFreight },
       ],
     }));
-    setManualRomaneioFreightDrafts((current) => ({
-      ...current,
-      [groupKey]: { invoice: "", grossFreight: "" },
-    }));
+    if (inputs.invoice) inputs.invoice.value = "";
+    if (inputs.grossFreight) inputs.grossFreight.value = "";
     setMessageIsError(false);
     setMessage("Nota fiscal manual adicionada ao romaneio.");
   }
@@ -3971,9 +3957,19 @@ export default function Home() {
     pickupQuantityOverride?: number,
   ) {
     const drafts = romaneioDocumentDrafts[group.key] || {};
-    const selectedDrafts = Object.entries(drafts).filter(
-      ([, draft]) => draft.situation,
-    );
+    const selectedDrafts = Object.entries(drafts)
+      .filter(([, draft]) => draft.situation)
+      .map(([documentKey, draft]) => [
+        documentKey,
+        {
+          ...draft,
+          reason:
+            draft.situation === "return"
+              ? romaneioReturnReasonRefs.current[`${group.key}|${documentKey}`]
+                  ?.value || draft.reason
+              : draft.reason,
+        },
+      ] as const);
     const missingReason = selectedDrafts.some(
       ([, draft]) =>
         draft.situation === "return" && !draft.reason.trim(),
@@ -3988,7 +3984,11 @@ export default function Home() {
       if (romaneioStatusForDocument(romaneioDocumentStatuses, group, document)) return false;
       const draft = drafts[document.key];
       if (!draft?.situation) return true;
-      return draft.situation === "return" && !draft.reason.trim();
+      if (draft.situation !== "return") return false;
+      const reason =
+        romaneioReturnReasonRefs.current[`${group.key}|${document.key}`]?.value ||
+        draft.reason;
+      return !reason.trim();
     }).length;
     if (pendingCount && !allowPending) {
       setMessage("");
@@ -4035,13 +4035,14 @@ export default function Home() {
     }
 
     const savedAt = new Date().toISOString();
+    const groupDocumentsByKey = new Map(
+      group.documents.map((document) => [document.key, document] as const),
+    );
     if (selectedDrafts.length)
       setRomaneioDocumentStatuses((current) => {
         const next = { ...current };
         selectedDrafts.forEach(([documentKey, draft]) => {
-          const document = group.documents.find(
-            (candidate) => candidate.key === documentKey,
-          );
+          const document = groupDocumentsByKey.get(documentKey);
           if (!document || !draft.situation) return;
           const statusKey = `${group.key}|${document.key}`;
           next[statusKey] = {
@@ -6800,7 +6801,17 @@ export default function Home() {
                                               <option value="driver-missing">Motorista não trouxe o documento</option>
                                             </select>
                                             {draft.situation === "return" && (
-                                              <input className="return-reason" required value={draft.reason} placeholder="Motivo obrigatório" onChange={(event) => setRomaneioReturnReason(group.key, document.key, event.target.value)} />
+                                              <input
+                                                className="return-reason"
+                                                required
+                                                defaultValue={draft.reason}
+                                                placeholder="Motivo obrigatório"
+                                                ref={(input) => {
+                                                  romaneioReturnReasonRefs.current[
+                                                    `${group.key}|${document.key}`
+                                                  ] = input;
+                                                }}
+                                              />
                                             )}
                                             {draft.situation && (
                                               <button type="button" className="undo-romaneio-scan" onClick={() => undoRomaneioDraft(group.key, document.key)}>
@@ -6826,35 +6837,26 @@ export default function Home() {
                                 <label>
                                   Nota fiscal
                                   <input
-                                    value={manualRomaneioFreightDrafts[group.key]?.invoice || ""}
                                     placeholder="NF"
-                                    onChange={(event) =>
-                                      setManualRomaneioFreightDrafts((current) => ({
-                                        ...current,
-                                        [group.key]: {
-                                          invoice: event.target.value,
-                                          grossFreight:
-                                            current[group.key]?.grossFreight || "",
-                                        },
-                                      }))
-                                    }
+                                    ref={(input) => {
+                                      manualRomaneioFreightInputRefs.current[group.key] = {
+                                        ...(manualRomaneioFreightInputRefs.current[group.key] || {}),
+                                        invoice: input,
+                                      };
+                                    }}
                                   />
                                 </label>
                                 <label>
                                   Frete bruto
                                   <input
                                     inputMode="decimal"
-                                    value={manualRomaneioFreightDrafts[group.key]?.grossFreight || ""}
                                     placeholder="R$ 0,00"
-                                    onChange={(event) =>
-                                      setManualRomaneioFreightDrafts((current) => ({
-                                        ...current,
-                                        [group.key]: {
-                                          invoice: current[group.key]?.invoice || "",
-                                          grossFreight: event.target.value,
-                                        },
-                                      }))
-                                    }
+                                    ref={(input) => {
+                                      manualRomaneioFreightInputRefs.current[group.key] = {
+                                        ...(manualRomaneioFreightInputRefs.current[group.key] || {}),
+                                        grossFreight: input,
+                                      };
+                                    }}
                                   />
                                 </label>
                                 <button type="button" onClick={() => addManualRomaneioFreight(group.key)}>
@@ -8518,15 +8520,9 @@ export default function Home() {
                     type="number"
                     min="0"
                     step="1"
-                    value={romaneioPickupConfirmation.quantity}
+                    defaultValue={romaneioPickupConfirmation.quantity}
                     placeholder="0"
-                    onChange={(event) =>
-                      setRomaneioPickupConfirmation((current) =>
-                        current
-                          ? { ...current, quantity: event.target.value }
-                          : current,
-                      )
-                    }
+                    ref={romaneioPickupQuantityRef}
                   />
                 </label>
               </div>
@@ -8559,7 +8555,13 @@ export default function Home() {
                     if (!confirmation) return;
                     const quantity = Math.max(
                       0,
-                      Math.floor(Number(confirmation.quantity || 0)),
+                      Math.floor(
+                        Number(
+                          romaneioPickupQuantityRef.current?.value ||
+                            confirmation.quantity ||
+                            0,
+                        ),
+                      ),
                     );
                     const safeQuantity = Number.isFinite(quantity) ? quantity : 0;
                     setRomaneioPickupQuantities((current) => ({
