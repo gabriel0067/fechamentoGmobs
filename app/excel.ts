@@ -1,6 +1,70 @@
 import XLSX from "xlsx-js-style";
 import { jsPDF } from "jspdf";
 
+export type BillingPdfRow = { partner: string; value: number; createdBy: string };
+export type FinancialPdfRow = { account: string; value: number; paidAt: string };
+
+const compactMoney = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const compactDate = (value: string) => {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+};
+function exportCompactTablePdf(title: string, period: string, headers: string[], rows: string[][], total: number, filename: string) {
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const margin = 8;
+  const pageWidth = 210 - margin * 2;
+  const rowHeight = 5.5;
+  const columnWidth = pageWidth / headers.length;
+  let y = 10;
+  const drawHeader = () => {
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(12);
+    pdf.text(title, margin, y);
+    pdf.setFontSize(8);
+    pdf.text(period, 210 - margin, y, { align: "right" });
+    y += 5;
+    pdf.setFillColor(20, 108, 67);
+    pdf.rect(margin, y, pageWidth, rowHeight, "F");
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(7);
+    headers.forEach((header, index) => pdf.text(header, margin + index * columnWidth + 1.5, y + 3.7));
+    pdf.setTextColor(20, 30, 25);
+    y += rowHeight;
+  };
+  drawHeader();
+  rows.forEach((row, rowIndex) => {
+    if (y + rowHeight > 287) {
+      pdf.addPage();
+      y = 10;
+      drawHeader();
+    }
+    if (rowIndex % 2 === 0) {
+      pdf.setFillColor(242, 246, 244);
+      pdf.rect(margin, y, pageWidth, rowHeight, "F");
+    }
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7);
+    row.forEach((cell, index) => pdf.text(String(cell).slice(0, 52), margin + index * columnWidth + 1.5, y + 3.7));
+    y += rowHeight;
+  });
+  y += 2;
+  pdf.setDrawColor(20, 108, 67);
+  pdf.line(margin, y, 210 - margin, y);
+  y += 5;
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(10);
+  pdf.text(`TOTAL: ${compactMoney(total)}`, 210 - margin, y, { align: "right" });
+  pdf.save(filename);
+}
+
+export function exportBillingPdf(period: string, rows: BillingPdfRow[]) {
+  exportCompactTablePdf("Faturamento por parceiro", period, ["PARCEIRO", "VALOR", "LANÇADO POR"], rows.map((row) => [row.partner, compactMoney(row.value), row.createdBy]), rows.reduce((sum, row) => sum + row.value, 0), `Faturamento - ${period}.pdf`);
+}
+
+export function exportFinancialPdf(month: string, rows: FinancialPdfRow[]) {
+  exportCompactTablePdf("Financeiro mensal", month, ["CONTA", "VALOR", "DATA DO PAGAMENTO"], rows.map((row) => [row.account, compactMoney(row.value), compactDate(row.paidAt)]), rows.reduce((sum, row) => sum + row.value, 0), `Financeiro - ${month}.pdf`);
+}
+
 export type ImportedRow = {
   partner: string;
   partnerCnpj: string;
@@ -2070,6 +2134,11 @@ export function exportCoverPdf(cover: CoverExport) {
       (page + 1) * documentsPerPage,
     );
     pdf.setDrawColor(25, 25, 25);
+    pdf.setTextColor(228, 228, 228);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(Math.min(42, Math.max(24, 330 / Math.max(6, cover.partnerName.length))));
+    pdf.text(cover.partnerName.toUpperCase(), 105, 162, { align: "center", angle: 35, maxWidth: 150 });
+    pdf.setTextColor(0, 0, 0);
     pdf.setLineWidth(0.35);
     pdf.rect(margin, 14, width, 34);
     pdf.line(margin + 40, 14, margin + 40, 48);

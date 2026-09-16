@@ -22,6 +22,8 @@ import {
   exportCoverDetailedPdf,
   exportCoverPdf,
   exportCoversReportXlsx,
+  exportBillingPdf,
+  exportFinancialPdf,
   exportDriverClosingPdf,
   exportMaexAdditionalXlsx,
   exportPajussaraMissingXlsx,
@@ -53,7 +55,7 @@ import {
   writeClosingStorage,
 } from "./storage";
 
-type Tab = "import" | "romaneios" | "covers" | "preview" | "export";
+type Tab = "import" | "romaneios" | "covers" | "preview" | "export" | "adjustments" | "billing" | "collections" | "dedicated";
 type CloudStatus = "local" | "loading" | "ready" | "saving" | "error";
 type AuthStatus = "checking" | "signedIn" | "signedOut";
 const cloudStatusText: Record<CloudStatus, string> = {
@@ -347,6 +349,11 @@ const partnerAliases: Array<[string, string, string[]]> = [
   ],
   ["ttjb", "TTJB", ["ttjb"]],
 ];
+const billingPartners: Array<[string, string]> = [
+  ...partnerAliases.map(([id, name]) => [id, name] as [string, string]),
+  ["maex-moveis", "Maex Móveis"],
+  ["barueri", "Barueri"],
+];
 const canonicalPartnerName = (partnerId: string, fallback: string) =>
   partnerAliases.find(([id]) => id === partnerId)?.[1] || fallback;
 const pajussaraSenderMatches = (left: string, right: string) => {
@@ -438,6 +445,84 @@ type ManualCoverDocumentDraft = {
   volumes: string;
   weight: string;
   value: string;
+};
+type ClosingAdditional = {
+  id: string;
+  sourceEntryId: string;
+  partnerId: string;
+  partnerName: string;
+  invoice: string;
+  cte: string;
+  recipient: string;
+  recipientKey: string;
+  kind: "dedicated" | "tde" | "tda" | "cf";
+  value: number;
+  calculation: "direct" | "before-discounts";
+  persistent: boolean;
+  createdAt: string;
+  createdBy: string;
+};
+type BillingInvoice = {
+  id: string;
+  partnerId: string;
+  partnerName: string;
+  value: number;
+  period: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt?: string;
+  updatedBy?: string;
+};
+type FinancialEntry = {
+  id: string;
+  accountName: string;
+  value: number;
+  paidAt: string;
+  month: string;
+  createdAt: string;
+  createdBy: string;
+};
+type PickupRecord = {
+  id: string;
+  number: string;
+  invoice?: string;
+  partnerId: string;
+  partnerName: string;
+  clientName: string;
+  volumes: number;
+  driver: string;
+  completedAt: string;
+  status: "open" | "completed";
+  createdAt: string;
+  createdBy: string;
+  completedBy?: string;
+};
+type DedicatedRecord = {
+  id: string;
+  trackingDate: string;
+  invoice: string;
+  cte: string;
+  cteKey: string;
+  sender: string;
+  recipient: string;
+  partnerId: string;
+  partnerName: string;
+  value?: number;
+  driver: string;
+  observation: string;
+  paid: boolean;
+  paidAt: string;
+  createdAt: string;
+  createdBy: string;
+};
+type DedicatedDraft = Omit<DedicatedRecord, "id" | "createdAt" | "createdBy" | "paid" | "paidAt" | "observation">;
+const BILLING_ACCESS_CODE = "MVF2026";
+const billingPeriodLabel = (period: string) => {
+  const match = period.match(/^(\d{4})-(\d{2})-([12])$/);
+  if (!match) return period;
+  const [, year, month, half] = match;
+  const monthName = new Date(Number(year), Number(month) - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
+  return `${half}ª quinzena de ${monthName} de ${year}`;
 };
 const emptyManualCoverDocument: ManualCoverDocumentDraft = {
   invoice: "",
@@ -554,6 +639,15 @@ const entryMatchesGlobalDocumentScan = (
   );
 };
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+const entryStableIdentity = (entry: Pick<Entry, "partnerId" | "cteKey" | "cte" | "mde" | "invoice" | "sender" | "recipient">) => {
+  const cteKey = scanKey(entry.cteKey);
+  if (cteKey) return `CHAVE:${cteKey}`;
+  const cte = numericDocumentId(entry.cte);
+  if (cte) return `CTE:${entry.partnerId}:${cte}`;
+  const mde = numericDocumentId(entry.mde);
+  if (mde) return `MDE:${mde}`;
+  return `NF:${entry.partnerId}:${normalizeInvoiceKey(entry.invoice)}:${normalized(entry.sender)}:${normalized(entry.recipient)}`;
+};
 const newId = () =>
   globalThis.crypto?.randomUUID?.() ||
   `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -577,6 +671,19 @@ const romaneioSituationLabel: Record<RomaneioSituation, string> = {
 const romaneioOperationalStatus = (
   situation: RomaneioSituation,
 ): "ET" | "OC" => (situation === "delivered" ? "ET" : "OC");
+const romaneioStatusForDocument = (
+  statuses: Record<string, RomaneioDocumentStatusRecord>,
+  group: RomaneioDailyGroup,
+  document: RomaneioDailyDocument,
+) =>
+  Object.values(statuses)
+    .filter(
+      (record) =>
+        record.day === group.day &&
+        record.romaneios.some((number) => group.romaneios.includes(number)) &&
+        record.identifiers.some((identifier) => document.identifiers.includes(identifier)),
+    )
+    .sort((a, b) => b.savedAt.localeCompare(a.savedAt))[0];
 const playRomaneioSuccessSound = () => {
   try {
     const context = new AudioContext();
@@ -979,6 +1086,55 @@ export default function Home() {
     string[]
   >([]);
   const [tdeRates, setTdeRates] = useState<TdeRateRecord[]>([]);
+  const [closingAdditionals, setClosingAdditionals] = useState<ClosingAdditional[]>([]);
+  const [closingAdditionalSearch, setClosingAdditionalSearch] = useState("");
+  const [closingAdditionalKind, setClosingAdditionalKind] = useState<ClosingAdditional["kind"]>("dedicated");
+  const [closingAdditionalValue, setClosingAdditionalValue] = useState("");
+  const [closingAdditionalCalculation, setClosingAdditionalCalculation] = useState<ClosingAdditional["calculation"]>("direct");
+  const [closingAdditionalPersistent, setClosingAdditionalPersistent] = useState(false);
+  const [billingInvoices, setBillingInvoices] = useState<BillingInvoice[]>([]);
+  const [billingUnlocked, setBillingUnlocked] = useState(false);
+  const [billingCode, setBillingCode] = useState("");
+  const [billingCodeError, setBillingCodeError] = useState("");
+  const [billingPartnerId, setBillingPartnerId] = useState("");
+  const [billingValue, setBillingValue] = useState("");
+  const [billingMonth, setBillingMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [billingHalf, setBillingHalf] = useState<"1" | "2">(new Date().getDate() <= 15 ? "1" : "2");
+  const [billingFilter, setBillingFilter] = useState("all");
+  const [editingBillingId, setEditingBillingId] = useState("");
+  const [deletingBillingId, setDeletingBillingId] = useState("");
+  const [billingSection, setBillingSection] = useState<"billing" | "financial">("billing");
+  const [financialEntries, setFinancialEntries] = useState<FinancialEntry[]>([]);
+  const [financialAccountNames, setFinancialAccountNames] = useState<string[]>([]);
+  const [financialAccountName, setFinancialAccountName] = useState("");
+  const [financialValue, setFinancialValue] = useState("");
+  const [financialPaidAt, setFinancialPaidAt] = useState(() => new Date().toISOString().slice(0, 10));
+  const [financialMonth, setFinancialMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [editingFinancialId, setEditingFinancialId] = useState("");
+  const [deletingFinancialId, setDeletingFinancialId] = useState("");
+  const [pickupRecords, setPickupRecords] = useState<PickupRecord[]>([]);
+  const [pickupSection, setPickupSection] = useState<"panel" | "report">("panel");
+  const [pickupNumber, setPickupNumber] = useState("");
+  const [pickupInvoice, setPickupInvoice] = useState("");
+  const [pickupPartnerId, setPickupPartnerId] = useState("");
+  const [pickupClientName, setPickupClientName] = useState("");
+  const [pickupVolumes, setPickupVolumes] = useState("");
+  const [pickupPartnerFilter, setPickupPartnerFilter] = useState("all");
+  const [pickupReportPartnerFilter, setPickupReportPartnerFilter] = useState("all");
+  const [pickupReportDriverFilter, setPickupReportDriverFilter] = useState("");
+  const [pickupReportFrom, setPickupReportFrom] = useState("");
+  const [pickupReportTo, setPickupReportTo] = useState("");
+  const [pickupCompletionDrafts, setPickupCompletionDrafts] = useState<Record<string, { driver: string; date: string }>>({});
+  const [expandedPickupIds, setExpandedPickupIds] = useState<string[]>([]);
+  const [dedicatedRecords, setDedicatedRecords] = useState<DedicatedRecord[]>([]);
+  const [dedicatedSection, setDedicatedSection] = useState<"panel" | "report">("panel");
+  const [dedicatedSearch, setDedicatedSearch] = useState("");
+  const [dedicatedValue, setDedicatedValue] = useState("");
+  const [dedicatedConfirmation, setDedicatedConfirmation] = useState<DedicatedDraft | null>(null);
+  const [dedicatedReportSearch, setDedicatedReportSearch] = useState("");
+  const [dedicatedPanelPartnerFilter, setDedicatedPanelPartnerFilter] = useState("all");
+  const [dedicatedReportPartnerFilter, setDedicatedReportPartnerFilter] = useState("all");
+  const [expandedDedicatedIds, setExpandedDedicatedIds] = useState<string[]>([]);
   const [romaneioEntries, setRomaneioEntries] = useState<RomaneioEntry[]>([]);
   const [romaneioImportInfo, setRomaneioImportInfo] =
     useState<RomaneioImportInfo | null>(null);
@@ -1010,6 +1166,9 @@ export default function Home() {
   const [romaneioView, setRomaneioView] = useState<"operation" | "retained">(
     "operation",
   );
+  const [retainedDriverFilter, setRetainedDriverFilter] = useState("");
+  const [retainedPartnerFilter, setRetainedPartnerFilter] = useState("");
+  const [retainedSection, setRetainedSection] = useState<"documents" | "ranking">("documents");
   const [romaneioSection, setRomaneioSection] = useState<
     "checking" | "closing" | "full"
   >("checking");
@@ -1151,6 +1310,12 @@ export default function Home() {
               referenceEntries?: RomaneioReferenceEntry[];
               covers?: CoverExport[];
               coverGenerators?: string[];
+              closingAdditionals?: ClosingAdditional[];
+              billingInvoices?: BillingInvoice[];
+              pickupRecords?: PickupRecord[];
+              dedicatedRecords?: DedicatedRecord[];
+              financialEntries?: FinancialEntry[];
+              financialAccountNames?: string[];
             }
           | null = null;
         let savedBilledDocuments: Record<string, BilledDocumentRecord> | null =
@@ -1163,6 +1328,12 @@ export default function Home() {
                 referenceEntries?: RomaneioReferenceEntry[];
                 covers?: CoverExport[];
                 coverGenerators?: string[];
+                closingAdditionals?: ClosingAdditional[];
+                billingInvoices?: BillingInvoice[];
+                pickupRecords?: PickupRecord[];
+                dedicatedRecords?: DedicatedRecord[];
+                financialEntries?: FinancialEntry[];
+                financialAccountNames?: string[];
               }
           >();
           if (Array.isArray(indexedClosing)) {
@@ -1262,6 +1433,16 @@ export default function Home() {
           if (Array.isArray(savedClosing.covers)) setCovers(savedClosing.covers);
           if (Array.isArray(savedClosing.coverGenerators))
             setCoverGenerators(savedClosing.coverGenerators);
+          if (Array.isArray(savedClosing.closingAdditionals))
+            setClosingAdditionals(savedClosing.closingAdditionals);
+          if (Array.isArray(savedClosing.billingInvoices))
+            setBillingInvoices(savedClosing.billingInvoices);
+          if (Array.isArray(savedClosing.pickupRecords))
+            setPickupRecords(savedClosing.pickupRecords);
+          if (Array.isArray(savedClosing.dedicatedRecords))
+            setDedicatedRecords(savedClosing.dedicatedRecords);
+          if (Array.isArray(savedClosing.financialEntries)) setFinancialEntries(savedClosing.financialEntries);
+          if (Array.isArray(savedClosing.financialAccountNames)) setFinancialAccountNames(savedClosing.financialAccountNames);
         }
         if (savedGeneralImportInfo) {
           const parsedGeneralImportInfo = JSON.parse(savedGeneralImportInfo);
@@ -1371,6 +1552,12 @@ export default function Home() {
               importInfo: ImportInfo | null;
               covers?: CoverExport[];
               coverGenerators?: string[];
+              closingAdditionals?: ClosingAdditional[];
+              billingInvoices?: BillingInvoice[];
+              pickupRecords?: PickupRecord[];
+              dedicatedRecords?: DedicatedRecord[];
+              financialEntries?: FinancialEntry[];
+              financialAccountNames?: string[];
             }>("closing"),
             loadCloudStateRecord<Record<string, Record<string, ScanRecord>>>(
               "scans",
@@ -1411,6 +1598,12 @@ export default function Home() {
               ? closing.coverGenerators
               : [...new Set((closing.covers || []).map((cover) => cover.generatedBy).filter(Boolean) as string[])],
           );
+          setClosingAdditionals(Array.isArray(closing.closingAdditionals) ? closing.closingAdditionals : []);
+          setBillingInvoices(Array.isArray(closing.billingInvoices) ? closing.billingInvoices : []);
+          setPickupRecords(Array.isArray(closing.pickupRecords) ? closing.pickupRecords : []);
+          setDedicatedRecords(Array.isArray(closing.dedicatedRecords) ? closing.dedicatedRecords : []);
+          setFinancialEntries(Array.isArray(closing.financialEntries) ? closing.financialEntries : []);
+          setFinancialAccountNames(Array.isArray(closing.financialAccountNames) ? closing.financialAccountNames : []);
           cloudVersionsRef.current.closing = closingRecord?.version || "";
         } else {
           cloudVersionsRef.current.closing = await saveCloudState("closing", {
@@ -1419,6 +1612,12 @@ export default function Home() {
             importInfo: null,
             covers: [],
             coverGenerators: [],
+            closingAdditionals: [],
+            billingInvoices: [],
+            pickupRecords: [],
+            dedicatedRecords: [],
+            financialEntries: [],
+            financialAccountNames: [],
           });
         }
         const scans = scansRecord?.value;
@@ -1510,7 +1709,7 @@ export default function Home() {
   useEffect(() => {
     if (!hydrated || isHostedSite()) return;
     let cancelled = false;
-    void writeClosingStorage({ entries, referenceEntries: romaneioReferenceEntries, covers })
+    void writeClosingStorage({ entries, referenceEntries: romaneioReferenceEntries, covers, closingAdditionals, billingInvoices, pickupRecords, dedicatedRecords, financialEntries, financialAccountNames })
       .then(() => {
         try {
           localStorage.removeItem(CLOSING_STORAGE_KEY);
@@ -1523,6 +1722,12 @@ export default function Home() {
           !writeLocalStorage(CLOSING_STORAGE_KEY, {
             entries,
             referenceEntries: romaneioReferenceEntries,
+            closingAdditionals,
+            billingInvoices,
+            pickupRecords,
+            dedicatedRecords,
+            financialEntries,
+            financialAccountNames,
           }) &&
           !cancelled
         )
@@ -1533,7 +1738,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [covers, entries, hydrated, romaneioReferenceEntries]);
+  }, [billingInvoices, closingAdditionals, covers, dedicatedRecords, entries, financialAccountNames, financialEntries, hydrated, pickupRecords, romaneioReferenceEntries]);
   useEffect(() => {
     if (!hydrated || isHostedSite() || !importInfo) return;
     if (writeLocalStorage(GENERAL_IMPORT_INFO_STORAGE_KEY, importInfo)) return;
@@ -1655,8 +1860,8 @@ export default function Home() {
     romaneioRouteLabels,
   ]);
   const closingCloudState = useMemo(
-    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo, covers, coverGenerators }),
-    [coverGenerators, covers, entries, importInfo, romaneioReferenceEntries],
+    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo, covers, coverGenerators, closingAdditionals, billingInvoices, pickupRecords, dedicatedRecords, financialEntries, financialAccountNames }),
+    [billingInvoices, closingAdditionals, coverGenerators, covers, dedicatedRecords, entries, financialAccountNames, financialEntries, importInfo, pickupRecords, romaneioReferenceEntries],
   );
   const tdeCloudState = useMemo(
     () => ({ rates: tdeRates, importInfo: tdeImportInfo }),
@@ -1796,6 +2001,12 @@ export default function Home() {
             importInfo: ImportInfo | null;
             covers?: CoverExport[];
             coverGenerators?: string[];
+            closingAdditionals?: ClosingAdditional[];
+            billingInvoices?: BillingInvoice[];
+            pickupRecords?: PickupRecord[];
+            dedicatedRecords?: DedicatedRecord[];
+            financialEntries?: FinancialEntry[];
+            financialAccountNames?: string[];
           }>(key);
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
@@ -1817,6 +2028,12 @@ export default function Home() {
               ? record.value.coverGenerators
               : [...new Set((record.value.covers || []).map((cover) => cover.generatedBy).filter(Boolean) as string[])],
           );
+          setClosingAdditionals(Array.isArray(record.value.closingAdditionals) ? record.value.closingAdditionals : []);
+          setBillingInvoices(Array.isArray(record.value.billingInvoices) ? record.value.billingInvoices : []);
+          setPickupRecords(Array.isArray(record.value.pickupRecords) ? record.value.pickupRecords : []);
+          setDedicatedRecords(Array.isArray(record.value.dedicatedRecords) ? record.value.dedicatedRecords : []);
+          setFinancialEntries(Array.isArray(record.value.financialEntries) ? record.value.financialEntries : []);
+          setFinancialAccountNames(Array.isArray(record.value.financialAccountNames) ? record.value.financialAccountNames : []);
         } else if (key === "scans") {
           const record = await loadCloudStateRecord<
             Record<string, Record<string, ScanRecord>>
@@ -1901,9 +2118,36 @@ export default function Home() {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [authStatus, cloudHosted, cloudReady, refreshCloudData]);
-  const entriesWithTde = useMemo(
-    () => applyTdeRates(entries, tdeRates),
-    [entries, tdeRates],
+  const entriesWithTde = useMemo(() => {
+    const baseEntries = applyTdeRates(entries, tdeRates);
+    const additionalEntries = closingAdditionals.flatMap((additional) => {
+      const targets = additional.persistent
+        ? baseEntries.filter(
+            (entry) =>
+              entry.partnerId === additional.partnerId &&
+              normalized(entry.recipient) === additional.recipientKey,
+          )
+        : baseEntries.filter((entry) => entry.id === additional.sourceEntryId);
+      return targets.map((entry): Entry => ({
+        ...entry,
+        id: `additional-${additional.id}-${entry.id}`,
+        status: additional.kind === "cf" ? "CF" : `AD-${additional.kind.toUpperCase()}`,
+        observation: `${additional.kind.toUpperCase()} lançado manualmente por ${additional.createdBy} · ${additional.calculation === "direct" ? "direto no fechamento" : "antes dos descontos"}`,
+        freight: 0,
+        reportedTotal: additional.kind === "tde" ? 0 : additional.value,
+        tde: additional.kind === "tde" ? additional.value : 0,
+        tda: additional.kind === "tda" ? additional.value : 0,
+        trt: 0,
+        dedicated: additional.kind === "dedicated" ? additional.value : 0,
+        adjustment: 0,
+        isRedelivery: false,
+      }));
+    });
+    return [...baseEntries, ...additionalEntries];
+  }, [closingAdditionals, entries, tdeRates]);
+  const closingAdditionalMatch = useMemo(
+    () => entries.find((entry) => entryMatchesGlobalDocumentScan(entry, closingAdditionalSearch)),
+    [closingAdditionalSearch, entries],
   );
   const latestGeneralEmissionDate = useMemo(
     () =>
@@ -2073,6 +2317,12 @@ export default function Home() {
         const totals = Object.values(group.importedTotalsByRomaneio);
         return {
           ...group,
+          documents: [...group.documents].sort((a, b) =>
+            (a.recipient || a.sender || a.referenceNumber).localeCompare(
+              b.recipient || b.sender || b.referenceNumber,
+              "pt-BR",
+            ),
+          ),
           freight: roundMoney(
             totals.reduce((sum, total) => sum + total.freight, 0),
           ),
@@ -2139,7 +2389,7 @@ export default function Home() {
             document.city,
             document.invoice,
             romaneioSituationLabel[
-              romaneioDocumentStatuses[document.key]?.situation || "delivered"
+              romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation || "delivered"
             ],
           ]),
         ].join(" "),
@@ -2168,6 +2418,36 @@ export default function Home() {
         ),
     [romaneioDocumentStatuses],
   );
+  const visibleRetainedRomaneioDocuments = useMemo(() => {
+    const driver = normalized(retainedDriverFilter);
+    const partner = normalized(retainedPartnerFilter);
+    return retainedRomaneioDocuments.filter((record) => {
+      const currentDocument = romaneioDailyGroups
+        .flatMap((group) => group.documents)
+        .find((document) =>
+          document.identifiers.some((identifier) => record.identifiers.includes(identifier)),
+        );
+      const partnerNames = currentDocument?.linkedEntries.map((entry) => entry.partnerName).join(" ") || "";
+      return (!driver || normalized(record.driver).includes(driver)) &&
+        (!partner || normalized(partnerNames).includes(partner));
+    });
+  }, [retainedDriverFilter, retainedPartnerFilter, retainedRomaneioDocuments, romaneioDailyGroups]);
+  const retainedDriverRanking = useMemo(() => {
+    const drivers = new Map<string, { driver: string; ctes: Set<string> }>();
+    retainedRomaneioDocuments.forEach((record) => {
+      const driver = record.driver?.trim() || "Motorista não informado";
+      const driverKey = normalized(driver) || "motorista-nao-informado";
+      const current = drivers.get(driverKey) || { driver, ctes: new Set<string>() };
+      const cte = scanKey(record.cte) ||
+        (record.referenceType === "CT-e" ? scanKey(record.referenceNumber) : "") ||
+        record.key;
+      current.ctes.add(cte);
+      drivers.set(driverKey, current);
+    });
+    return Array.from(drivers.values())
+      .map((item) => ({ driver: item.driver, count: item.ctes.size }))
+      .sort((a, b) => b.count - a.count || a.driver.localeCompare(b.driver, "pt-BR"));
+  }, [retainedRomaneioDocuments]);
   const missingDocumentsByDriver = useMemo(() => {
     const records = new Map<string, RomaneioDocumentStatusRecord[]>();
     Object.values(romaneioDocumentStatuses)
@@ -2185,7 +2465,7 @@ export default function Home() {
         0,
       );
       const payableDocuments = group.documents.filter((document) => {
-        const situation = romaneioDocumentStatuses[document.key]?.situation;
+        const situation = romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation;
         return situation === "delivered" || situation === "retained";
       });
       const documentProduction = payableDocuments.reduce(
@@ -2211,7 +2491,7 @@ export default function Home() {
     (group: RomaneioDailyGroup) => {
       const deliveredDocuments = group.documents.filter(
         (document) =>
-          romaneioDocumentStatuses[document.key]?.situation === "delivered",
+          romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation === "delivered",
       );
       const manualProduction = (manualRomaneioFreights[group.key] || []).reduce(
         (sum, item) => sum + manualFreightProduction(item.grossFreight),
@@ -2292,7 +2572,7 @@ export default function Home() {
       .filter((group) => withinPeriod(group.day))
       .forEach((group) => {
         const countedDocuments = group.documents.filter((document) => {
-          const situation = romaneioDocumentStatuses[document.key]?.situation;
+          const situation = romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation;
           return situation === "delivered" || situation === "return";
         });
         const manualCount = manualRomaneioFreights[group.key]?.length || 0;
@@ -2595,17 +2875,11 @@ export default function Home() {
   }, [pajussaraClosing, partners]);
   const active = partners.find((p) => p.id === selectedPartner) || partners[0];
   const coverPartners = useMemo(() => {
-    const map = new Map<string, string>(
-      partnerAliases
-        .filter(([id]) => id !== "unidentified")
-        .map(([id, name]) => [id, name]),
-    );
-    entriesWithTde.forEach((entry) => {
-      if (entry.partnerId !== "unidentified")
-        map.set(entry.partnerId, canonicalPartnerName(entry.partnerId, entry.partnerName));
-    });
-    return [...map].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-  }, [entriesWithTde]);
+    return partnerAliases
+      .filter(([id]) => id !== "unidentified")
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, []);
   const effectiveCoverPartnerId = coverPartnerId || coverPartners[0]?.id || "";
   const effectiveCoverGenerator = activeOperator;
   const coverDraftKey = `${coverSection}|${effectiveCoverPartnerId}`;
@@ -3049,13 +3323,20 @@ export default function Home() {
   }
 
   function undoRomaneioDocumentStatus(documentKey: string) {
+    const savedRecord = romaneioDocumentStatuses[documentKey];
     setRomaneioDocumentStatuses((current) => {
       const next = { ...current };
       delete next[documentKey];
       return next;
     });
     setEntries((current) =>
-      current.filter((entry) => entry.romaneioDocumentKey !== documentKey),
+      current.filter((entry) => {
+        if (entry.romaneioDocumentKey === documentKey) return false;
+        if (!savedRecord || !entry.romaneioDocumentKey) return true;
+        return !entryOperationalIdentifiers(entry).some((identifier) =>
+          savedRecord.identifiers.includes(identifier),
+        );
+      }),
     );
     setMessageIsError(false);
     setMessage("Situação desfeita. O documento voltou para conferência.");
@@ -3083,7 +3364,7 @@ export default function Home() {
   function requestMarkAllRomaneioDelivered(group: RomaneioDailyGroup) {
     const drafts = romaneioDocumentDrafts[group.key] || {};
     const pendingCount = group.documents.filter((document) => {
-      if (romaneioDocumentStatuses[document.key]) return false;
+      if (romaneioStatusForDocument(romaneioDocumentStatuses, group, document)) return false;
       const draft = drafts[document.key];
       return !draft?.situation;
     }).length;
@@ -3104,7 +3385,7 @@ export default function Home() {
       const currentDrafts = current[group.key] || {};
       const nextDrafts = { ...currentDrafts };
       group.documents.forEach((document) => {
-        if (romaneioDocumentStatuses[document.key]) return;
+        if (romaneioStatusForDocument(romaneioDocumentStatuses, group, document)) return;
         if (nextDrafts[document.key]?.situation) return;
         nextDrafts[document.key] = { situation: "delivered", reason: "" };
       });
@@ -3222,7 +3503,14 @@ export default function Home() {
     const retained = retainedRomaneioDocuments.find((record) =>
       typedIdentifiers.some((item) => record.identifiers.includes(item)),
     );
-    if (retained) {
+    const pendingNewTrip = romaneioDailyGroups.some((group) =>
+      group.documents.some(
+        (document) =>
+          typedIdentifiers.some((item) => document.identifiers.includes(item)) &&
+          !romaneioStatusForDocument(romaneioDocumentStatuses, group, document),
+      ),
+    );
+    if (retained && !pendingNewTrip) {
       const retainedGroup = romaneioDailyGroups.find((group) =>
         group.documents.some((document) => document.key === retained.key),
       );
@@ -3295,7 +3583,7 @@ export default function Home() {
     }
     const pendingMatch = matches.find(
       ({ group, document }) =>
-        !romaneioDocumentStatuses[document.key] &&
+        !romaneioStatusForDocument(romaneioDocumentStatuses, group, document) &&
         !romaneioDocumentDrafts[group.key]?.[document.key]?.situation,
     );
     const match = pendingMatch || matches[0];
@@ -3358,7 +3646,7 @@ export default function Home() {
       return;
     }
     const pendingCount = group.documents.filter((document) => {
-      if (romaneioDocumentStatuses[document.key]) return false;
+      if (romaneioStatusForDocument(romaneioDocumentStatuses, group, document)) return false;
       const draft = drafts[document.key];
       if (!draft?.situation) return true;
       return draft.situation === "return" && !draft.reason.trim();
@@ -3416,8 +3704,9 @@ export default function Home() {
             (candidate) => candidate.key === documentKey,
           );
           if (!document || !draft.situation) return;
-          next[documentKey] = {
-            key: document.key,
+          const statusKey = `${group.key}|${document.key}`;
+          next[statusKey] = {
+            key: statusKey,
             document: document.document,
             referenceType: document.referenceType,
             referenceNumber: document.referenceNumber,
@@ -3915,6 +4204,7 @@ export default function Home() {
           importInfo?: ImportInfo | null;
           covers?: CoverExport[];
           coverGenerators?: string[];
+          closingAdditionals?: ClosingAdditional[];
         };
         scans?: Record<string, Record<string, ScanRecord>>;
         tde?: {
@@ -4168,9 +4458,22 @@ export default function Home() {
         };
       },
       );
-      const additions = referenceEntries.filter(
+      const importedCandidates = referenceEntries.filter(
         (entry) => entry.sourceEligible || Boolean(entry.romaneioDocumentKey),
       );
+      setClosingAdditionals(Array.isArray(backup.closing.closingAdditionals) ? backup.closing.closingAdditionals : []);
+      const existingKeys = new Set(
+        [...entries, ...romaneioReferenceEntries].map(entryStableIdentity),
+      );
+      const additions = importedCandidates.filter((entry) => {
+        const key = entryStableIdentity(entry);
+        if (existingKeys.has(key)) {
+          duplicates++;
+          return false;
+        }
+        existingKeys.add(key);
+        return true;
+      });
       const redeliveries = additions.filter(
         (entry) => entry.isRedelivery,
       ).length;
@@ -4180,11 +4483,11 @@ export default function Home() {
       const releasedByRomaneio = additions.filter(
         (entry) => entry.romaneioDocumentKey,
       ).length;
-      setEntries(additions);
-      setRomaneioReferenceEntries(
-        referenceEntries.filter((entry) => !entry.sourceEligible),
+      setEntries((current) => [...current, ...additions]);
+      const referenceAdditions = referenceEntries.filter(
+        (entry) => !entry.sourceEligible && !existingKeys.has(entryStableIdentity(entry)),
       );
-      setOptionalScanPartnerIds([]);
+      setRomaneioReferenceEntries((current) => [...current, ...referenceAdditions]);
       setImportInfo({
         file: file.name,
         imported: additions.length,
@@ -4200,7 +4503,7 @@ export default function Home() {
         referenceEntries.length - additions.length,
       );
       setMessage(
-        `${additions.length} documento(s) liberado(s) para o fechamento.${romaneioOnly ? ` ${romaneioOnly} documento(s) em outros status ficaram disponíveis somente para consulta e conferência nos Romaneios.` : ""}${duplicates ? ` ${duplicates} linha(s) completamente repetida(s) foram ignoradas.` : ""}`,
+        `${additions.length} documento(s) novo(s) acrescentado(s) ao sistema.${romaneioOnly ? ` ${romaneioOnly} documento(s) em outros status ficaram disponíveis somente para consulta e conferência nos Romaneios.` : ""}${duplicates ? ` ${duplicates} documento(s) que já existiam foram mantidos sem duplicar.` : ""}`,
       );
     } catch (error) {
       setMessage(
@@ -4601,6 +4904,396 @@ export default function Home() {
     setMessage(`${cover.id} aberta para edição. Adicione ou remova itens e salve novamente.`);
   }
 
+  function addClosingAdditional() {
+    if (!closingAdditionalMatch) {
+      setMessageIsError(true);
+      setMessage("Localize primeiro uma nota fiscal ou CTE existente no sistema.");
+      return;
+    }
+    const value = parseMoney(closingAdditionalValue);
+    if (!value || value <= 0) {
+      setMessageIsError(true);
+      setMessage("Informe um valor válido para o adicional.");
+      return;
+    }
+    const additional: ClosingAdditional = {
+      id: newId(),
+      sourceEntryId: closingAdditionalMatch.id,
+      partnerId: closingAdditionalMatch.partnerId,
+      partnerName: closingAdditionalMatch.partnerName,
+      invoice: closingAdditionalMatch.invoice,
+      cte: closingAdditionalMatch.cte,
+      recipient: closingAdditionalMatch.recipient,
+      recipientKey: normalized(closingAdditionalMatch.recipient),
+      kind: closingAdditionalKind,
+      value,
+      calculation: closingAdditionalCalculation,
+      persistent: closingAdditionalPersistent,
+      createdAt: new Date().toISOString(),
+      createdBy: activeOperator,
+    };
+    setClosingAdditionals((current) => [...current, additional]);
+    setClosingAdditionalValue("");
+    setMessageIsError(false);
+    setMessage(`${closingAdditionalKind.toUpperCase()} adicionado ao fechamento${closingAdditionalPersistent ? ` e salvo para ${closingAdditionalMatch.recipient}` : ""}.`);
+  }
+
+  function removeClosingAdditional(id: string) {
+    setClosingAdditionals((current) => current.filter((item) => item.id !== id));
+    setMessageIsError(false);
+    setMessage("Adicional removido do fechamento.");
+  }
+
+  const billingPeriods = useMemo(
+    () => [...new Set(billingInvoices.map((invoice) => invoice.period))].sort().reverse(),
+    [billingInvoices],
+  );
+  const visibleBillingInvoices = useMemo(
+    () => billingInvoices
+      .filter((invoice) => billingFilter === "all" || invoice.period === billingFilter)
+      .sort((a, b) => b.period.localeCompare(a.period) || a.partnerName.localeCompare(b.partnerName, "pt-BR")),
+    [billingFilter, billingInvoices],
+  );
+  const billingTotal = useMemo(
+    () => visibleBillingInvoices.reduce((total, invoice) => total + invoice.value, 0),
+    [visibleBillingInvoices],
+  );
+
+  function unlockBilling(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (billingCode.trim().toUpperCase() !== BILLING_ACCESS_CODE) {
+      setBillingCodeError("Código incorreto. Solicite o acesso ao responsável.");
+      return;
+    }
+    setBillingUnlocked(true);
+    setBillingCode("");
+    setBillingCodeError("");
+  }
+
+  function saveBillingInvoice(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = parseMoney(billingValue);
+    const partner = billingPartners.find(([id]) => id === billingPartnerId);
+    if (!partner || !value || value <= 0 || !billingMonth) {
+      setMessageIsError(true);
+      setMessage("Escolha a parceira, a quinzena e informe um valor válido.");
+      return;
+    }
+    const now = new Date().toISOString();
+    const period = `${billingMonth}-${billingHalf}`;
+    if (editingBillingId) {
+      setBillingInvoices((current) => current.map((invoice) => invoice.id === editingBillingId ? {
+        ...invoice,
+        partnerId: partner[0],
+        partnerName: partner[1],
+        value,
+        period,
+        updatedAt: now,
+        updatedBy: activeOperator,
+      } : invoice));
+      setMessage("Valor da fatura atualizado.");
+    } else {
+      setBillingInvoices((current) => [...current, {
+        id: newId(),
+        partnerId: partner[0],
+        partnerName: partner[1],
+        value,
+        period,
+        createdAt: now,
+        createdBy: activeOperator,
+      }]);
+      setMessage("Fatura lançada com sucesso.");
+    }
+    setMessageIsError(false);
+    setBillingPartnerId("");
+    setBillingValue("");
+    setEditingBillingId("");
+    setBillingFilter(period);
+  }
+
+  function editBillingInvoice(invoice: BillingInvoice) {
+    const match = invoice.period.match(/^(\d{4}-\d{2})-([12])$/);
+    setBillingPartnerId(invoice.partnerId);
+    setBillingValue(invoice.value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+    if (match) {
+      setBillingMonth(match[1]);
+      setBillingHalf(match[2] as "1" | "2");
+    }
+    setEditingBillingId(invoice.id);
+    setDeletingBillingId("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function deleteBillingInvoice(id: string) {
+    setBillingInvoices((current) => current.filter((invoice) => invoice.id !== id));
+    setDeletingBillingId("");
+    if (editingBillingId === id) setEditingBillingId("");
+    setMessageIsError(false);
+    setMessage("Valor da fatura excluído.");
+  }
+
+  const visibleFinancialEntries = useMemo(
+    () => financialEntries.filter((entry) => entry.month === financialMonth).sort((a, b) => a.accountName.localeCompare(b.accountName, "pt-BR")),
+    [financialEntries, financialMonth],
+  );
+  const financialTotal = useMemo(
+    () => visibleFinancialEntries.reduce((total, entry) => total + entry.value, 0),
+    [visibleFinancialEntries],
+  );
+
+  function saveFinancialEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = parseMoney(financialValue);
+    const accountName = financialAccountName.trim();
+    if (!accountName || !value || value <= 0 || !financialPaidAt || !financialMonth) {
+      setMessageIsError(true);
+      setMessage("Preencha o nome da conta, o valor e a data do pagamento.");
+      return;
+    }
+    const wasEditing = Boolean(editingFinancialId);
+    const entry: FinancialEntry = {
+      id: editingFinancialId || newId(),
+      accountName,
+      value,
+      paidAt: financialPaidAt,
+      month: financialMonth,
+      createdAt: new Date().toISOString(),
+      createdBy: activeOperator,
+    };
+    setFinancialEntries((current) => editingFinancialId ? current.map((item) => item.id === editingFinancialId ? entry : item) : [...current, entry]);
+    setFinancialAccountNames((current) => current.some((name) => normalized(name) === normalized(accountName)) ? current : [...current, accountName].sort((a, b) => a.localeCompare(b, "pt-BR")));
+    setFinancialAccountName("");
+    setFinancialValue("");
+    setEditingFinancialId("");
+    setMessageIsError(false);
+    setMessage(wasEditing ? "Conta atualizada." : "Conta lançada no financeiro.");
+  }
+
+  function editFinancialEntry(entry: FinancialEntry) {
+    setFinancialAccountName(entry.accountName);
+    setFinancialValue(entry.value.toLocaleString("pt-BR", { minimumFractionDigits: 2 }));
+    setFinancialPaidAt(entry.paidAt);
+    setFinancialMonth(entry.month);
+    setEditingFinancialId(entry.id);
+    setDeletingFinancialId("");
+  }
+
+  function deleteFinancialEntry(id: string) {
+    setFinancialEntries((current) => current.filter((entry) => entry.id !== id));
+    setDeletingFinancialId("");
+    if (editingFinancialId === id) setEditingFinancialId("");
+    setMessageIsError(false);
+    setMessage("Conta removida deste mês. O nome continuará disponível para os próximos lançamentos.");
+  }
+
+  function generateBillingPdf() {
+    if (billingFilter === "all" || !visibleBillingInvoices.length) return;
+    exportBillingPdf(billingPeriodLabel(billingFilter), visibleBillingInvoices.map((invoice) => ({ partner: invoice.partnerName, value: invoice.value, createdBy: invoice.createdBy || "Não informado" })));
+  }
+
+  function generateFinancialPdf() {
+    if (!visibleFinancialEntries.length) return;
+    const monthLabel = new Date(`${financialMonth}-01T12:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+    exportFinancialPdf(monthLabel, visibleFinancialEntries.map((entry) => ({ account: entry.accountName, value: entry.value, paidAt: entry.paidAt })));
+  }
+
+  const openPickupRecords = useMemo(
+    () => pickupRecords
+      .filter((record) => record.status === "open" && (pickupPartnerFilter === "all" || record.partnerId === pickupPartnerFilter))
+      .sort((a, b) => a.partnerName.localeCompare(b.partnerName, "pt-BR") || a.clientName.localeCompare(b.clientName, "pt-BR")),
+    [pickupPartnerFilter, pickupRecords],
+  );
+  const completedPickupRecords = useMemo(() => {
+    const driver = normalized(pickupReportDriverFilter);
+    return pickupRecords
+      .filter((record) => record.status === "completed")
+      .filter((record) => pickupReportPartnerFilter === "all" || record.partnerId === pickupReportPartnerFilter)
+      .filter((record) => !driver || normalized(record.driver).includes(driver))
+      .filter((record) => !pickupReportFrom || record.completedAt >= pickupReportFrom)
+      .filter((record) => !pickupReportTo || record.completedAt <= pickupReportTo)
+      .sort((a, b) => b.completedAt.localeCompare(a.completedAt) || a.partnerName.localeCompare(b.partnerName, "pt-BR"));
+  }, [pickupRecords, pickupReportDriverFilter, pickupReportFrom, pickupReportPartnerFilter, pickupReportTo]);
+
+  function addPickup(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const partner = partnerAliases.find(([id]) => id === pickupPartnerId);
+    const volumes = Number(pickupVolumes.replace(/\D/g, ""));
+    if (!pickupNumber.trim() || !partner || !pickupClientName.trim() || !Number.isFinite(volumes) || volumes <= 0) {
+      setMessageIsError(true);
+      setMessage("Preencha o número da coleta, a parceira, o cliente e a quantidade de volumes.");
+      return;
+    }
+    setPickupRecords((current) => [...current, {
+      id: newId(),
+      number: pickupNumber.trim(),
+      invoice: pickupInvoice.trim(),
+      partnerId: partner[0],
+      partnerName: partner[1],
+      clientName: pickupClientName.trim(),
+      volumes,
+      driver: "",
+      completedAt: "",
+      status: "open",
+      createdAt: new Date().toISOString(),
+      createdBy: activeOperator,
+    }]);
+    setPickupNumber("");
+    setPickupInvoice("");
+    setPickupPartnerId("");
+    setPickupClientName("");
+    setPickupVolumes("");
+    setMessageIsError(false);
+    setMessage("Coleta lançada no painel.");
+  }
+
+  function completePickup(record: PickupRecord) {
+    const draft = pickupCompletionDrafts[record.id] || { driver: "", date: "" };
+    if (!draft.driver.trim() || !draft.date) {
+      setMessageIsError(true);
+      setMessage("Informe o motorista e a data realizada antes de dar baixa.");
+      return;
+    }
+    setPickupRecords((current) => current.map((item) => item.id === record.id ? {
+      ...item,
+      driver: draft.driver.trim(),
+      completedAt: draft.date,
+      completedBy: activeOperator,
+      status: "completed",
+    } : item));
+    setPickupCompletionDrafts((current) => {
+      const next = { ...current };
+      delete next[record.id];
+      return next;
+    });
+    setMessageIsError(false);
+    setMessage(`Coleta ${record.number} concluída e enviada ao relatório.`);
+  }
+
+  const openDedicatedRecords = useMemo(
+    () => dedicatedRecords
+      .filter((record) => !record.paid && (dedicatedPanelPartnerFilter === "all" || record.partnerId === dedicatedPanelPartnerFilter))
+      .sort((a, b) => b.trackingDate.localeCompare(a.trackingDate)),
+    [dedicatedPanelPartnerFilter, dedicatedRecords],
+  );
+  const visibleDedicatedRecords = useMemo(() => {
+    const search = normalized(dedicatedReportSearch);
+    return dedicatedRecords
+      .filter((record) => dedicatedReportPartnerFilter === "all" || record.partnerId === dedicatedReportPartnerFilter)
+      .filter((record) => !search || normalized([record.invoice, record.cte, record.sender, record.recipient, record.driver, record.partnerName, record.observation].join(" ")).includes(search))
+      .sort((a, b) => b.trackingDate.localeCompare(a.trackingDate));
+  }, [dedicatedRecords, dedicatedReportPartnerFilter, dedicatedReportSearch]);
+
+  function prepareDedicated(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const raw = dedicatedSearch.trim();
+    const matched = [...entries, ...romaneioReferenceEntries].find((entry) => entryMatchesGlobalDocumentScan(entry, raw));
+    if (!matched) {
+      setMessageIsError(true);
+      setMessage("Não encontrei essa nota fiscal ou CT-e nos relatórios importados.");
+      playRomaneioAttentionSound();
+      return;
+    }
+    const parsedValue = dedicatedValue.trim() ? parseMoney(dedicatedValue) : undefined;
+    if (dedicatedValue.trim() && (parsedValue === null || parsedValue < 0)) {
+      setMessageIsError(true);
+      setMessage("Informe um valor válido ou deixe o valor do dedicado em branco.");
+      return;
+    }
+    const identifiers = new Set(entryOperationalIdentifiers(matched));
+    const matchedGroup = [...romaneioDailyGroups]
+      .sort((a, b) => b.day.localeCompare(a.day))
+      .find((group) => group.documents.some((document) =>
+        document.linkedEntries.some((entry) => entry.id === matched.id) ||
+        document.identifiers.some((identifier) => identifiers.has(identifier)),
+      ));
+    setDedicatedConfirmation({
+      trackingDate: new Date().toISOString().slice(0, 10),
+      invoice: matched.invoice || "",
+      cte: matched.cte || "",
+      cteKey: matched.cteKey || "",
+      sender: matched.sender || "",
+      recipient: matched.recipient || "",
+      partnerId: matched.partnerId || "",
+      partnerName: matched.partnerName || "Não identificado",
+      value: parsedValue === null ? undefined : parsedValue,
+      driver: matchedGroup?.driver || "",
+    });
+    setMessage("");
+    playRomaneioAttentionSound();
+  }
+
+  function confirmDedicated() {
+    if (!dedicatedConfirmation) return;
+    setDedicatedRecords((current) => [...current, {
+      ...dedicatedConfirmation,
+      id: newId(),
+      observation: "",
+      paid: false,
+      paidAt: "",
+      createdAt: new Date().toISOString(),
+      createdBy: activeOperator,
+    }]);
+    setDedicatedConfirmation(null);
+    setDedicatedSearch("");
+    setDedicatedValue("");
+    setMessageIsError(false);
+    setMessage("Dedicado confirmado e adicionado ao painel.");
+    playRomaneioSuccessSound();
+  }
+
+  function updateDedicated(id: string, changes: Partial<DedicatedRecord>) {
+    setDedicatedRecords((current) => current.map((record) => record.id === id ? { ...record, ...changes } : record));
+  }
+
+  function toggleDedicatedPaid(record: DedicatedRecord, paid: boolean) {
+    if (paid && !record.paidAt) {
+      setMessageIsError(true);
+      setMessage("Informe a data do pagamento antes de marcar como pago.");
+      return;
+    }
+    updateDedicated(record.id, { paid });
+    setMessageIsError(false);
+    setMessage(paid ? "Dedicado marcado como pago." : "Dedicado reaberto como pendente.");
+  }
+
+  function renderDedicatedCard(record: DedicatedRecord) {
+    const expanded = expandedDedicatedIds.includes(record.id);
+    return <article className={`dedicated-card ${record.paid ? "paid" : "open"} ${expanded ? "expanded" : "compact"}`} key={record.id}>
+      <div className="dedicated-card-heading"><span><small>{record.paid ? "PAGO" : "PENDENTE"}</small><strong>{record.invoice ? `NF ${record.invoice}` : "Sem NF"}</strong></span><div className="dedicated-card-summary"><span><small>CT-e</small><strong>{record.cte || "Não informado"}</strong></span><span><small>Parceiro</small><strong>{record.partnerName}</strong></span><span><small>Motorista</small><strong>{record.driver || "Aguardando romaneio"}</strong></span><span><small>Data</small><strong>{formatRomaneioDay(record.trackingDate)}</strong></span></div><label className="dedicated-compact-value"><small>VALOR</small><input key={`compact-${record.id}-${record.value}`} defaultValue={record.value === undefined ? "" : record.value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} inputMode="decimal" placeholder="R$ 0,00" onBlur={(event) => { const value = event.target.value.trim() ? parseMoney(event.target.value) : undefined; if (value !== null) updateDedicated(record.id, { value }); }} /></label><button type="button" onClick={() => setExpandedDedicatedIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : [...current, record.id])}>{expanded ? "Fechar detalhes" : "Editar detalhes"}</button></div>
+      {expanded && <>
+      <div className="dedicated-edit-grid">
+        <label>Data do acompanhamento<input type="date" value={record.trackingDate} onChange={(event) => updateDedicated(record.id, { trackingDate: event.target.value })} /></label>
+        <label>Nota fiscal<input value={record.invoice} onChange={(event) => updateDedicated(record.id, { invoice: event.target.value })} /></label>
+        <label>CT-e<input value={record.cte} onChange={(event) => updateDedicated(record.id, { cte: event.target.value })} /></label>
+        <label>Valor do dedicado<input key={`${record.id}-${record.value}`} defaultValue={record.value === undefined ? "" : record.value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} inputMode="decimal" placeholder="Opcional" onBlur={(event) => { const value = event.target.value.trim() ? parseMoney(event.target.value) : undefined; if (value !== null) updateDedicated(record.id, { value }); }} /></label>
+        <label>Remetente<input value={record.sender} onChange={(event) => updateDedicated(record.id, { sender: event.target.value })} /></label>
+        <label>Destinatário<input value={record.recipient} onChange={(event) => updateDedicated(record.id, { recipient: event.target.value })} /></label>
+        <label>Parceiro<input value={record.partnerName} onChange={(event) => updateDedicated(record.id, { partnerName: event.target.value })} /></label>
+        <label>Motorista<input value={record.driver} onChange={(event) => updateDedicated(record.id, { driver: event.target.value })} placeholder="Preenchido pelo romaneio ou manualmente" /></label>
+      </div>
+      {record.cteKey && <p className="dedicated-key"><small>CHAVE DO CT-e</small>{record.cteKey}</p>}
+      <label className="dedicated-observation">Observação<textarea value={record.observation} onChange={(event) => updateDedicated(record.id, { observation: event.target.value })} placeholder="Escreva qualquer acompanhamento necessário" /></label>
+      <div className="dedicated-payment">
+        <label>Data do pagamento<input type="date" value={record.paidAt} onChange={(event) => updateDedicated(record.id, { paidAt: event.target.value })} /></label>
+        <label className="dedicated-paid-check"><input type="checkbox" checked={record.paid} onChange={(event) => toggleDedicatedPaid(record, event.target.checked)} /><span>{record.paid ? "Pagamento confirmado" : "Marcar que foi pago"}</span></label>
+      </div>
+      </>}
+    </article>;
+  }
+
+  function selectCoverPartner(partnerId: string) {
+    if (editingCoverId && partnerId !== effectiveCoverPartnerId) {
+      const oldKey = coverDraftKey;
+      const nextKey = `${coverSection}|${partnerId}`;
+      const documents = coverDraftsRef.current[oldKey] || [];
+      const nextDrafts = { ...coverDraftsRef.current, [nextKey]: documents };
+      delete nextDrafts[oldKey];
+      coverDraftsRef.current = nextDrafts;
+      setCoverDrafts(nextDrafts);
+    }
+    setCoverPartnerId(partnerId);
+  }
+
   function cancelCoverEdit() {
     const next = { ...coverDraftsRef.current, [coverDraftKey]: [] };
     coverDraftsRef.current = next;
@@ -4845,6 +5538,12 @@ export default function Home() {
       setTdeImportInfo(null);
       setMaexAdditionalSenders({});
       setBilledDocuments({});
+      setBillingInvoices([]);
+      setBillingUnlocked(false);
+      setPickupRecords([]);
+      setDedicatedRecords([]);
+      setFinancialEntries([]);
+      setFinancialAccountNames([]);
       setRomaneioEntries([]);
       setRomaneioImportInfo(null);
       setRomaneioDocumentStatuses({});
@@ -5008,13 +5707,40 @@ export default function Home() {
           <b>3</b>Capas
         </button>
         <button
-          className={tab === "preview" || tab === "export" ? "active" : ""}
+          className={tab === "preview" || tab === "export" || tab === "adjustments" ? "active" : ""}
           onClick={() => {
             setTab("preview");
             setMessage("");
           }}
         >
           <b>4</b>Fechamento parceiros
+        </button>
+        <button
+          className={tab === "billing" ? "active" : ""}
+          onClick={() => {
+            setTab("billing");
+            setMessage("");
+          }}
+        >
+          <b>5</b>Faturamento
+        </button>
+        <button
+          className={tab === "collections" ? "active" : ""}
+          onClick={() => {
+            setTab("collections");
+            setMessage("");
+          }}
+        >
+          <b>6</b>Coletas
+        </button>
+        <button
+          className={tab === "dedicated" ? "active" : ""}
+          onClick={() => {
+            setTab("dedicated");
+            setMessage("");
+          }}
+        >
+          <b>7</b>Acompanhamento de dedicados
         </button>
       </nav>
       <section className="panel">
@@ -5565,7 +6291,7 @@ export default function Home() {
                         missingDocumentsByDriver.get(normalized(group.driver)) || []
                       ).filter((record) => record.day < group.day);
                       const visibleDocuments = group.documents.filter(
-                        (document) => !romaneioDocumentStatuses[document.key],
+                        (document) => !romaneioStatusForDocument(romaneioDocumentStatuses, group, document),
                       );
                       const pendingDocuments = visibleDocuments.filter(
                         (document) => !drafts[document.key]?.situation,
@@ -5859,15 +6585,41 @@ export default function Home() {
               <div className="retained-view">
                 <div className="retained-heading">
                   <div><small>RELATÓRIO SEPARADO</small><h3>Documentos Retidos</h3><p>Ao bipar ou digitar um documento retido, ele será preparado para baixa como Entregue.</p></div>
-                  <b>{retainedRomaneioDocuments.length} retido(s)</b>
+                  <b>{visibleRetainedRomaneioDocuments.length} de {retainedRomaneioDocuments.length} retido(s)</b>
                 </div>
+                <div className="retained-view-tabs" role="tablist" aria-label="Visualização dos retidos">
+                  <button type="button" role="tab" aria-selected={retainedSection === "documents"} className={retainedSection === "documents" ? "active" : ""} onClick={() => setRetainedSection("documents")}>Documentos retidos</button>
+                  <button type="button" role="tab" aria-selected={retainedSection === "ranking"} className={retainedSection === "ranking" ? "active" : ""} onClick={() => setRetainedSection("ranking")}>Ranking de motoristas</button>
+                </div>
+                {retainedSection === "ranking" ? (
+                  <div className="retained-ranking">
+                    <div className="retained-ranking-summary">
+                      <span><small>RANKING ATUAL</small><strong>CT-es retidos por motorista</strong></span>
+                      <b>{retainedDriverRanking.length} motorista(s)</b>
+                    </div>
+                    {retainedDriverRanking.length ? retainedDriverRanking.map((item, index) => (
+                      <article className={index < 3 ? `top-${index + 1}` : ""} key={normalized(item.driver)}>
+                        <span className="retained-ranking-position">{index + 1}º</span>
+                        <span className="retained-ranking-driver"><strong>{item.driver}</strong><small>{item.count === 1 ? "1 CT-e retido" : `${item.count} CT-es retidos`}</small></span>
+                        <b>{item.count}</b>
+                      </article>
+                    )) : (
+                      <div className="empty romaneio-empty"><span>✓</span><h3>Nenhum motorista com CT-e retido</h3><p>O ranking aparecerá automaticamente quando houver documentos retidos.</p></div>
+                    )}
+                  </div>
+                ) : (
+                  <>
                 <form className="retained-scan" onSubmit={(event) => {event.preventDefault(); scanRetainedDocument();}}>
                   <input value={retainedScanInput} placeholder="Bipe ou digite o MD-e ou CT-e Parceiro" inputMode="numeric" onChange={(event) => setRetainedScanInput(event.target.value)} />
                   <button className="primary" disabled={!retainedScanInput.trim()}>Localizar retido</button>
                 </form>
-                {retainedRomaneioDocuments.length ? (
+                <div className="retained-filters">
+                  <label>Motorista<input type="search" value={retainedDriverFilter} onChange={(event) => setRetainedDriverFilter(event.target.value)} placeholder="Filtrar por motorista" /></label>
+                  <label>Parceira<input type="search" value={retainedPartnerFilter} onChange={(event) => setRetainedPartnerFilter(event.target.value)} placeholder="Ex.: Tadex, Fitlog, Displan" /></label>
+                </div>
+                {visibleRetainedRomaneioDocuments.length ? (
                   <div className="retained-list">
-                    {retainedRomaneioDocuments.map((record) => {
+                    {visibleRetainedRomaneioDocuments.map((record) => {
                       const currentDocument = currentRomaneioDocumentsByKey.get(record.key);
                       const grossFreight = currentDocument?.grossFreight || record.grossFreight;
                       const sender =
@@ -5897,7 +6649,9 @@ export default function Home() {
                     <div className="romaneio-save-bar retained-save"><span><strong>{Object.values(retainedResolutionDrafts).filter(Boolean).length} baixa(s) selecionada(s)</strong><small>É obrigatório gravar para retirar do relatório de Retidos.</small></span><button type="button" className="primary" disabled={!Object.values(retainedResolutionDrafts).some(Boolean)} onClick={saveRetainedResolutions}>Gravar baixas</button></div>
                   </div>
                 ) : (
-                  <div className="empty romaneio-empty"><span>✓</span><h3>Nenhum documento retido</h3><p>Os documentos marcados como Retido aparecerão aqui automaticamente.</p></div>
+                  <div className="empty romaneio-empty"><span>✓</span><h3>Nenhum documento retido encontrado</h3><p>Altere os filtros ou aguarde novos documentos retidos.</p></div>
+                )}
+                  </>
                 )}
               </div>
             )}
@@ -5938,7 +6692,7 @@ export default function Home() {
                         romaneioOperationalDocumentCount(group);
                       const pendingCount = group.documents.filter(
                         (document) =>
-                          !romaneioDocumentStatuses[document.key] &&
+                          !romaneioStatusForDocument(romaneioDocumentStatuses, group, document) &&
                           !romaneioDocumentDrafts[group.key]?.[document.key]?.situation,
                       ).length;
                       return (
@@ -5957,7 +6711,7 @@ export default function Home() {
                               <small>Nº ROMANEIO</small>
                               <strong>{group.romaneios.join(" · ")}</strong>
                             </span>
-                            <span>
+                            <span className={pendingCount ? "romaneio-summary-open" : "romaneio-summary-closed"}>
                               <small>SITUAÇÃO</small>
                               <strong>{pendingCount ? `${pendingCount} aberto(s)` : "Conferido"}</strong>
                             </span>
@@ -6010,19 +6764,19 @@ export default function Home() {
                                 <span>DOCUMENTO</span><span>REMETENTE</span><span>DESTINATÁRIO / CIDADE</span><span>FRETE / PRODUÇÃO</span><span>SITUAÇÃO</span>
                               </div>
                               {group.documents.map((document) => {
-                                const saved = romaneioDocumentStatuses[document.key];
+                                const saved = romaneioStatusForDocument(romaneioDocumentStatuses, group, document);
                                 const city = document.city || routeLabel;
                                 return (
                                   <div className="daily-document-row" key={document.key}>
                                     <span className="document-id">
                                       <strong>{document.referenceType} {document.referenceNumber}</strong>
-                                      <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? ` · NF ${document.invoice}` : ""}</small>
+                                      <small>{document.document}{document.cte ? ` · CT-e ${document.cte}` : ""}{document.invoice ? <> · <mark>NF {document.invoice}</mark></> : ""}</small>
                                     </span>
                                     <span><strong>{document.sender || saved?.sender || "Aguardando relatório geral"}</strong></span>
                                     <span><strong>{document.recipient || saved?.recipient || "Aguardando relatório geral"}</strong><small>{city || saved?.city || "Sem cidade"}</small></span>
                                     <span className="document-values"><strong>{document.grossFreight ? money(document.grossFreight) : "Sem frete individual"}</strong><small>{document.grossFreight ? `${money(document.production)} após -13%` : "Usa frete total quando gravado"}</small></span>
                                     <span className="document-saved-status">
-                                      <b className={saved ? "status-closed" : "status-open"}>
+                                      <b className={saved ? `status-closed status-${saved.situation}` : "status-open"}>
                                         {saved ? romaneioSituationLabel[saved.situation] : "Aberto"}
                                       </b>
                                       {saved?.reason ? <small>Motivo: {saved.reason}</small> : null}
@@ -6030,7 +6784,7 @@ export default function Home() {
                                         <button
                                           type="button"
                                           onClick={() =>
-                                            undoRomaneioDocumentStatus(document.key)
+                                            undoRomaneioDocumentStatus(saved.key)
                                           }
                                         >
                                           Desfazer
@@ -6231,7 +6985,7 @@ export default function Home() {
                         role="radio"
                         aria-checked={effectiveCoverPartnerId === partner.id}
                         className={effectiveCoverPartnerId === partner.id ? "active" : ""}
-                        onClick={() => setCoverPartnerId(partner.id)}
+                        onClick={() => selectCoverPartner(partner.id)}
                       >
                         {partner.name}
                       </button>
@@ -6320,10 +7074,189 @@ export default function Home() {
             )}
           </div>
         )}
-        {(tab === "preview" || tab === "export") && (
+        {tab === "billing" && (
+          <div className="billing-view">
+            {!billingUnlocked ? (
+              <section className="billing-access-card">
+                <span className="billing-lock" aria-hidden="true">▣</span>
+                <small>ACESSO RESTRITO</small>
+                <h2>Faturamento</h2>
+                <p>Informe o código de liberação para consultar ou lançar valores.</p>
+                <form onSubmit={unlockBilling}>
+                  <label>Código de acesso<input type="password" autoFocus value={billingCode} onChange={(event) => { setBillingCode(event.target.value); setBillingCodeError(""); }} placeholder="Digite o código" /></label>
+                  {billingCodeError && <span className="billing-code-error">{billingCodeError}</span>}
+                  <button type="submit" className="primary" disabled={!billingCode.trim()}>Liberar faturamento</button>
+                </form>
+              </section>
+            ) : (
+              <>
+                <div className="intro billing-intro">
+                  <div><small>GUIA 5 · ACESSO LIBERADO</small><h2>{billingSection === "billing" ? "Faturamento por quinzena" : "Financeiro mensal"}</h2><p>{billingSection === "billing" ? "Lance os valores recebidos de cada parceira e acompanhe o total automaticamente." : "Registre as contas pagas e acompanhe o total do mês selecionado."}</p></div>
+                  <button type="button" onClick={() => { setBillingUnlocked(false); setBillingCode(""); }}>Bloquear guia</button>
+                </div>
+                <div className="romaneio-subtabs billing-subtabs">
+                  <button type="button" className={billingSection === "billing" ? "active" : ""} onClick={() => setBillingSection("billing")}>Faturamento</button>
+                  <button type="button" className={billingSection === "financial" ? "active" : ""} onClick={() => setBillingSection("financial")}>Financeiro</button>
+                </div>
+                {billingSection === "billing" ? (
+                <div className="billing-workspace">
+                  <form className="billing-form" onSubmit={saveBillingInvoice}>
+                    <div className="billing-form-heading"><small>{editingBillingId ? "EDITANDO LANÇAMENTO" : "NOVO LANÇAMENTO"}</small><h3>{editingBillingId ? "Alterar valor da fatura" : "Adicionar valor da fatura"}</h3></div>
+                    <span className="cover-partner-label">Parceira oficial</span>
+                    <div className="cover-partner-options billing-partners" role="radiogroup" aria-label="Parceira da fatura">
+                      {billingPartners.map(([id, name]) => <button key={id} type="button" role="radio" aria-checked={billingPartnerId === id} className={billingPartnerId === id ? "active" : ""} onClick={() => setBillingPartnerId(id)}>{name}</button>)}
+                    </div>
+                    <label>Valor da fatura<input type="text" inputMode="decimal" value={billingValue} onChange={(event) => setBillingValue(event.target.value)} placeholder="R$ 0,00" /></label>
+                    <div className="billing-period-fields">
+                      <label>Mês de referência<input type="month" value={billingMonth} onChange={(event) => setBillingMonth(event.target.value)} /></label>
+                      <label>Quinzena<select value={billingHalf} onChange={(event) => setBillingHalf(event.target.value as "1" | "2")}><option value="1">1ª quinzena</option><option value="2">2ª quinzena</option></select></label>
+                    </div>
+                    <div className="billing-form-actions">
+                      {editingBillingId && <button type="button" onClick={() => { setEditingBillingId(""); setBillingPartnerId(""); setBillingValue(""); }}>Cancelar edição</button>}
+                      <button type="submit" className="primary">{editingBillingId ? "Salvar alteração" : "Lançar fatura"}</button>
+                    </div>
+                  </form>
+                  <section className="billing-history">
+                    <div className="billing-history-heading">
+                      <div><small>VALORES LANÇADOS</small><h3>Histórico de faturas</h3></div>
+                      <div className="billing-history-controls"><label>Filtrar por quinzena<select value={billingFilter} onChange={(event) => setBillingFilter(event.target.value)}><option value="all">Todas as quinzenas</option>{billingPeriods.map((period) => <option key={period} value={period}>{billingPeriodLabel(period)}</option>)}</select></label><button type="button" disabled={billingFilter === "all" || !visibleBillingInvoices.length} onClick={generateBillingPdf}>Gerar PDF</button></div>
+                    </div>
+                    <div className="billing-total"><span><small>{billingFilter === "all" ? "TOTAL DE TODAS AS QUINZENAS" : billingPeriodLabel(billingFilter).toUpperCase()}</small><strong>{visibleBillingInvoices.length} lançamento(s)</strong></span><b>{money(billingTotal)}</b></div>
+                    {visibleBillingInvoices.length ? <div className="billing-list">{visibleBillingInvoices.map((invoice) => (
+                      <article key={invoice.id}>
+                        <span><strong>{invoice.partnerName}</strong><small>{billingPeriodLabel(invoice.period)} · lançado por {invoice.createdBy || "Não informado"}</small></span>
+                        <b>{money(invoice.value)}</b>
+                        <div className="billing-row-actions">
+                          <button type="button" onClick={() => editBillingInvoice(invoice)}>Editar</button>
+                          {deletingBillingId === invoice.id ? <><button type="button" className="danger" onClick={() => deleteBillingInvoice(invoice.id)}>Confirmar exclusão</button><button type="button" onClick={() => setDeletingBillingId("")}>Voltar</button></> : <button type="button" className="danger-link" onClick={() => setDeletingBillingId(invoice.id)}>Excluir</button>}
+                        </div>
+                      </article>
+                    ))}</div> : <div className="empty billing-empty"><span>R$</span><h3>Nenhuma fatura nesta seleção</h3><p>Faça um lançamento ou altere o filtro de quinzena.</p></div>}
+                  </section>
+                </div>
+                ) : (
+                  <div className="financial-workspace">
+                    <form className="financial-form" onSubmit={saveFinancialEntry}>
+                      <div><small>{editingFinancialId ? "EDITANDO CONTA" : "LANÇAR CONTA"}</small><h3>{editingFinancialId ? "Alterar pagamento" : "Novo pagamento"}</h3></div>
+                      <label>Nome da conta<input list="financial-account-names" value={financialAccountName} onChange={(event) => setFinancialAccountName(event.target.value)} placeholder="Ex.: Energia, aluguel..." /></label>
+                      <datalist id="financial-account-names">{financialAccountNames.map((name) => <option key={name} value={name} />)}</datalist>
+                      <label>Valor<input value={financialValue} inputMode="decimal" onChange={(event) => setFinancialValue(event.target.value)} placeholder="R$ 0,00" /></label>
+                      <label>Data do pagamento<input type="date" value={financialPaidAt} onChange={(event) => { setFinancialPaidAt(event.target.value); if (event.target.value) setFinancialMonth(event.target.value.slice(0, 7)); }} /></label>
+                      <div className="financial-form-actions">{editingFinancialId && <button type="button" onClick={() => { setEditingFinancialId(""); setFinancialAccountName(""); setFinancialValue(""); }}>Cancelar edição</button>}<button type="submit" className="primary">{editingFinancialId ? "Salvar alteração" : "Lançar conta"}</button></div>
+                    </form>
+                    <section className="financial-history">
+                      <div className="financial-heading"><div><small>CONTAS DO MÊS</small><h3>Financeiro mensal</h3></div><div className="financial-heading-controls"><label>Mês<input type="month" value={financialMonth} onChange={(event) => setFinancialMonth(event.target.value)} /></label><button type="button" disabled={!visibleFinancialEntries.length} onClick={generateFinancialPdf}>Gerar PDF</button></div></div>
+                      <div className="billing-total"><span><small>TOTAL DO MÊS</small><strong>{visibleFinancialEntries.length} conta(s)</strong></span><b>{money(financialTotal)}</b></div>
+                      {visibleFinancialEntries.length ? <div className="financial-list">{visibleFinancialEntries.map((entry) => <article key={entry.id}><span><strong>{entry.accountName}</strong><small>Pago em {formatRomaneioDay(entry.paidAt)} · lançado por {entry.createdBy || "Não informado"}</small></span><b>{money(entry.value)}</b><div>{deletingFinancialId === entry.id ? <><button type="button" className="danger" onClick={() => deleteFinancialEntry(entry.id)}>Confirmar exclusão</button><button type="button" onClick={() => setDeletingFinancialId("")}>Voltar</button></> : <><button type="button" onClick={() => editFinancialEntry(entry)}>Editar</button><button type="button" className="danger-link" onClick={() => setDeletingFinancialId(entry.id)}>Excluir deste mês</button></>}</div></article>)}</div> : <div className="empty billing-empty"><span>R$</span><h3>Nenhuma conta neste mês</h3><p>Os nomes já usados continuam disponíveis para facilitar o próximo lançamento.</p></div>}
+                    </section>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+        {tab === "collections" && (
+          <div className="pickups-view">
+            <div className="intro pickups-intro">
+              <div><small>GUIA 6</small><h2>Controle de coletas</h2><p>Lance as solicitações, informe a saída com o motorista e dê baixa quando a coleta for realizada.</p></div>
+            </div>
+            <div className="romaneio-subtabs pickup-subtabs">
+              <button type="button" className={pickupSection === "panel" ? "active" : ""} onClick={() => setPickupSection("panel")}>Painel de coletas <b>{pickupRecords.filter((record) => record.status === "open").length}</b></button>
+              <button type="button" className={pickupSection === "report" ? "active" : ""} onClick={() => setPickupSection("report")}>Relatório <b>{pickupRecords.filter((record) => record.status === "completed").length}</b></button>
+            </div>
+            {pickupSection === "panel" ? (
+              <div className="pickup-workspace">
+                <form className="pickup-launch-form" onSubmit={addPickup}>
+                  <div><small>LANÇAR COLETA</small><h3>Nova solicitação</h3></div>
+                  <label>Número da coleta<input value={pickupNumber} onChange={(event) => setPickupNumber(event.target.value)} placeholder="Digite o número" /></label>
+                  <label>Número da nota fiscal <small className="optional-field">Opcional — pode deixar em branco</small><input value={pickupInvoice} onChange={(event) => setPickupInvoice(event.target.value)} placeholder="Digite a NF, se houver" /></label>
+                  <span className="cover-partner-label">Parceiro oficial</span>
+                  <div className="cover-partner-options pickup-partners" role="radiogroup" aria-label="Parceiro da coleta">
+                    {partnerAliases.map(([id, name]) => <button key={id} type="button" role="radio" aria-checked={pickupPartnerId === id} className={pickupPartnerId === id ? "active" : ""} onClick={() => setPickupPartnerId(id)}>{name}</button>)}
+                  </div>
+                  <label>Nome do cliente<input value={pickupClientName} onChange={(event) => setPickupClientName(event.target.value)} placeholder="Cliente da coleta" /></label>
+                  <label>Quantidade de volumes<input type="number" min="1" inputMode="numeric" value={pickupVolumes} onChange={(event) => setPickupVolumes(event.target.value)} placeholder="0" /></label>
+                  <button type="submit" className="primary">Lançar coleta</button>
+                </form>
+                <section className="pickup-panel">
+                  <div className="pickup-panel-heading"><div><small>COLETAS EM ABERTO</small><h3>Painel de coleta</h3></div><label>Filtrar por parceiro<select value={pickupPartnerFilter} onChange={(event) => setPickupPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label></div>
+                  {openPickupRecords.length ? <div className="pickup-cards">{openPickupRecords.map((record) => {
+                    const draft = pickupCompletionDrafts[record.id] || { driver: "", date: "" };
+                    const expanded = expandedPickupIds.includes(record.id);
+                    return <article className={expanded ? "expanded" : "compact"} key={record.id}>
+                      <div className="pickup-card-title"><span><small>PENDENTE · COLETA</small><strong>{record.number}</strong><small className="pickup-created-by">Lançado por {record.createdBy || "Não informado"}</small></span><div className="pickup-compact-summary"><span><small>PARCEIRO</small><strong>{record.partnerName}</strong></span><span><small>CLIENTE</small><strong>{record.clientName}</strong></span><span><small>NOTA FISCAL</small><strong>{record.invoice || "Sem nota"}</strong></span><span><small>VOLS</small><strong>{record.volumes}</strong></span><span><small>INSERIDA EM</small><strong>{formatRomaneioDay(record.createdAt)}</strong></span></div><button type="button" onClick={() => setExpandedPickupIds((current) => current.includes(record.id) ? current.filter((id) => id !== record.id) : [...current, record.id])}>{expanded ? "Fechar detalhes" : "Abrir detalhes"}</button></div>
+                      {expanded && <>
+                      <div className="pickup-completion-fields">
+                        <label>Motorista<input value={draft.driver} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, driver: event.target.value } }))} placeholder="Com qual motorista saiu?" /></label>
+                        <label>Data realizada<input type="date" value={draft.date} onChange={(event) => setPickupCompletionDrafts((current) => ({ ...current, [record.id]: { ...draft, date: event.target.value } }))} /></label>
+                        <label className="pickup-check"><input type="checkbox" checked={false} onChange={(event) => { if (event.target.checked) completePickup(record); }} /><span>Marcar como realizada e dar baixa</span></label>
+                      </div>
+                      </>}
+                    </article>;
+                  })}</div> : <div className="empty pickup-empty"><span>✓</span><h3>Nenhuma coleta em aberto</h3><p>Altere o filtro ou lance uma nova coleta.</p></div>}
+                </section>
+              </div>
+            ) : (
+              <section className="pickup-report">
+                <div className="pickup-report-heading"><div><small>HISTÓRICO SALVO</small><h3>Coletas realizadas</h3></div><b>{completedPickupRecords.length} registro(s)</b></div>
+                <div className="pickup-report-filters">
+                  <label>De<input type="date" value={pickupReportFrom} onChange={(event) => setPickupReportFrom(event.target.value)} /></label>
+                  <label>Até<input type="date" value={pickupReportTo} onChange={(event) => setPickupReportTo(event.target.value)} /></label>
+                  <label>Parceiro<select value={pickupReportPartnerFilter} onChange={(event) => setPickupReportPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+                  <label>Motorista<input type="search" value={pickupReportDriverFilter} onChange={(event) => setPickupReportDriverFilter(event.target.value)} placeholder="Filtrar por motorista" /></label>
+                </div>
+                {completedPickupRecords.length ? <div className="pickup-report-list">{completedPickupRecords.map((record) => <article key={record.id}>
+                  <span><small>COLETA</small><strong>{record.number}</strong></span><span><small>NOTA FISCAL</small><strong>{record.invoice || "Sem nota"}</strong></span><span><small>PARCEIRO</small><strong>{record.partnerName}</strong></span><span><small>CLIENTE</small><strong>{record.clientName}</strong></span><span><small>VOLUMES</small><strong>{record.volumes}</strong></span><span><small>INSERIDA EM</small><strong>{formatRomaneioDay(record.createdAt)}</strong></span><span><small>MOTORISTA</small><strong>{record.driver}</strong></span><span><small>REALIZADA EM</small><strong>{formatRomaneioDay(record.completedAt)}</strong></span><span><small>BAIXA POR</small><strong>{record.completedBy || "Não informado"}</strong></span>
+                </article>)}</div> : <div className="empty pickup-empty"><span>⌕</span><h3>Nenhuma coleta realizada encontrada</h3><p>Altere os filtros ou dê baixa em uma coleta do painel.</p></div>}
+              </section>
+            )}
+          </div>
+        )}
+        {tab === "dedicated" && (
+          <div className="dedicated-view">
+            <div className="intro dedicated-intro"><div><small>GUIA 7</small><h2>Acompanhamento de dedicados</h2><p>Localize a entrega, confirme os dados e acompanhe o pagamento do dedicado.</p></div></div>
+            <div className="romaneio-subtabs dedicated-subtabs">
+              <button type="button" className={dedicatedSection === "panel" ? "active" : ""} onClick={() => setDedicatedSection("panel")}>Dedicados em aberto <b>{openDedicatedRecords.length}</b></button>
+              <button type="button" className={dedicatedSection === "report" ? "active" : ""} onClick={() => setDedicatedSection("report")}>Relatório <b>{dedicatedRecords.length}</b></button>
+            </div>
+            {dedicatedSection === "panel" ? <>
+              <form className="dedicated-launch" onSubmit={prepareDedicated}>
+                <div><small>LANÇAR DEDICADO</small><h3>Busque pelos relatórios já importados</h3><p>Digite a NF, o CT-e ou bipe a chave do CT-e. Antes de inserir, os dados serão mostrados para confirmação.</p></div>
+                <label>Nota fiscal, CT-e ou chave<input value={dedicatedSearch} autoFocus onChange={(event) => setDedicatedSearch(event.target.value)} placeholder="Bipe ou digite o documento" /></label>
+                <label>Valor do dedicado <small>Opcional</small><input value={dedicatedValue} inputMode="decimal" onChange={(event) => setDedicatedValue(event.target.value)} placeholder="Pode deixar em branco" /></label>
+                <button type="submit" className="primary" disabled={!dedicatedSearch.trim()}>Localizar e conferir</button>
+              </form>
+              <div className="dedicated-panel-heading"><div><small>PENDENTES DE CONFIRMAÇÃO</small><h3>Painel de dedicados em aberto</h3></div><div className="dedicated-heading-controls"><label>Parceiro<select value={dedicatedPanelPartnerFilter} onChange={(event) => setDedicatedPanelPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><b>{openDedicatedRecords.length} pendente(s)</b></div></div>
+              {openDedicatedRecords.length ? <div className="dedicated-list">{openDedicatedRecords.map(renderDedicatedCard)}</div> : <div className="empty dedicated-empty"><span>✓</span><h3>Nenhum dedicado pendente</h3><p>Os novos lançamentos aparecerão aqui até a confirmação do pagamento.</p></div>}
+            </> : <>
+              <div className="dedicated-report-heading"><div><small>HISTÓRICO COMPLETO</small><h3>Relatório de dedicados</h3></div><div className="dedicated-heading-controls"><label>Parceiro<select value={dedicatedReportPartnerFilter} onChange={(event) => setDedicatedReportPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><label>Procurar<input type="search" value={dedicatedReportSearch} onChange={(event) => setDedicatedReportSearch(event.target.value)} placeholder="NF, CT-e, cliente, motorista..." /></label></div></div>
+              {visibleDedicatedRecords.length ? <div className="dedicated-list">{visibleDedicatedRecords.map(renderDedicatedCard)}</div> : <div className="empty dedicated-empty"><span>⌕</span><h3>Nenhum dedicado encontrado</h3><p>Altere a busca ou faça um novo lançamento.</p></div>}
+            </>}
+          </div>
+        )}
+        {dedicatedConfirmation && (
+          <div className="confirmation-backdrop" role="presentation">
+            <section className="confirmation-dialog dedicated-confirmation" role="dialog" aria-modal="true" aria-labelledby="dedicated-confirmation-title">
+              <small>CONFIRA ANTES DE INSERIR</small>
+              <h3 id="dedicated-confirmation-title">Os dados desta entrega estão corretos?</h3>
+              <p>Revise as informações encontradas. Você pode corrigi-las agora antes de adicionar o dedicado.</p>
+              <div className="dedicated-confirm-grid">
+                <label>Nota fiscal<input value={dedicatedConfirmation.invoice} onChange={(event) => setDedicatedConfirmation({ ...dedicatedConfirmation, invoice: event.target.value })} /></label>
+                <label>CT-e<input value={dedicatedConfirmation.cte} onChange={(event) => setDedicatedConfirmation({ ...dedicatedConfirmation, cte: event.target.value })} /></label>
+                <label>Remetente<input value={dedicatedConfirmation.sender} onChange={(event) => setDedicatedConfirmation({ ...dedicatedConfirmation, sender: event.target.value })} /></label>
+                <label>Destinatário<input value={dedicatedConfirmation.recipient} onChange={(event) => setDedicatedConfirmation({ ...dedicatedConfirmation, recipient: event.target.value })} /></label>
+                <label>Parceiro<input value={dedicatedConfirmation.partnerName} onChange={(event) => setDedicatedConfirmation({ ...dedicatedConfirmation, partnerName: event.target.value })} /></label>
+                <label>Motorista do romaneio<input value={dedicatedConfirmation.driver} onChange={(event) => setDedicatedConfirmation({ ...dedicatedConfirmation, driver: event.target.value })} placeholder="Ainda não manifestado" /></label>
+              </div>
+              <div className="confirmation-actions"><button type="button" onClick={() => setDedicatedConfirmation(null)}>Voltar</button><button type="button" className="primary" onClick={confirmDedicated}>Confirmar e inserir</button></div>
+            </section>
+          </div>
+        )}
+        {(tab === "preview" || tab === "export" || tab === "adjustments") && (
           <>
             <div className="romaneio-subtabs partner-closing-subtabs">
               <button type="button" className={tab === "preview" ? "active" : ""} onClick={() => setTab("preview")}>Prévia</button>
+              <button type="button" className={tab === "adjustments" ? "active" : ""} onClick={() => setTab("adjustments")}>Adicionais por NF</button>
               <button type="button" className={tab === "export" ? "active" : ""} onClick={() => setTab("export")}>Exportar</button>
             </div>
             <div className="toolbar">
@@ -6332,7 +7265,9 @@ export default function Home() {
                 <h2>
                   {tab === "preview"
                     ? "Prévia por transportadora"
-                    : "Escolha o que deseja exportar"}
+                    : tab === "adjustments"
+                      ? "Lançar adicionais por nota fiscal"
+                      : "Escolha o que deseja exportar"}
                 </h2>
               </div>
               <label>
@@ -6364,7 +7299,29 @@ export default function Home() {
                 </p>
               </div>
             )}
-            {!partners.length ? (
+            {tab === "adjustments" ? (
+              <div className="closing-additional-workspace">
+                <section className="closing-additional-form">
+                  <label>NF, CTE ou chave<input type="search" value={closingAdditionalSearch} onChange={(event) => setClosingAdditionalSearch(event.target.value)} placeholder="Digite ou bipe para localizar" /></label>
+                  {closingAdditionalSearch && (
+                    <div className={closingAdditionalMatch ? "closing-additional-found" : "closing-additional-not-found"}>
+                      {closingAdditionalMatch ? <><strong>NF {closingAdditionalMatch.invoice || "-"} · CTE {closingAdditionalMatch.cte || "-"}</strong><span>{closingAdditionalMatch.sender} → {closingAdditionalMatch.recipient}</span><small>{closingAdditionalMatch.partnerName} · {closingAdditionalMatch.city}</small></> : <strong>Nenhuma nota encontrada.</strong>}
+                    </div>
+                  )}
+                  <div className="closing-additional-options">
+                    {(["dedicated", "tde", "tda", "cf"] as ClosingAdditional["kind"][]).map((kind) => <button type="button" key={kind} className={closingAdditionalKind === kind ? "active" : ""} onClick={() => setClosingAdditionalKind(kind)}>{kind === "dedicated" ? "Dedicado" : kind.toUpperCase()}</button>)}
+                  </div>
+                  <label>Valor do adicional<input inputMode="decimal" value={closingAdditionalValue} onChange={(event) => setClosingAdditionalValue(event.target.value)} placeholder="R$ 0,00" /></label>
+                  <label>Forma de cálculo<select value={closingAdditionalCalculation} onChange={(event) => setClosingAdditionalCalculation(event.target.value as ClosingAdditional["calculation"])}><option value="direct">Somar direto, sem desconto</option><option value="before-discounts">Somar antes dos descontos</option></select></label>
+                  <label className="closing-additional-check"><input type="checkbox" checked={closingAdditionalPersistent} onChange={(event) => setClosingAdditionalPersistent(event.target.checked)} /><span><strong>Repetir para este destinatário</strong><small>Aplica automaticamente às próximas entregas da mesma parceira para este destinatário.</small></span></label>
+                  <button type="button" className="primary" disabled={!closingAdditionalMatch || !closingAdditionalValue.trim()} onClick={addClosingAdditional}>Adicionar ao fechamento</button>
+                </section>
+                <section className="closing-additional-list">
+                  <h3>Adicionais salvos</h3>
+                  {closingAdditionals.length ? closingAdditionals.map((item) => <div key={item.id}><span><strong>{item.kind === "dedicated" ? "Dedicado" : item.kind.toUpperCase()} · {money(item.value)}</strong><small>NF {item.invoice || "-"} · {item.partnerName} · {item.recipient}{item.persistent ? " · automático para o destinatário" : ""}</small></span><button type="button" onClick={() => removeClosingAdditional(item.id)}>Remover</button></div>) : <p>Nenhum adicional lançado.</p>}
+                </section>
+              </div>
+            ) : !partners.length ? (
               <div className="empty">
                 <span>□</span>
                 <h3>Nenhum dado para mostrar</h3>
