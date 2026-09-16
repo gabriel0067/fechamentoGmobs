@@ -411,6 +411,8 @@ Em 7 de setembro de 2026, ficou decidido manter a arquitetura atual durante um m
 
 Ao final do teste, revisar a velocidade de importação, abertura, bipagem, salvamento e geração de relatórios. Se houver lentidão, a prioridade é reorganizar o D1 para salvar cada nota, CT-e, capa e romaneio como registro individual; criar índices por NF, CT-e, chave, data, transportadora e romaneio; consultar somente o período necessário; paginar listas grandes; evitar reenviar todo o histórico a cada alteração; e permitir arquivamento por competência. A hospedagem atual na Cloudflare pode ser mantida nessa reorganização. PostgreSQL, como Supabase ou Neon, fica somente como alternativa futura para um volume ou uma quantidade de usuários muito maior. Antes de qualquer migração, gerar e validar um backup completo do estado atual.
 
+Em 16 de setembro de 2026, após lentidão geral no site publicado, o salvamento em nuvem passou a aguardar uma pequena folga do navegador antes de serializar/enviar estados grandes (`closing`, `romaneios` e `billed`), a fila marca alteração local assim que o estado muda para impedir refresh remoto no meio de uma gravação pendente, e o refresh compartilhado espera alguns segundos quando há interação recente do usuário. O login foi separado do componente principal e os campos de bipagem de fechamento/capas deixaram de atualizar React a cada caractere, processando somente no envio.
+
 ## Regra de manutenção deste documento
 
 Atualize este arquivo sempre que houver uma decisão relevante, mudança de regra de negócio, nova funcionalidade, alteração de arquitetura ou novo próximo passo. Não registre senhas, tokens, dados de clientes ou informações confidenciais.

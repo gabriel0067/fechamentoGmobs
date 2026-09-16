@@ -965,13 +965,45 @@ const romaneioCompleteRowKey = (
     ),
   );
 
+type ScheduledBrowserWork = { kind: "idle" | "timeout"; id: number };
+type BrowserWithIdleWork = Window &
+  typeof globalThis & {
+    requestIdleCallback?: (
+      callback: () => void,
+      options?: { timeout?: number },
+    ) => number;
+    cancelIdleCallback?: (id: number) => void;
+  };
+
+const scheduleBrowserWork = (
+  callback: () => void,
+  timeout: number,
+): ScheduledBrowserWork => {
+  const browser = window as BrowserWithIdleWork;
+  if (browser.requestIdleCallback)
+    return {
+      kind: "idle",
+      id: browser.requestIdleCallback(callback, { timeout }),
+    };
+  return { kind: "timeout", id: window.setTimeout(callback, 0) };
+};
+
+const cancelScheduledBrowserWork = (work: ScheduledBrowserWork) => {
+  const browser = window as BrowserWithIdleWork;
+  if (work.kind === "idle" && browser.cancelIdleCallback) {
+    browser.cancelIdleCallback(work.id);
+    return;
+  }
+  window.clearTimeout(work.id);
+};
+
 function useCloudStateSync<T>(
   stateKey: CloudStateKey,
   value: T,
   enabled: boolean,
   skipSaveRef: { current: Set<CloudStateKey> },
+  onQueue: () => void,
   onStart: () => void,
-  onCancel: () => void,
   onFinish: (
     stateKey: CloudStateKey,
     succeeded: boolean,
@@ -990,30 +1022,134 @@ function useCloudStateSync<T>(
     }
     if (skipSaveRef.current.delete(stateKey)) return;
 
+    onQueue();
     let started = false;
+    let cancelled = false;
+    let queuedWork: ScheduledBrowserWork | null = null;
+    const saveDelay =
+      stateKey === "closing" || stateKey === "romaneios" || stateKey === "billed"
+        ? 2_500
+        : 900;
+    const idleTimeout =
+      stateKey === "closing" || stateKey === "romaneios" || stateKey === "billed"
+        ? 8_000
+        : 4_000;
     const timer = window.setTimeout(() => {
-      started = true;
-      onStart();
-      void saveCloudState(stateKey, value)
-        .then((version) => {
-          void writeCloudStateCache(stateKey, version, value).catch(() => undefined);
-          onFinish(stateKey, true, version);
-        })
-        .catch(() => onFinish(stateKey, false));
-    }, 1_200);
+      queuedWork = scheduleBrowserWork(() => {
+        if (cancelled) return;
+        started = true;
+        onStart();
+        void saveCloudState(stateKey, value)
+          .then((version) => {
+            void writeCloudStateCache(stateKey, version, value).catch(() => undefined);
+            onFinish(stateKey, true, version);
+          })
+          .catch(() => onFinish(stateKey, false));
+      }, idleTimeout);
+    }, saveDelay);
     return () => {
+      cancelled = true;
       window.clearTimeout(timer);
+      if (queuedWork && !started) cancelScheduledBrowserWork(queuedWork);
       if (!started) return;
     };
   }, [
     enabled,
-    onCancel,
     onFinish,
+    onQueue,
     onStart,
     skipSaveRef,
     stateKey,
     value,
   ]);
+}
+
+function LoginGate({
+  authStatus,
+  cloudHosted,
+  loginError,
+  loggingIn,
+  operatorNames,
+  onLogin,
+}: {
+  authStatus: AuthStatus;
+  cloudHosted: boolean;
+  loginError: string;
+  loggingIn: boolean;
+  operatorNames: string[];
+  onLogin: (credentials: {
+    operator: string;
+    username: string;
+    password: string;
+  }) => void;
+}) {
+  const [operator, setOperator] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const requiresCloudLogin = cloudHosted && authStatus === "signedOut";
+
+  return (
+    <main className="access-shell">
+      <section className="access-card login-card">
+        <div className="access-mark">GM</div>
+        <small>ACESSO RESTRITO</small>
+        <h1>Fechamentos GMOBS</h1>
+        <p>Identifique quem está entrando para vincular as operações realizadas.</p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            onLogin({ operator, username, password });
+          }}
+        >
+          <label htmlFor="operator-name">Seu nome</label>
+          <input
+            id="operator-name"
+            list="operator-names"
+            value={operator}
+            autoComplete="name"
+            placeholder="Escolha ou digite um novo nome"
+            onChange={(event) => setOperator(event.target.value)}
+          />
+          <datalist id="operator-names">
+            {operatorNames.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+          {requiresCloudLogin && (
+            <>
+              <label htmlFor="login-username">Usuário</label>
+              <input
+                id="login-username"
+                value={username}
+                autoComplete="username"
+                onChange={(event) => setUsername(event.target.value)}
+              />
+              <label htmlFor="login-password">Senha</label>
+              <input
+                id="login-password"
+                type="password"
+                value={password}
+                autoComplete="current-password"
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </>
+          )}
+          {loginError && <div className="login-error">{loginError}</div>}
+          <button
+            type="submit"
+            className="primary"
+            disabled={
+              loggingIn ||
+              !operator.trim() ||
+              (requiresCloudLogin && (!username.trim() || !password))
+            }
+          >
+            {loggingIn ? "Entrando..." : "Entrar"}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
 }
 
 async function loadCachedCloudStateRecord<T>(stateKey: CloudStateKey) {
@@ -1068,9 +1204,6 @@ export default function Home() {
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>("local");
   const [cloudRetry, setCloudRetry] = useState(0);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [operatorNameInput, setOperatorNameInput] = useState("");
   const [activeOperator, setActiveOperator] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
@@ -1081,7 +1214,7 @@ export default function Home() {
   const [newPartnerNames, setNewPartnerNames] = useState<
     Record<string, string>
   >({});
-  const [scanInput, setScanInput] = useState("");
+  const scanInputRef = useRef<HTMLInputElement>(null);
   const [importingScanTxt, setImportingScanTxt] = useState(false);
   const [scannedCtes, setScannedCtes] = useState<
     Record<string, Record<string, ScanRecord>>
@@ -1090,7 +1223,7 @@ export default function Home() {
   const [coverGenerators, setCoverGenerators] = useState<string[]>([]);
   const [coverSection, setCoverSection] = useState<CoverKind | "report">("shipment");
   const [coverPartnerId, setCoverPartnerId] = useState("");
-  const [coverScanInput, setCoverScanInput] = useState("");
+  const coverScanInputRef = useRef<HTMLInputElement>(null);
   const [coverNumberInput, setCoverNumberInput] = useState("");
   const [coverDrafts, setCoverDrafts] = useState<Record<string, CoverDocumentExport[]>>({});
   const coverDraftsRef = useRef<Record<string, CoverDocumentExport[]>>({});
@@ -1282,6 +1415,7 @@ export default function Home() {
   const cloudVersionsRef = useRef<Partial<Record<CloudStateKey, string>>>({});
   const skipCloudSaveRef = useRef(new Set<CloudStateKey>());
   const lastLocalChangeRef = useRef(0);
+  const lastUserInteractionRef = useRef(0);
   useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => {
@@ -1921,10 +2055,8 @@ export default function Home() {
     cloudWritesRef.current += 1;
     setCloudStatus("saving");
   }, []);
-  const markCloudSaveCancel = useCallback(() => {
-    cloudWritesRef.current = Math.max(0, cloudWritesRef.current - 1);
-    if (cloudWritesRef.current === 0)
-      setCloudStatus(cloudSaveFailedRef.current ? "error" : "ready");
+  const markCloudChangeQueued = useCallback(() => {
+    lastLocalChangeRef.current = Date.now();
   }, []);
   const markCloudSaveFinish = useCallback(
     (stateKey: CloudStateKey, succeeded: boolean, version?: string) => {
@@ -1941,8 +2073,8 @@ export default function Home() {
     closingCloudState,
     cloudReady,
     skipCloudSaveRef,
+    markCloudChangeQueued,
     markCloudSaveStart,
-    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -1950,8 +2082,8 @@ export default function Home() {
     scannedCtes,
     cloudReady,
     skipCloudSaveRef,
+    markCloudChangeQueued,
     markCloudSaveStart,
-    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -1959,8 +2091,8 @@ export default function Home() {
     tdeCloudState,
     cloudReady,
     skipCloudSaveRef,
+    markCloudChangeQueued,
     markCloudSaveStart,
-    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -1968,8 +2100,8 @@ export default function Home() {
     maexAdditionalSenders,
     cloudReady,
     skipCloudSaveRef,
+    markCloudChangeQueued,
     markCloudSaveStart,
-    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -1977,8 +2109,8 @@ export default function Home() {
     billedDocuments,
     cloudReady,
     skipCloudSaveRef,
+    markCloudChangeQueued,
     markCloudSaveStart,
-    markCloudSaveCancel,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -1986,10 +2118,24 @@ export default function Home() {
     romaneiosCloudState,
     cloudReady,
     skipCloudSaveRef,
+    markCloudChangeQueued,
     markCloudSaveStart,
-    markCloudSaveCancel,
     markCloudSaveFinish,
   );
+  useEffect(() => {
+    if (!cloudHosted || !cloudReady) return;
+    const markInteraction = () => {
+      lastUserInteractionRef.current = Date.now();
+    };
+    window.addEventListener("keydown", markInteraction, { capture: true });
+    window.addEventListener("pointerdown", markInteraction, { capture: true });
+    window.addEventListener("input", markInteraction, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", markInteraction, { capture: true });
+      window.removeEventListener("pointerdown", markInteraction, { capture: true });
+      window.removeEventListener("input", markInteraction, { capture: true });
+    };
+  }, [cloudHosted, cloudReady]);
   const refreshCloudData = useCallback(async () => {
     const hasUnsavedRomaneioDrafts = Object.values(romaneioDocumentDrafts).some(
       (drafts) => Object.values(drafts).some((draft) => draft.situation),
@@ -2000,6 +2146,7 @@ export default function Home() {
       cloudSaveFailedRef.current ||
       hasUnsavedRomaneioDrafts ||
       Date.now() - lastLocalChangeRef.current < 15_000 ||
+      Date.now() - lastUserInteractionRef.current < 5_000 ||
       document.visibilityState !== "visible"
     )
       return;
@@ -2020,7 +2167,8 @@ export default function Home() {
         Object.values(romaneioDocumentDrafts).some((drafts) =>
           Object.values(drafts).some((draft) => draft.situation),
         ) ||
-        Date.now() - lastLocalChangeRef.current < 15_000
+        Date.now() - lastLocalChangeRef.current < 15_000 ||
+        Date.now() - lastUserInteractionRef.current < 5_000
       )
         return;
       const changedKeys = versions
@@ -3104,7 +3252,8 @@ export default function Home() {
   }
 
   function registerScan(partnerId: string) {
-    const key = scanKey(scanInput);
+    const raw = scanInputRef.current?.value || "";
+    const key = scanKey(raw);
     if (!key) return;
     const partner = partners.find((item) => item.id === partnerId);
     const isAccessKey = /^\d{44}$/.test(key);
@@ -3121,14 +3270,14 @@ export default function Home() {
         [key]: { scannedAt: new Date().toISOString(), scannedBy: activeOperator },
       },
     }));
-    setScanInput("");
+    if (scanInputRef.current) scanInputRef.current.value = "";
     if (matching.length) {
       setMessage(
         `${matching.length} registro(s) do CTE ${matching[0].cte} marcado(s) com OK.`,
       );
     } else {
       setMessage(
-        `CTE ${scanInput.trim()} guardado. Ele entrará automaticamente quando aparecer em ${partner?.name || "esta transportadora"}.`,
+        `CTE ${raw.trim()} guardado. Ele entrará automaticamente quando aparecer em ${partner?.name || "esta transportadora"}.`,
       );
     }
   }
@@ -4885,7 +5034,7 @@ export default function Home() {
 
   function registerCoverScan() {
     if (coverSection === "report" || !effectiveCoverPartnerId) return;
-    const raw = coverScanInput.trim();
+    const raw = (coverScanInputRef.current?.value || "").trim();
     const key = scanKey(raw);
     if (!key) {
       setMessageIsError(true);
@@ -4935,7 +5084,7 @@ export default function Home() {
       ),
     );
     if (alreadyScanned) {
-      setCoverScanInput("");
+      if (coverScanInputRef.current) coverScanInputRef.current.value = "";
       setMessageIsError(true);
       setMessage(`A nota ou CTE ${raw} já foi bipado e não será repetido.`);
       playRomaneioAttentionSound();
@@ -4959,7 +5108,7 @@ export default function Home() {
       });
       return next;
     });
-    setCoverScanInput("");
+    if (coverScanInputRef.current) coverScanInputRef.current.value = "";
     setMessageIsError(false);
     setMessage(`${additions.length} registro(s) incluído(s) na capa e disponibilizado(s) para o fechamento por bipagem.`);
     playRomaneioSuccessSound();
@@ -5675,32 +5824,38 @@ export default function Home() {
     );
   }
 
-  async function login(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function login({
+    operator,
+    username,
+    password,
+  }: {
+    operator: string;
+    username: string;
+    password: string;
+  }) {
     setLoggingIn(true);
     setLoginError("");
     try {
-      const operator = operatorNameInput.trim();
-      if (!operator) throw new Error("Informe o nome de quem está entrando.");
+      const operatorName = operator.trim();
+      if (!operatorName) throw new Error("Informe o nome de quem está entrando.");
       if (cloudHosted && authStatus === "signedOut") {
         const response = await fetch("/api/auth/login", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            username: loginUsername.trim(),
-            password: loginPassword,
+            username: username.trim(),
+            password,
           }),
         });
         const result = (await response.json()) as { error?: string };
         if (!response.ok)
           throw new Error(result.error || "Usuário ou senha incorretos.");
-        setLoginPassword("");
         setAuthStatus("checking");
         setCloudReady(false);
         setCloudStatus("loading");
         setCloudRetry((current) => current + 1);
       }
-      setActiveOperator(operator);
+      setActiveOperator(operatorName);
     } catch (error) {
       setLoginError(
         error instanceof Error ? error.message : "Não foi possível entrar.",
@@ -5713,7 +5868,6 @@ export default function Home() {
   async function logout() {
     if (!cloudHosted) {
       setActiveOperator("");
-      setOperatorNameInput("");
       setLoginError("");
       return;
     }
@@ -5721,7 +5875,6 @@ export default function Home() {
       await fetch("/api/auth/logout", { method: "POST" });
     } finally {
       setActiveOperator("");
-      setOperatorNameInput("");
       setAuthStatus("signedOut");
       setCloudReady(false);
       setEntries([]);
@@ -5803,35 +5956,14 @@ export default function Home() {
     (authStatus === "signedIn" && !activeOperator)
   )
     return (
-      <main className="access-shell">
-        <section className="access-card login-card">
-          <div className="access-mark">GM</div>
-          <small>ACESSO RESTRITO</small>
-          <h1>Fechamentos GMOBS</h1>
-          <p>Identifique quem está entrando para vincular as operações realizadas.</p>
-          <form onSubmit={login}>
-            <label htmlFor="operator-name">Seu nome</label>
-            <input id="operator-name" list="operator-names" value={operatorNameInput} autoComplete="name" placeholder="Escolha ou digite um novo nome" onChange={(event) => setOperatorNameInput(event.target.value)} />
-            <datalist id="operator-names">
-              {coverGenerators.map((name) => <option key={name} value={name} />)}
-            </datalist>
-            {cloudHosted && authStatus === "signedOut" && <>
-              <label htmlFor="login-username">Usuário</label>
-              <input id="login-username" value={loginUsername} autoComplete="username" onChange={(event) => setLoginUsername(event.target.value)} />
-              <label htmlFor="login-password">Senha</label>
-              <input id="login-password" type="password" value={loginPassword} autoComplete="current-password" onChange={(event) => setLoginPassword(event.target.value)} />
-            </>}
-            {loginError && <div className="login-error">{loginError}</div>}
-            <button
-              type="submit"
-              className="primary"
-              disabled={loggingIn || !operatorNameInput.trim() || (cloudHosted && authStatus === "signedOut" && (!loginUsername.trim() || !loginPassword))}
-            >
-              {loggingIn ? "Entrando..." : "Entrar"}
-            </button>
-          </form>
-        </section>
-      </main>
+      <LoginGate
+        authStatus={authStatus}
+        cloudHosted={cloudHosted}
+        loginError={loginError}
+        loggingIn={loggingIn}
+        operatorNames={coverGenerators}
+        onLogin={login}
+      />
     );
 
   if (
@@ -7185,8 +7317,8 @@ export default function Home() {
                   <form className="cover-scan-form" onSubmit={(event) => { event.preventDefault(); registerCoverScan(); }}>
                     <label htmlFor="cover-scan">2. Bipe as notas desta parceira</label>
                     <div>
-                      <input id="cover-scan" autoFocus inputMode="numeric" value={coverScanInput} onChange={(event) => setCoverScanInput(event.target.value)} placeholder="Bipe a NF, CTE ou chave" />
-                      <button className="primary" disabled={!coverScanInput.trim()}>Adicionar</button>
+                      <input id="cover-scan" ref={coverScanInputRef} autoFocus inputMode="numeric" required placeholder="Bipe a NF, CTE ou chave" />
+                      <button className="primary">Adicionar</button>
                     </div>
                   </form>
                   {coverSection === "return" && <>
@@ -7599,13 +7731,13 @@ export default function Home() {
                           }}
                         >
                           <input
+                            ref={scanInputRef}
                             type="text"
                             inputMode="numeric"
-                            value={scanInput}
+                            required
                             placeholder="Bipe ou digite o CTE"
-                            onChange={(event) => setScanInput(event.target.value)}
                           />
-                          <button className="primary" disabled={!scanInput.trim()}>
+                          <button className="primary">
                             Marcar OK
                           </button>
                         </form>
