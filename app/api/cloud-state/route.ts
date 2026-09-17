@@ -9,7 +9,7 @@ const MAX_CHUNKS = 100;
 const KEYS = new Set(["closing", "scans", "tde", "maex", "billed", "romaneios"]);
 const ENCODINGS = new Set(["gzip-base64", "json"]);
 let client: ReturnType<typeof neon> | undefined;
-let schemaReady: Promise<void> | undefined;
+let uploadSchemaReady: Promise<void> | undefined;
 
 function sql() {
   const url = process.env.DATABASE_URL;
@@ -17,19 +17,25 @@ function sql() {
   return (client ??= neon(url));
 }
 
-function ensureSchema() {
-  schemaReady ??= (async () => {
-    await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_records (
-      owner_id TEXT NOT NULL, state_key TEXT NOT NULL, version TEXT NOT NULL,
-      encoding TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL,
-      PRIMARY KEY (owner_id, state_key))`);
-    await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_upload_chunks (
-      owner_id TEXT NOT NULL, state_key TEXT NOT NULL, upload_id TEXT NOT NULL,
-      chunk_index INTEGER NOT NULL, encoding TEXT NOT NULL, payload TEXT NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (owner_id, state_key, upload_id, chunk_index))`);
-  })().catch((error) => { schemaReady = undefined; throw error; });
-  return schemaReady;
+function ensureUploadSchema() {
+  uploadSchemaReady ??= (async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_upload_chunks (
+          owner_id TEXT NOT NULL, state_key TEXT NOT NULL, upload_id TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL, encoding TEXT NOT NULL, payload TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (owner_id, state_key, upload_id, chunk_index))`);
+        return;
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (attempt === 2 || (code !== "23505" && code !== "42P07")) throw error;
+        // Another serverless instance may have created the table concurrently.
+        await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+      }
+    }
+  })().catch((error) => { uploadSchemaReady = undefined; throw error; });
+  return uploadSchemaReady;
 }
 
 async function check(request: Request) {
@@ -50,7 +56,6 @@ export async function HEAD(request: Request) {
   const access = await check(request);
   if (access.response) return access.response;
   try {
-    await ensureSchema();
     const rows = await sql().query(
       "SELECT version, encoding, length(payload) AS size FROM cloud_state_records WHERE owner_id = $1 AND state_key = $2",
       [OWNER, access.key],
@@ -73,7 +78,6 @@ export async function GET(request: Request) {
   if (!Number.isInteger(index) || index < 0 || index >= MAX_CHUNKS)
     return Response.json({ error: "Parte inválida." }, { status: 400 });
   try {
-    await ensureSchema();
     const rows = await sql().query(
       "SELECT version, substr(payload, $3, $4) AS chunk FROM cloud_state_records WHERE owner_id = $1 AND state_key = $2",
       [OWNER, access.key, index * CHUNK_SIZE + 1, CHUNK_SIZE],
@@ -100,7 +104,7 @@ export async function POST(request: Request) {
   if (Array.from(chunk).length > CHUNK_SIZE)
     return Response.json({ error: "Parte excede o limite." }, { status: 413 });
   try {
-    await ensureSchema();
+    await ensureUploadSchema();
     await sql().query(
       `INSERT INTO cloud_state_upload_chunks (owner_id, state_key, upload_id, chunk_index, encoding, payload)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -122,7 +126,7 @@ export async function PUT(request: Request) {
   if (!uploadId || !/^[0-9a-f-]{36}$/i.test(uploadId) || !Number.isInteger(chunkCount) || !chunkCount || chunkCount > MAX_CHUNKS || !encoding || !ENCODINGS.has(encoding))
     return Response.json({ error: "Confirmação inválida." }, { status: 400 });
   try {
-    await ensureSchema();
+    await ensureUploadSchema();
     const rows = await sql().query(
       `INSERT INTO cloud_state_records (owner_id, state_key, version, encoding, payload, updated_at)
        SELECT $1, $2, $3, $4, string_agg(payload, '' ORDER BY chunk_index), $5
