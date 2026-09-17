@@ -1,3 +1,5 @@
+import { webcrypto } from "node:crypto";
+
 const SESSION_COOKIE = "gmobs_session";
 const SESSION_SECONDS = 8 * 60 * 60;
 
@@ -35,7 +37,7 @@ function fromBase64Url(value: string) {
 }
 
 async function hmac(value: string, secret: string) {
-  const key = await crypto.subtle.importKey(
+  const key = await webcrypto.subtle.importKey(
     "raw",
     encoder.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
@@ -43,14 +45,14 @@ async function hmac(value: string, secret: string) {
     ["sign"],
   );
   return new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, encoder.encode(value)),
+    await webcrypto.subtle.sign("HMAC", key, encoder.encode(value)),
   );
 }
 
 async function safeEqual(left: string, right: string) {
   const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(left)),
-    crypto.subtle.digest("SHA-256", encoder.encode(right)),
+    webcrypto.subtle.digest("SHA-256", encoder.encode(left)),
+    webcrypto.subtle.digest("SHA-256", encoder.encode(right)),
   ]);
   const leftBytes = new Uint8Array(leftHash);
   const rightBytes = new Uint8Array(rightHash);
