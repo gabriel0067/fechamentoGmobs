@@ -138,12 +138,16 @@ export async function saveCloudState(
   if (!chunks.length) chunks.push("");
   if (chunks.length > 100)
     throw new Error("O conjunto de dados excede o limite de transferência; não foi salvo.");
-  for (let index = 0; index < chunks.length; index++) {
-    const response = await fetch(
-      `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}&upload=${uploadId}&index=${index}`,
-      { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8", "x-gmobs-encoding": encoding }, body: chunks[index] },
+  for (let start = 0; start < chunks.length; start += 4) {
+    await Promise.all(
+      chunks.slice(start, start + 4).map(async (chunk, offset) => {
+        const response = await fetch(
+          `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}&upload=${uploadId}&index=${start + offset}`,
+          { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8", "x-gmobs-encoding": encoding }, body: chunk },
+        );
+        if (!response.ok) throw cloudError(response);
+      }),
     );
-    if (!response.ok) throw cloudError(response);
   }
   const response = await fetch(`${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`, {
     method: "PUT",

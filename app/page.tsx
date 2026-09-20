@@ -3,6 +3,7 @@
 import {
   ChangeEvent,
   FormEvent,
+  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -1077,6 +1078,76 @@ function useCloudStateSync<T>(
   ]);
 }
 
+const RomaneioGroupNoteField = memo(function RomaneioGroupNoteField({
+  groupKey,
+  value,
+  onCommit,
+  register,
+}: {
+  groupKey: string;
+  value: string;
+  onCommit: (key: string, value: string) => void;
+  register: (key: string, element: HTMLTextAreaElement | null) => void;
+}) {
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    const element = inputRef.current;
+    if (element && document.activeElement !== element && element.value !== value)
+      element.value = value;
+  }, [value]);
+  return (
+    <textarea
+      id={`romaneio-note-${groupKey}`}
+      ref={(element) => {
+        inputRef.current = element;
+        register(groupKey, element);
+      }}
+      defaultValue={value}
+      placeholder="Escreva uma observação geral deste dia, se necessário"
+      onBlur={() => {
+        const draft = inputRef.current?.value ?? "";
+        if (draft !== value) onCommit(groupKey, draft);
+      }}
+    />
+  );
+});
+
+const RomaneioFullSearchField = memo(function RomaneioFullSearchField({
+  value,
+  onSearch,
+}: {
+  value: string;
+  onSearch: (value: string) => void;
+}) {
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+  }, []);
+  return (
+    <input
+      id="romaneio-full-search"
+      type="search"
+      defaultValue={value}
+      placeholder="Motorista, data, nº romaneio, cidade ou documento"
+      onChange={(event) => {
+        const draft = event.target.value;
+        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(() => {
+          onSearch(draft);
+          timerRef.current = null;
+        }, 350);
+      }}
+      onBlur={(event) => {
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+          onSearch(event.target.value);
+        }
+      }}
+    />
+  );
+});
+
 function LoginGate({
   authStatus,
   cloudHosted,
@@ -1319,6 +1390,18 @@ export default function Home() {
   const [romaneioGroupNotes, setRomaneioGroupNotes] = useState<
     Record<string, string>
   >({});
+  const romaneioGroupNoteInputRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const registerRomaneioGroupNoteInput = useCallback(
+    (key: string, element: HTMLTextAreaElement | null) => {
+      romaneioGroupNoteInputRefs.current[key] = element;
+    },
+    [],
+  );
+  const commitRomaneioGroupNote = useCallback((key: string, value: string) => {
+    setRomaneioGroupNotes((current) =>
+      current[key] === value ? current : { ...current, [key]: value },
+    );
+  }, []);
   const [manualRomaneioFreights, setManualRomaneioFreights] = useState<
     Record<string, ManualRomaneioFreight[]>
   >({});
@@ -2589,13 +2672,10 @@ export default function Home() {
       .sort((left, right) => left.order - right.order)
       .map(({ group, document }) => ({ group, document }));
   }
-  const visibleRomaneioGroups = useMemo(() => {
-    const term = normalized(deferredRomaneioSearch);
-    return romaneioDailyGroups.filter((group) => {
-      if (!term && focusedRomaneioKey) return group.key === focusedRomaneioKey;
-      if (!term) return true;
-      return normalized(
-        [
+  const romaneioCheckingSearchIndex = useMemo(
+    () => new Map(romaneioDailyGroups.map((group) => [
+      group.key,
+      normalized([
           group.driver,
           group.cpf,
           ...group.romaneios,
@@ -2611,16 +2691,23 @@ export default function Home() {
             document.recipient,
             document.city,
           ]),
-        ].join(" "),
-      ).includes(term);
-    });
-  }, [deferredRomaneioSearch, focusedRomaneioKey, romaneioDailyGroups]);
-  const visibleFullRomaneioGroups = useMemo(() => {
-    const term = normalized(deferredRomaneioFullSearch);
-    if (!term) return romaneioDailyGroups;
+        ].join(" ")),
+    ] as const)),
+    [romaneioDailyGroups],
+  );
+  const visibleRomaneioGroups = useMemo(() => {
+    const term = normalized(deferredRomaneioSearch);
+    if (!term && !focusedRomaneioKey) return romaneioDailyGroups;
     return romaneioDailyGroups.filter((group) =>
-      normalized(
-        [
+      term
+        ? romaneioCheckingSearchIndex.get(group.key)?.includes(term)
+        : group.key === focusedRomaneioKey,
+    );
+  }, [deferredRomaneioSearch, focusedRomaneioKey, romaneioCheckingSearchIndex, romaneioDailyGroups]);
+  const romaneioFullSearchIndex = useMemo(
+    () => new Map(romaneioDailyGroups.map((group) => [
+      group.key,
+      normalized([
           group.driver,
           group.cpf,
           group.day,
@@ -2642,16 +2729,22 @@ export default function Home() {
               romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation || "delivered"
             ],
           ]),
-        ].join(" "),
-      ).includes(term),
-    );
-  }, [
+        ].join(" ")),
+    ] as const)),
+    [
     romaneioDailyGroups,
     romaneioDocumentStatuses,
-    deferredRomaneioFullSearch,
     romaneioGroupNotes,
     romaneioRouteLabels,
-  ]);
+    ],
+  );
+  const visibleFullRomaneioGroups = useMemo(() => {
+    const term = normalized(deferredRomaneioFullSearch);
+    if (!term) return romaneioDailyGroups;
+    return romaneioDailyGroups.filter((group) =>
+      romaneioFullSearchIndex.get(group.key)?.includes(term),
+    );
+  }, [deferredRomaneioFullSearch, romaneioDailyGroups, romaneioFullSearchIndex]);
   const displayedRomaneioGroups = useMemo(
     () => visibleRomaneioGroups.slice(0, romaneioListLimit),
     [romaneioListLimit, visibleRomaneioGroups],
@@ -4039,7 +4132,11 @@ export default function Home() {
     const routeChanged =
       routeLabel.trim() !==
       (romaneioRouteLabels[group.key] || defaultRoutes).trim();
-    const note = (romaneioGroupNotes[group.key] || "").trim();
+    const note = (
+      romaneioGroupNoteInputRefs.current[group.key]?.value ??
+      romaneioGroupNotes[group.key] ??
+      ""
+    ).trim();
     const existingSavedNote = Object.values(romaneioDocumentStatuses).find(
       (record) => record.day === group.day && record.driver === group.driver,
     )?.observation;
@@ -6965,17 +7062,13 @@ export default function Home() {
                                 ) : null}
                               </div>
 
-                              <label className="romaneio-group-note">
+                              <label className="romaneio-group-note" htmlFor={`romaneio-note-${group.key}`}>
                                 <small>OBSERVAÇÃO DA CONFERÊNCIA</small>
-                                <textarea
+                                <RomaneioGroupNoteField
+                                  groupKey={group.key}
                                   value={romaneioGroupNotes[group.key] || ""}
-                                  placeholder="Escreva uma observação geral deste dia, se necessário"
-                                  onChange={(event) =>
-                                    setRomaneioGroupNotes((current) => ({
-                                      ...current,
-                                      [group.key]: event.target.value,
-                                    }))
-                                  }
+                                  onCommit={commitRomaneioGroupNote}
+                                  register={registerRomaneioGroupNoteInput}
                                 />
                               </label>
                               <div className="romaneio-save-bar">
@@ -7074,13 +7167,11 @@ export default function Home() {
                     <h2>Romaneio completo</h2>
                     <p>Consulte por motorista, data ou número do romaneio e veja a situação atual de cada documento.</p>
                   </div>
-                  <label>
+                  <label htmlFor="romaneio-full-search">
                     Procurar
-                    <input
-                      type="search"
+                    <RomaneioFullSearchField
                       value={romaneioFullSearch}
-                      placeholder="Motorista, data, nº romaneio, cidade ou documento"
-                      onChange={(event) => setRomaneioFullSearch(event.target.value)}
+                      onSearch={setRomaneioFullSearch}
                     />
                   </label>
                 </div>
