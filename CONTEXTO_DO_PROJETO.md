@@ -2,6 +2,8 @@
 
 > Migração em preparação (16/09/2026): esta cópia de trabalho está na branch `migration/neon-vercel`. O site Cloudflare em produção e a branch `main` permanecem intocados. A versão de migração usa Next.js nativo, Neon PostgreSQL e transferência do estado em partes compatíveis com a Vercel. O backup real dos seis conjuntos D1 e a validação no Neon ainda são obrigatórios antes de qualquer corte. Consulte `MIGRACAO_NEON_VERCEL.md`. A troca de hospedagem, por si só, não elimina o custo de carregar e salvar conjuntos inteiros.
 
+> Atualização de 20/09/2026: o backup consolidado foi validado no Neon e a branch de migração foi promovida manualmente à produção em `https://fechamento-gmobs.vercel.app/`. O site antigo continua intacto. A configuração de acompanhamento automático da produção na Vercel ainda aponta para `main`; futuras publicações desta branch exigem promoção manual. Os dados da cópia consolidada são de 20/09 às 12h20 BRT, sem sincronização automática posterior com o site antigo.
+
 ## Objetivo
 
 Este projeto transforma o processo de fechamento de transportadoras/parceiras em um fluxo web simples. O usuário importa um relatório geral em Excel ou CSV, confere os registros separados por parceira e exporta um arquivo Excel separado para cada transportadora escolhida.
@@ -408,6 +410,8 @@ git push
 9. Depois da aprovação visual, publicar a aba de romaneios e validar o estado `romaneios` no D1 compartilhado.
 
 ## Decisão temporária sobre volume e desempenho
+
+Em 20/09/2026, a correção `5170887` foi publicada na produção da Vercel para reduzir travamentos na digitação e na consulta de romaneios. A observação diária usa um campo isolado e só atualiza o estado geral ao sair dele; o botão de gravar também lê diretamente o texto atual. A consulta de romaneio completo espera uma pausa de 350 ms na digitação, e os textos pesquisáveis são indexados quando os dados mudam, não a cada tecla. O envio do estado em blocos passou a transmitir até quatro blocos em paralelo antes de confirmar a gravação. A compilação Next.js passou; o teste herdado do starter não é aplicável à versão Next.js. Falta validar com usuário autenticado e volume real se a digitação e o tempo até “Dados salvos no banco” melhoraram o suficiente. A arquitetura ainda envia o conjunto inteiro de romaneios em cada alteração; uma futura evolução por registros individuais continua recomendada se a gravação permanecer lenta.
 
 Em 7 de setembro de 2026, ficou decidido manter a arquitetura atual durante um mês de teste operacional das Capas e dos demais módulos. Não migrar o armazenamento antes dessa avaliação sem nova solicitação do usuário.
 
