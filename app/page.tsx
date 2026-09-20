@@ -5,7 +5,6 @@ import {
   FormEvent,
   memo,
   useCallback,
-  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -1119,33 +1118,46 @@ const RomaneioFullSearchField = memo(function RomaneioFullSearchField({
   value: string;
   onSearch: (value: string) => void;
 }) {
-  const timerRef = useRef<number | null>(null);
-  useEffect(() => () => {
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-  }, []);
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
-    <input
-      id="romaneio-full-search"
-      type="search"
-      defaultValue={value}
-      placeholder="Motorista, data, nº romaneio, cidade ou documento"
-      onChange={(event) => {
-        const draft = event.target.value;
-        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-        timerRef.current = window.setTimeout(() => {
-          onSearch(draft);
-          timerRef.current = null;
-        }, 350);
-      }}
-      onBlur={(event) => {
-        if (timerRef.current !== null) {
-          window.clearTimeout(timerRef.current);
-          timerRef.current = null;
-          onSearch(event.target.value);
-        }
-      }}
-    />
+    <form className="manual-search" onSubmit={(event) => {
+      event.preventDefault();
+      onSearch(inputRef.current?.value.trim() || "");
+    }}>
+      <input ref={inputRef} id="romaneio-full-search" type="search" defaultValue={value}
+        placeholder="Motorista, data, nº romaneio, cidade ou documento" />
+      <button type="submit">Pesquisar</button>
+      {value && <button type="button" onClick={() => {
+        if (inputRef.current) inputRef.current.value = "";
+        onSearch("");
+      }}>Limpar</button>}
+    </form>
   );
+});
+
+const ConfirmedSearchField = memo(function ConfirmedSearchField({
+  value, onSearch, placeholder, label,
+}: {
+  value: string;
+  onSearch: (value: string) => void;
+  placeholder: string;
+  label: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return <div className="manual-search-label">
+    <span>{label}</span>
+    <form className="manual-search" onSubmit={(event) => {
+      event.preventDefault();
+      onSearch(inputRef.current?.value.trim() || "");
+    }}>
+      <input ref={inputRef} type="search" defaultValue={value} placeholder={placeholder} aria-label={label} />
+      <button type="submit">Pesquisar</button>
+      {value && <button type="button" onClick={() => {
+        if (inputRef.current) inputRef.current.value = "";
+        onSearch("");
+      }}>Limpar</button>}
+    </form>
+  </div>;
 });
 
 function LoginGate({
@@ -1250,6 +1262,10 @@ async function loadCachedCloudStateRecord<T>(stateKey: CloudStateKey) {
 export default function Home() {
   const [tab, setTab] = useState<Tab>("import");
   const [tabPending, startTabTransition] = useTransition();
+  const [closingAuditOpen, setClosingAuditOpen] = useState(false);
+  const [closingAuditLimit, setClosingAuditLimit] = useState(100);
+  const [scanListLimit, setScanListLimit] = useState(50);
+  const [missingScanListLimit, setMissingScanListLimit] = useState(50);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [romaneioReferenceEntries, setRomaneioReferenceEntries] = useState<
     RomaneioReferenceEntry[]
@@ -1371,7 +1387,7 @@ export default function Home() {
   const [expandedPickupIds, setExpandedPickupIds] = useState<string[]>([]);
   const [dedicatedRecords, setDedicatedRecords] = useState<DedicatedRecord[]>([]);
   const [dedicatedSection, setDedicatedSection] = useState<"panel" | "report">("panel");
-  const [dedicatedSearch, setDedicatedSearch] = useState("");
+  const dedicatedSearchRef = useRef<HTMLInputElement>(null);
   const [dedicatedValue, setDedicatedValue] = useState("");
   const [dedicatedConfirmation, setDedicatedConfirmation] = useState<DedicatedDraft | null>(null);
   const [dedicatedReportSearch, setDedicatedReportSearch] = useState("");
@@ -1426,12 +1442,9 @@ export default function Home() {
     useState<DriverClosingDiscountPrompt | null>(null);
   const [romaneioSearch, setRomaneioSearch] = useState("");
   const romaneioScanRef = useRef<HTMLInputElement>(null);
-  const romaneioSearchTimerRef = useRef<number | null>(null);
   const [romaneioFullSearch, setRomaneioFullSearch] = useState("");
-  const deferredRomaneioSearch = useDeferredValue(romaneioSearch);
-  const deferredRomaneioFullSearch = useDeferredValue(romaneioFullSearch);
-  const [romaneioListLimit, setRomaneioListLimit] = useState(40);
-  const [romaneioFullListLimit, setRomaneioFullListLimit] = useState(40);
+  const [romaneioListLimit, setRomaneioListLimit] = useState(15);
+  const [romaneioFullListLimit, setRomaneioFullListLimit] = useState(15);
   const [focusedRomaneioKey, setFocusedRomaneioKey] = useState("");
   const [romaneioView, setRomaneioView] = useState<"operation" | "retained">(
     "operation",
@@ -1497,7 +1510,7 @@ export default function Home() {
   const [romaneioRouteDrafts, setRomaneioRouteDrafts] = useState<
     Record<string, string>
   >({});
-  const [retainedScanInput, setRetainedScanInput] = useState("");
+  const retainedScanInputRef = useRef<HTMLInputElement>(null);
   const [retainedResolutionDrafts, setRetainedResolutionDrafts] = useState<
     Record<string, boolean>
   >({});
@@ -2673,7 +2686,7 @@ export default function Home() {
       .map(({ group, document }) => ({ group, document }));
   }
   const romaneioCheckingSearchIndex = useMemo(
-    () => new Map(romaneioDailyGroups.map((group) => [
+    () => !romaneioSearch.trim() ? null : new Map(romaneioDailyGroups.map((group) => [
       group.key,
       normalized([
           group.driver,
@@ -2693,19 +2706,19 @@ export default function Home() {
           ]),
         ].join(" ")),
     ] as const)),
-    [romaneioDailyGroups],
+    [romaneioDailyGroups, romaneioSearch],
   );
   const visibleRomaneioGroups = useMemo(() => {
-    const term = normalized(deferredRomaneioSearch);
+    const term = normalized(romaneioSearch);
     if (!term && !focusedRomaneioKey) return romaneioDailyGroups;
     return romaneioDailyGroups.filter((group) =>
       term
-        ? romaneioCheckingSearchIndex.get(group.key)?.includes(term)
+        ? romaneioCheckingSearchIndex?.get(group.key)?.includes(term)
         : group.key === focusedRomaneioKey,
     );
-  }, [deferredRomaneioSearch, focusedRomaneioKey, romaneioCheckingSearchIndex, romaneioDailyGroups]);
+  }, [romaneioSearch, focusedRomaneioKey, romaneioCheckingSearchIndex, romaneioDailyGroups]);
   const romaneioFullSearchIndex = useMemo(
-    () => new Map(romaneioDailyGroups.map((group) => [
+    () => !romaneioFullSearch.trim() ? null : new Map(romaneioDailyGroups.map((group) => [
       group.key,
       normalized([
           group.driver,
@@ -2736,18 +2749,22 @@ export default function Home() {
     romaneioDocumentStatuses,
     romaneioGroupNotes,
     romaneioRouteLabels,
+    romaneioFullSearch,
     ],
   );
   const visibleFullRomaneioGroups = useMemo(() => {
-    const term = normalized(deferredRomaneioFullSearch);
+    const term = normalized(romaneioFullSearch);
     if (!term) return romaneioDailyGroups;
     return romaneioDailyGroups.filter((group) =>
-      romaneioFullSearchIndex.get(group.key)?.includes(term),
+      romaneioFullSearchIndex?.get(group.key)?.includes(term),
     );
-  }, [deferredRomaneioFullSearch, romaneioDailyGroups, romaneioFullSearchIndex]);
+  }, [romaneioFullSearch, romaneioDailyGroups, romaneioFullSearchIndex]);
   const displayedRomaneioGroups = useMemo(
     () => visibleRomaneioGroups.slice(0, romaneioListLimit),
     [romaneioListLimit, visibleRomaneioGroups],
+  );
+  const floatingRomaneioGroup = displayedRomaneioGroups.find((group) =>
+    openRomaneios[group.key] && Object.values(romaneioDocumentDrafts[group.key] || {}).some((draft) => draft.situation),
   );
   const displayedFullRomaneioGroups = useMemo(
     () => visibleFullRomaneioGroups.slice(0, romaneioFullListLimit),
@@ -3933,10 +3950,6 @@ export default function Home() {
   }
 
   function clearRomaneioSearch() {
-    if (romaneioSearchTimerRef.current !== null) {
-      window.clearTimeout(romaneioSearchTimerRef.current);
-      romaneioSearchTimerRef.current = null;
-    }
     if (romaneioScanRef.current) romaneioScanRef.current.value = "";
     setRomaneioSearch("");
   }
@@ -4248,7 +4261,8 @@ export default function Home() {
   }
 
   function scanRetainedDocument() {
-    const typedIdentifiers = operationalIdentifiers(retainedScanInput);
+    const raw = retainedScanInputRef.current?.value.trim() || "";
+    const typedIdentifiers = operationalIdentifiers(raw);
     if (!typedIdentifiers.length) {
       setMessageIsError(true);
       setMessage("Digite ou bipe um MD-e ou CT-e Parceiro válido.");
@@ -4264,7 +4278,7 @@ export default function Home() {
     if (!matching) {
       setMessageIsError(true);
       setMessage(
-        `${retainedScanInput.trim()} não foi encontrado no relatório de retidos.`,
+        `${raw} não foi encontrado no relatório de retidos.`,
       );
       playRomaneioAttentionSound();
       return;
@@ -4273,7 +4287,7 @@ export default function Home() {
       ...current,
       [matching.key]: true,
     }));
-    setRetainedScanInput("");
+    if (retainedScanInputRef.current) retainedScanInputRef.current.value = "";
     setMessageIsError(false);
     setMessage(
       `${matching.referenceType} ${matching.referenceNumber} localizado. Clique em Gravar baixas para confirmar a entrega.`,
@@ -5689,7 +5703,12 @@ export default function Home() {
 
   function prepareDedicated(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const raw = dedicatedSearch.trim();
+    const raw = dedicatedSearchRef.current?.value.trim() || "";
+    if (!raw) {
+      setMessageIsError(true);
+      setMessage("Digite ou bipe uma nota fiscal ou CT-e antes de localizar.");
+      return;
+    }
     const matched = [...entries, ...romaneioReferenceEntries].find((entry) => entryMatchesGlobalDocumentScan(entry, raw));
     if (!matched) {
       setMessageIsError(true);
@@ -5738,7 +5757,7 @@ export default function Home() {
       createdBy: activeOperator,
     }]);
     setDedicatedConfirmation(null);
-    setDedicatedSearch("");
+    if (dedicatedSearchRef.current) dedicatedSearchRef.current.value = "";
     setDedicatedValue("");
     setMessageIsError(false);
     setMessage("Dedicado confirmado e adicionado ao painel.");
@@ -6739,24 +6758,16 @@ export default function Home() {
                     ref={romaneioScanRef}
                     type="search"
                     placeholder="MD-e, CT-e Parceiro, chave AK, NF, motorista ou romaneio"
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (romaneioSearchTimerRef.current !== null)
-                        window.clearTimeout(romaneioSearchTimerRef.current);
-                      // O leitor envia muitos caracteres seguidos; não redesenhe os romaneios a cada dígito.
-                      if (!/[a-zA-ZÀ-ÿ]/.test(value)) {
-                        if (romaneioSearch) setRomaneioSearch("");
-                        return;
-                      }
-                      romaneioSearchTimerRef.current = window.setTimeout(() => {
-                        setRomaneioSearch(value);
-                        romaneioSearchTimerRef.current = null;
-                      }, 300);
-                    }}
                   />
-                  <button className="primary">
+                  <button type="submit" className="primary">
                     Localizar / marcar Entregue
                   </button>
+                  <button type="button" className="secondary" onClick={() => {
+                    setFocusedRomaneioKey("");
+                    setRomaneioSearch(romaneioScanRef.current?.value.trim() || "");
+                    setRomaneioListLimit(15);
+                  }}>Pesquisar</button>
+                  {romaneioSearch && <button type="button" className="secondary" onClick={clearRomaneioSearch}>Limpar pesquisa</button>}
                   {focusedRomaneioKey && !romaneioSearch.trim() && (
                     <button
                       type="button"
@@ -6790,7 +6801,7 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="romaneio-list daily-list">
-                    {visibleRomaneioGroups.length > romaneioListLimit && <div className="progressive-list-control"><span>Mostrando {displayedRomaneioGroups.length} de {visibleRomaneioGroups.length} romaneios para manter a tela rápida.</span><button type="button" onClick={() => setRomaneioListLimit((current) => current + 40)}>Mostrar mais 40</button></div>}
+                    {visibleRomaneioGroups.length > romaneioListLimit && <div className="progressive-list-control"><span>Mostrando {displayedRomaneioGroups.length} de {visibleRomaneioGroups.length} romaneios para manter a tela rápida.</span><button type="button" onClick={() => setRomaneioListLimit((current) => current + 15)}>Mostrar mais 15</button></div>}
                     {displayedRomaneioGroups.map((group) => {
                       const drafts = romaneioDocumentDrafts[group.key] || {};
                       const previousMissingDocuments = (
@@ -7073,7 +7084,6 @@ export default function Home() {
                               </label>
                               <div className="romaneio-save-bar">
                                 <span><strong>{draftCount} alteração(ões) aguardando gravação</strong><small>{hasInvalidReturn ? "Informe o motivo obrigatório do Retorno." : "Entregues e Retidos entram na produção."}</small></span>
-                                <button type="button" className="primary" onClick={() => saveRomaneioGroup(group)}>Gravar conferência</button>
                               </div>
                               <p className="romaneio-source">Arquivo(s): {group.sourceFiles.join(", ")}</p>
                             </div>
@@ -7081,6 +7091,9 @@ export default function Home() {
                         </details>
                       );
                     })}
+                    {floatingRomaneioGroup && <button type="button" className="primary romaneio-floating-save" onClick={() => saveRomaneioGroup(floatingRomaneioGroup)}>
+                      Gravar conferência ({Object.values(romaneioDocumentDrafts[floatingRomaneioGroup.key] || {}).filter((draft) => draft.situation).length})
+                    </button>}
                   </div>
                 )}
               </>
@@ -7113,12 +7126,12 @@ export default function Home() {
                 ) : (
                   <>
                 <form className="retained-scan" onSubmit={(event) => {event.preventDefault(); scanRetainedDocument();}}>
-                  <input value={retainedScanInput} placeholder="Bipe ou digite o MD-e ou CT-e Parceiro" inputMode="numeric" onChange={(event) => setRetainedScanInput(event.target.value)} />
-                  <button className="primary" disabled={!retainedScanInput.trim()}>Localizar retido</button>
+                  <input ref={retainedScanInputRef} placeholder="Bipe ou digite o MD-e ou CT-e Parceiro" inputMode="numeric" />
+                  <button className="primary">Localizar retido</button>
                 </form>
                 <div className="retained-filters">
-                  <label>Motorista<input type="search" value={retainedDriverFilter} onChange={(event) => setRetainedDriverFilter(event.target.value)} placeholder="Filtrar por motorista" /></label>
-                  <label>Parceira<input type="search" value={retainedPartnerFilter} onChange={(event) => setRetainedPartnerFilter(event.target.value)} placeholder="Ex.: Tadex, Fitlog, Displan" /></label>
+                  <ConfirmedSearchField label="Motorista" value={retainedDriverFilter} onSearch={setRetainedDriverFilter} placeholder="Filtrar por motorista" />
+                  <ConfirmedSearchField label="Parceira" value={retainedPartnerFilter} onSearch={setRetainedPartnerFilter} placeholder="Ex.: Tadex, Fitlog, Displan" />
                 </div>
                 {visibleRetainedRomaneioDocuments.length ? (
                   <div className="retained-list">
@@ -7167,13 +7180,13 @@ export default function Home() {
                     <h2>Romaneio completo</h2>
                     <p>Consulte por motorista, data ou número do romaneio e veja a situação atual de cada documento.</p>
                   </div>
-                  <label htmlFor="romaneio-full-search">
-                    Procurar
+                  <div className="manual-search-label">
+                    <label htmlFor="romaneio-full-search">Procurar</label>
                     <RomaneioFullSearchField
                       value={romaneioFullSearch}
                       onSearch={setRomaneioFullSearch}
                     />
-                  </label>
+                  </div>
                 </div>
                 {!visibleFullRomaneioGroups.length ? (
                   <div className="empty romaneio-empty">
@@ -7183,7 +7196,7 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="romaneio-full-list">
-                    {visibleFullRomaneioGroups.length > romaneioFullListLimit && <div className="progressive-list-control"><span>Mostrando {displayedFullRomaneioGroups.length} de {visibleFullRomaneioGroups.length} romaneios para manter a tela rápida.</span><button type="button" onClick={() => setRomaneioFullListLimit((current) => current + 40)}>Mostrar mais 40</button></div>}
+                    {visibleFullRomaneioGroups.length > romaneioFullListLimit && <div className="progressive-list-control"><span>Mostrando {displayedFullRomaneioGroups.length} de {visibleFullRomaneioGroups.length} romaneios para manter a tela rápida.</span><button type="button" onClick={() => setRomaneioFullListLimit((current) => current + 15)}>Mostrar mais 15</button></div>}
                     {displayedFullRomaneioGroups.map((group) => {
                       const routeLabel =
                         romaneioRouteLabels[group.key] ||
@@ -7534,11 +7547,7 @@ export default function Home() {
                   <button type="button" className="danger" disabled={!selectedReportCovers.length} onClick={() => setCoverDeleteConfirmation(true)}>Excluir selecionadas</button>
                 </section>
                 <section className="cover-report-search">
-                  <label htmlFor="cover-report-search">Localizar por identificador da capa ou documento</label>
-                  <div>
-                    <input id="cover-report-search" value={coverReportSearch} onChange={(event) => setCoverReportSearch(event.target.value)} placeholder="Ex.: 10000, E-10000, NF, MD-e, CTE ou chave" />
-                    {coverReportSearch && <button type="button" onClick={() => setCoverReportSearch("")}>Limpar</button>}
-                  </div>
+                  <ConfirmedSearchField label="Localizar por identificador da capa ou documento" value={coverReportSearch} onSearch={setCoverReportSearch} placeholder="Ex.: 10000, E-10000, NF, MD-e, CTE ou chave" />
                   <small>{coverReportSearch ? `${reportCovers.length} capa(s) encontrada(s).` : "A busca mostra a capa pelo número, identificador ou documento incluído."}</small>
                 </section>
                 <div className="cover-history">
@@ -7699,7 +7708,7 @@ export default function Home() {
                   <label>De<input type="date" value={pickupReportFrom} onChange={(event) => setPickupReportFrom(event.target.value)} /></label>
                   <label>Até<input type="date" value={pickupReportTo} onChange={(event) => setPickupReportTo(event.target.value)} /></label>
                   <label>Parceiro<select value={pickupReportPartnerFilter} onChange={(event) => setPickupReportPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
-                  <label>Motorista<input type="search" value={pickupReportDriverFilter} onChange={(event) => setPickupReportDriverFilter(event.target.value)} placeholder="Filtrar por motorista" /></label>
+                  <ConfirmedSearchField label="Motorista" value={pickupReportDriverFilter} onSearch={setPickupReportDriverFilter} placeholder="Filtrar por motorista" />
                 </div>
                 {completedPickupRecords.length ? <div className="pickup-report-list">{completedPickupRecords.map((record) => <article key={record.id} className={record.outcome === "return" || record.outcome === "cancelled" ? "pickup-occurred" : "pickup-done"}>
                   <span><small>COLETA</small><strong>{record.number}</strong></span><span><small>NOTA FISCAL</small><strong>{record.invoice || "Sem nota"}</strong></span><span><small>PARCEIRO</small><strong>{record.partnerName}</strong></span><span><small>CLIENTE</small><strong>{record.clientName}</strong></span><span><small>VOLUMES</small><strong>{record.volumes}</strong></span><span><small>INSERIDA EM</small><strong>{formatRomaneioDay(record.createdAt)}</strong></span><span><small>MOTORISTA</small><strong>{record.driver || "Não informado"}</strong></span><span><small>SITUAÇÃO</small><strong>{pickupOutcomeLabel(record.outcome)}</strong></span><span><small>BAIXA EM</small><strong>{formatRomaneioDay(record.completedAt)}</strong></span><span><small>BAIXA POR</small><strong>{record.completedBy || "Não informado"}</strong></span>{record.occurrenceNote && <span className="pickup-report-note"><small>OBSERVAÇÃO</small><strong>{record.occurrenceNote}</strong></span>}
@@ -7718,14 +7727,14 @@ export default function Home() {
             {dedicatedSection === "panel" ? <>
               <form className="dedicated-launch" onSubmit={prepareDedicated}>
                 <div><small>LANÇAR DEDICADO</small><h3>Busque pelos relatórios já importados</h3><p>Digite a NF, o CT-e ou bipe a chave do CT-e. Antes de inserir, os dados serão mostrados para confirmação.</p></div>
-                <label>Nota fiscal, CT-e ou chave<input value={dedicatedSearch} autoFocus onChange={(event) => setDedicatedSearch(event.target.value)} placeholder="Bipe ou digite o documento" /></label>
+                <label>Nota fiscal, CT-e ou chave<input ref={dedicatedSearchRef} placeholder="Bipe ou digite o documento" /></label>
                 <label>Valor do dedicado <small>Opcional</small><input value={dedicatedValue} inputMode="decimal" onChange={(event) => setDedicatedValue(event.target.value)} placeholder="Pode deixar em branco" /></label>
-                <button type="submit" className="primary" disabled={!dedicatedSearch.trim()}>Localizar e conferir</button>
+                <button type="submit" className="primary">Localizar e conferir</button>
               </form>
               <div className="dedicated-panel-heading"><div><small>PENDENTES DE CONFIRMAÇÃO</small><h3>Painel de dedicados em aberto</h3></div><div className="dedicated-heading-controls"><label>Parceiro<select value={dedicatedPanelPartnerFilter} onChange={(event) => setDedicatedPanelPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><b>{openDedicatedRecords.length} pendente(s)</b></div></div>
               {openDedicatedRecords.length ? <div className="dedicated-list">{openDedicatedRecords.map(renderDedicatedCard)}</div> : <div className="empty dedicated-empty"><span>✓</span><h3>Nenhum dedicado pendente</h3><p>Os novos lançamentos aparecerão aqui até a confirmação do pagamento.</p></div>}
             </> : <>
-              <div className="dedicated-report-heading"><div><small>HISTÓRICO COMPLETO</small><h3>Relatório de dedicados</h3></div><div className="dedicated-heading-controls"><label>Parceiro<select value={dedicatedReportPartnerFilter} onChange={(event) => setDedicatedReportPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><label>Procurar<input type="search" value={dedicatedReportSearch} onChange={(event) => setDedicatedReportSearch(event.target.value)} placeholder="NF, CT-e, cliente, motorista..." /></label></div></div>
+              <div className="dedicated-report-heading"><div><small>HISTÓRICO COMPLETO</small><h3>Relatório de dedicados</h3></div><div className="dedicated-heading-controls"><label>Parceiro<select value={dedicatedReportPartnerFilter} onChange={(event) => setDedicatedReportPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><ConfirmedSearchField label="Procurar" value={dedicatedReportSearch} onSearch={setDedicatedReportSearch} placeholder="NF, CT-e, cliente, motorista..." /></div></div>
               {visibleDedicatedRecords.length ? <div className="dedicated-list">{visibleDedicatedRecords.map(renderDedicatedCard)}</div> : <div className="empty dedicated-empty"><span>⌕</span><h3>Nenhum dedicado encontrado</h3><p>Altere a busca ou faça um novo lançamento.</p></div>}
             </>}
           </div>
@@ -7798,7 +7807,7 @@ export default function Home() {
             {tab === "adjustments" ? (
               <div className="closing-additional-workspace">
                 <section className="closing-additional-form">
-                  <label>NF, CTE ou chave<input type="search" value={closingAdditionalSearch} onChange={(event) => setClosingAdditionalSearch(event.target.value)} placeholder="Digite ou bipe para localizar" /></label>
+                  <ConfirmedSearchField label="NF, CTE ou chave" value={closingAdditionalSearch} onSearch={setClosingAdditionalSearch} placeholder="Digite ou bipe para localizar" />
                   {closingAdditionalSearch && (
                     <div className={closingAdditionalMatch ? "closing-additional-found" : "closing-additional-not-found"}>
                       {closingAdditionalMatch ? <><strong>NF {closingAdditionalMatch.invoice || "-"} · CTE {closingAdditionalMatch.cte || "-"}</strong><span>{closingAdditionalMatch.sender} → {closingAdditionalMatch.recipient}</span><small>{closingAdditionalMatch.partnerName} · {closingAdditionalMatch.city}</small></> : <strong>Nenhuma nota encontrada.</strong>}
@@ -7940,7 +7949,7 @@ export default function Home() {
                         </div>
                         <div className="scan-list">
                           {activeScanState.scannedRows.length ? (
-                            activeScanState.scannedRows.map((entry) => (
+                            activeScanState.scannedRows.slice(0, scanListLimit).map((entry) => (
                               <div key={entry.id}>
                                 <span className="scan-ok">{normalized(entry.status) === "cf" ? "CF DIRETO" : "OK"}</span>
                                 <strong>CTE {entry.cte}</strong>
@@ -7961,7 +7970,7 @@ export default function Home() {
                           ) : !activeScanState.pendingKeys.length ? (
                             <p>Nenhum documento bipado neste período.</p>
                           ) : null}
-                          {activeScanState.pendingKeys.map((key) => (
+                          {activeScanState.pendingKeys.slice(0, scanListLimit).map((key) => (
                             <div className="scan-pending" key={`pending-${key}`}>
                               <span>AGUARDANDO</span>
                               <strong>CTE {key}</strong>
@@ -7975,6 +7984,7 @@ export default function Home() {
                             </div>
                           ))}
                         </div>
+                        {(activeScanState.scannedRows.length > scanListLimit || activeScanState.pendingKeys.length > scanListLimit) && <div className="progressive-list-control"><span>Mostrando até {scanListLimit} documentos de cada lista.</span><button type="button" onClick={() => setScanListLimit((current) => current + 50)}>Mostrar mais 50</button></div>}
                         {activeScanState.missingRows.length > 0 && (
                           <div className="scan-missing">
                             <div className="scan-missing-heading">
@@ -7990,7 +8000,7 @@ export default function Home() {
                               </b>
                             </div>
                             <div className="scan-checklist">
-                              {activeScanState.missingRows
+                              {activeScanState.missingRows.slice(0, missingScanListLimit)
                                 .map((entry) => (
                                   <label
                                     aria-label={`Marcar CTE ${entry.cte || entry.cteKey || "não informado"} com OK`}
@@ -8024,6 +8034,7 @@ export default function Home() {
                                   </label>
                                 ))}
                             </div>
+                            {activeScanState.missingRows.length > missingScanListLimit && <div className="progressive-list-control"><span>Mostrando {missingScanListLimit} de {activeScanState.missingRows.length} documentos sem OK.</span><button type="button" onClick={() => setMissingScanListLimit((current) => current + 50)}>Mostrar mais 50</button></div>}
                           </div>
                         )}
                       </div>
@@ -8386,13 +8397,15 @@ export default function Home() {
                         <article><small>PESO / VOLUMES</small><strong>{activeClosingAudit.weight.toLocaleString("pt-BR", { maximumFractionDigits: 2 })} kg</strong><p>{activeClosingAudit.volumes.toLocaleString("pt-BR")} volumes</p></article>
                         {usesScanForPartner(active.id) && <article><small>FORA POR FALTA DE BIPAGEM</small><strong>{activeScanState.missingRows.length}</strong><p>não entram na soma</p></article>}
                       </div>
-                      <details className="closing-audit-details">
+                      <details className="closing-audit-details" onToggle={(event) => setClosingAuditOpen(event.currentTarget.open)}>
                         <summary>Ver nota por nota e todos os valores</summary>
+                        {closingAuditOpen && <>
+                        {activeClosingRows.length > closingAuditLimit && <div className="progressive-list-control"><span>Mostrando {closingAuditLimit} de {activeClosingRows.length} linhas. Os totais acima continuam considerando todas.</span><button type="button" onClick={() => setClosingAuditLimit((current) => current + 100)}>Mostrar mais 100</button></div>}
                         <div className="closing-audit-table-wrap">
                           <table>
                             <thead><tr><th>NF</th><th>CTE</th><th>Status</th><th>Destinatário</th><th>Cidade</th><th>Frete base</th><th>TDE</th><th>TDA/TRT</th><th>Dedicado</th><th>Total que entra</th></tr></thead>
                             <tbody>
-                              {activeClosingRows.map((entry) => {
+                              {activeClosingRows.slice(0, closingAuditLimit).map((entry) => {
                                 const isComplement = normalized(entry.status) === "cf";
                                 const baseFreight = Math.max(0, entry.reportedTotal ?? entry.freight);
                                 return <tr className={isComplement ? "cf-row" : ""} key={`audit-${entry.id}`}>
@@ -8402,6 +8415,7 @@ export default function Home() {
                             </tbody>
                           </table>
                         </div>
+                        </>}
                       </details>
                     </section>
                   </div>
