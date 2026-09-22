@@ -12,6 +12,52 @@ type CloudEncoding = "gzip-base64" | "json";
 const CLOUD_STATE_ENDPOINT = "/api/cloud-state";
 const TRANSFER_CHUNK_SIZE = 700_000;
 
+let codecWorker: Worker | null = null;
+let nextCodecRequestId = 0;
+const codecRequests = new Map<number, {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+}>();
+
+function runCodecWorker<T>(request: Record<string, unknown>): Promise<T> | null {
+  if (typeof Worker === "undefined") return null;
+  try {
+    if (!codecWorker) {
+      codecWorker = new Worker(new URL("./cloud-codec.worker.ts", import.meta.url), { type: "module" });
+      codecWorker.onmessage = ({ data }: MessageEvent<{ id: number; result?: unknown; error?: string }>) => {
+        const pending = codecRequests.get(data.id);
+        if (!pending) return;
+        codecRequests.delete(data.id);
+        if (data.error) pending.reject(new Error(data.error));
+        else pending.resolve(data.result);
+      };
+      codecWorker.onerror = () => {
+        codecWorker?.terminate();
+        codecWorker = null;
+        codecRequests.forEach(({ reject }) => reject(new Error("Falha ao processar os dados em segundo plano.")));
+        codecRequests.clear();
+      };
+    }
+    const id = ++nextCodecRequestId;
+    return new Promise<T>((resolve, reject) => {
+      codecRequests.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      });
+      try {
+        codecWorker?.postMessage({ ...request, id });
+      } catch (error) {
+        codecRequests.delete(id);
+        reject(error instanceof Error ? error : new Error("Falha ao enviar os dados para segundo plano."));
+      }
+    });
+  } catch {
+    codecWorker?.terminate();
+    codecWorker = null;
+    return null;
+  }
+}
+
 export function isHostedSite() {
   if (typeof window === "undefined") return false;
   return !["localhost", "127.0.0.1", "0.0.0.0"].includes(
@@ -42,6 +88,10 @@ async function encodeState(value: unknown): Promise<{
   encoding: CloudEncoding;
   payload: string;
 }> {
+  const background = runCodecWorker<{ encoding: CloudEncoding; payload: string }>({ action: "encode", value });
+  if (background) {
+    try { return await background; } catch { /* Compatibilidade: usa a linha principal. */ }
+  }
   const json = JSON.stringify(value);
   if (typeof CompressionStream === "undefined")
     return { encoding: "json", payload: json };
@@ -56,6 +106,10 @@ async function encodeState(value: unknown): Promise<{
 }
 
 async function decodeState<T>(encoding: CloudEncoding, payload: string) {
+  const background = runCodecWorker<T>({ action: "decode", encoding, payload });
+  if (background) {
+    try { return await background; } catch { /* Compatibilidade: usa a linha principal. */ }
+  }
   let json = payload;
   if (encoding === "gzip-base64") {
     if (typeof DecompressionStream === "undefined")

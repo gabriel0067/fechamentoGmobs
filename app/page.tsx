@@ -19,23 +19,6 @@ import {
   type CloudStateKey,
 } from "./cloud-storage";
 import {
-  commissionTotal,
-  exportClosingXlsx,
-  exportCoverDetailedPdf,
-  exportCoverPdf,
-  exportCoversReportXlsx,
-  exportBillingPdf,
-  exportFinancialPdf,
-  exportDriverClosingPdf,
-  exportMaexAdditionalXlsx,
-  exportPajussaraMissingXlsx,
-  normalizeCnpj,
-  normalizeInvoiceKey,
-  readBilledClosingFile,
-  readClosingFile,
-  readPajussaraClosingFile,
-  readRomaneioFile,
-  readTdeFile,
   type ImportedRomaneioRow,
   type DriverClosingDay,
   type DriverClosingDiscount,
@@ -44,6 +27,15 @@ import {
   type CoverDocumentExport,
   type PajussaraClosingDocument,
 } from "./excel";
+import { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
+
+let excelModulePromise: Promise<typeof import("./excel")> | null = null;
+function loadExcelModule() {
+  return excelModulePromise ||= import("./excel").catch((error) => {
+    excelModulePromise = null;
+    throw error;
+  });
+}
 import {
   matchesMaexAdditionalCutoff,
   matchesNormalClosingPeriod,
@@ -2472,6 +2464,13 @@ export default function Home() {
   const romaneioDocumentMatches = useMemo(() => {
     const mdes = new Map<string, RomaneioReferenceEntry[]>();
     const ctes = new Map<string, RomaneioReferenceEntry[]>();
+    const orderedMatchCache = new Map<string, RomaneioReferenceEntry[]>();
+    const addReference = (index: Map<string, RomaneioReferenceEntry[]>, key: string, entry: RomaneioReferenceEntry) => {
+      if (!key) return;
+      const bucket = index.get(key);
+      if (bucket) bucket.push(entry);
+      else index.set(key, [entry]);
+    };
     const references = [
       ...new Map(
         [
@@ -2486,9 +2485,9 @@ export default function Home() {
       const mde = numericDocumentId(entry.mde);
       const cte = numericDocumentId(entry.cte);
       const cteFromKey = cteNumberFromAccessKey(entry.cteKey);
-      if (mde) mdes.set(mde, [...(mdes.get(mde) || []), entry]);
-      if (cte) ctes.set(cte, [...(ctes.get(cte) || []), entry]);
-      if (cteFromKey) ctes.set(cteFromKey, [...(ctes.get(cteFromKey) || []), entry]);
+      addReference(mdes, mde, entry);
+      addReference(ctes, cte, entry);
+      if (cteFromKey !== cte) addReference(ctes, cteFromKey, entry);
     });
     const matches = new Map<
       string,
@@ -2510,15 +2509,21 @@ export default function Home() {
             : ctes.get(reference.number) || []
           : [];
         const tripDay = row.emissionDate.slice(0, 10);
-        const orderedEntries = [...matchedEntries].sort((left, right) => {
+        const orderKey = `${reference?.type || "Documento"}|${reference?.number || document}|${tripDay}`;
+        let orderedEntries = orderedMatchCache.get(orderKey);
+        if (!orderedEntries) {
+          const tripTime = /^\d{4}-\d{2}-\d{2}$/.test(tripDay)
+            ? Date.parse(`${tripDay}T00:00:00`) : NaN;
           const rank = (entry: RomaneioReferenceEntry) => {
             const day = String(entry.date || entry.deliveryDate || "").slice(0, 10);
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{4}-\d{2}-\d{2}$/.test(tripDay)) return Number.MAX_SAFE_INTEGER;
-            const distance = Math.abs(Date.parse(`${tripDay}T00:00:00`) - Date.parse(`${day}T00:00:00`));
-            return distance + (day > tripDay ? 86400000 : 0);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(tripTime))
+              return Number.MAX_SAFE_INTEGER;
+            return Math.abs(tripTime - Date.parse(`${day}T00:00:00`)) +
+              (day > tripDay ? 86400000 : 0);
           };
-          return rank(left) - rank(right);
-        });
+          orderedEntries = [...matchedEntries].sort((left, right) => rank(left) - rank(right));
+          orderedMatchCache.set(orderKey, orderedEntries);
+        }
         matches.set(matchKey, {
           type: reference?.type || "Documento",
           number: reference?.number || document,
@@ -2531,6 +2536,7 @@ export default function Home() {
   }, [entriesWithTde, romaneioEntries, romaneioReferenceEntries]);
   const romaneioDailyGroups = useMemo(() => {
     const groups = new Map<string, RomaneioDailyGroup>();
+    const documentIndexes = new Map<string, Map<string, RomaneioDailyDocument>>();
     romaneioEntries.forEach((row) => {
       const day = row.emissionDate.slice(0, 10) || "sem-data";
       const driverIdentity = normalizeCnpj(row.cpf) || normalized(row.driver);
@@ -2580,9 +2586,12 @@ export default function Home() {
 
       row.documents.forEach((document) => {
         const documentKey = romaneioDocumentKey(document);
-        const existing = current.documents.find(
-          (candidate) => candidate.key === documentKey,
-        );
+        let documentIndex = documentIndexes.get(key);
+        if (!documentIndex) {
+          documentIndex = new Map();
+          documentIndexes.set(key, documentIndex);
+        }
+        const existing = documentIndex.get(documentKey);
         if (existing) {
           if (row.route && !existing.routes.includes(row.route))
             existing.routes.push(row.route);
@@ -2611,7 +2620,7 @@ export default function Home() {
           ]),
         ].filter(Boolean) as string[];
         const grossFreight = linked?.reportedTotal ?? linked?.freight ?? 0;
-        current.documents.push({
+        const dailyDocument: RomaneioDailyDocument = {
           key: documentKey,
           document,
           referenceType: match?.type || "Documento",
@@ -2630,7 +2639,9 @@ export default function Home() {
             grossFreight * ROMANEIO_PRODUCTION_FACTOR,
           ),
           identifiers: [...new Set(identifiers)],
-        });
+        };
+        current.documents.push(dailyDocument);
+        documentIndex.set(documentKey, dailyDocument);
       });
       groups.set(key, current);
     });
@@ -2685,8 +2696,9 @@ export default function Home() {
       .sort((left, right) => left.order - right.order)
       .map(({ group, document }) => ({ group, document }));
   }
+  const hasRomaneioSearch = Boolean(romaneioSearch.trim());
   const romaneioCheckingSearchIndex = useMemo(
-    () => !romaneioSearch.trim() ? null : new Map(romaneioDailyGroups.map((group) => [
+    () => !hasRomaneioSearch ? null : new Map(romaneioDailyGroups.map((group) => [
       group.key,
       normalized([
           group.driver,
@@ -2706,7 +2718,7 @@ export default function Home() {
           ]),
         ].join(" ")),
     ] as const)),
-    [romaneioDailyGroups, romaneioSearch],
+    [romaneioDailyGroups, hasRomaneioSearch],
   );
   const visibleRomaneioGroups = useMemo(() => {
     const term = normalized(romaneioSearch);
@@ -2717,8 +2729,9 @@ export default function Home() {
         : group.key === focusedRomaneioKey,
     );
   }, [romaneioSearch, focusedRomaneioKey, romaneioCheckingSearchIndex, romaneioDailyGroups]);
+  const hasRomaneioFullSearch = Boolean(romaneioFullSearch.trim());
   const romaneioFullSearchIndex = useMemo(
-    () => !romaneioFullSearch.trim() ? null : new Map(romaneioDailyGroups.map((group) => [
+    () => !hasRomaneioFullSearch ? null : new Map(romaneioDailyGroups.map((group) => [
       group.key,
       normalized([
           group.driver,
@@ -2749,7 +2762,7 @@ export default function Home() {
     romaneioDocumentStatuses,
     romaneioGroupNotes,
     romaneioRouteLabels,
-    romaneioFullSearch,
+    hasRomaneioFullSearch,
     ],
   );
   const visibleFullRomaneioGroups = useMemo(() => {
@@ -2787,19 +2800,30 @@ export default function Home() {
     [romaneioDocumentStatuses],
   );
   const visibleRetainedRomaneioDocuments = useMemo(() => {
+    if (tab !== "romaneios" || romaneioView !== "retained") return [];
     const driver = normalized(retainedDriverFilter);
     const partner = normalized(retainedPartnerFilter);
+    const documentsByIdentifier = new Map<string, { document: RomaneioDailyDocument; order: number }>();
+    if (partner) {
+      let order = 0;
+      for (const group of romaneioDailyGroups)
+        for (const document of group.documents) {
+          for (const identifier of document.identifiers)
+            if (!documentsByIdentifier.has(identifier)) documentsByIdentifier.set(identifier, { document, order });
+          order++;
+        }
+    }
     return retainedRomaneioDocuments.filter((record) => {
-      const currentDocument = romaneioDailyGroups
-        .flatMap((group) => group.documents)
-        .find((document) =>
-          document.identifiers.some((identifier) => record.identifiers.includes(identifier)),
-        );
+      if (driver && !normalized(record.driver).includes(driver)) return false;
+      if (!partner) return true;
+      const currentDocument = record.identifiers
+        .map((identifier) => documentsByIdentifier.get(identifier))
+        .filter((match): match is { document: RomaneioDailyDocument; order: number } => Boolean(match))
+        .sort((left, right) => left.order - right.order)[0]?.document;
       const partnerNames = currentDocument?.linkedEntries.map((entry) => entry.partnerName).join(" ") || "";
-      return (!driver || normalized(record.driver).includes(driver)) &&
-        (!partner || normalized(partnerNames).includes(partner));
+      return normalized(partnerNames).includes(partner);
     });
-  }, [retainedDriverFilter, retainedPartnerFilter, retainedRomaneioDocuments, romaneioDailyGroups]);
+  }, [tab, romaneioView, retainedDriverFilter, retainedPartnerFilter, retainedRomaneioDocuments, romaneioDailyGroups]);
   const retainedDriverRanking = useMemo(() => {
     const drivers = new Map<string, { driver: string; ctes: Set<string> }>();
     retainedRomaneioDocuments.forEach((record) => {
@@ -2822,7 +2846,9 @@ export default function Home() {
       .filter((record) => record.situation === "driver-missing")
       .forEach((record) => {
         const driverKey = normalized(record.driver);
-        records.set(driverKey, [...(records.get(driverKey) || []), record]);
+        const matches = records.get(driverKey);
+        if (matches) matches.push(record);
+        else records.set(driverKey, [record]);
       });
     return records;
   }, [romaneioDocumentStatuses]);
@@ -2894,6 +2920,7 @@ export default function Home() {
     [driverClosingDiscountPlans],
   );
   const driverClosingSummaries = useMemo<DriverClosingSummary[]>(() => {
+    if (tab !== "romaneios" || romaneioSection !== "closing") return [];
     const withinPeriod = (day: string) =>
       (!driverClosingFrom || day >= driverClosingFrom) &&
       (!driverClosingTo || day <= driverClosingTo);
@@ -3011,6 +3038,8 @@ export default function Home() {
       })
       .sort((a, b) => a.driver.localeCompare(b.driver, "pt-BR"));
   }, [
+    tab,
+    romaneioSection,
     driverClosingFrom,
     driverClosingTo,
     romaneioDailyGroups,
@@ -3259,10 +3288,10 @@ export default function Home() {
     );
   }, [filtered, maexAdditionalOpenRows.length]);
   const pajussaraComparison = useMemo(() => {
-    if (!pajussaraClosing) return null;
+    if (tab !== "preview" || !pajussaraClosing) return null;
     const rows = partners.find((partner) => partner.id === "pajucara")?.rows || [];
     return comparePajussaraDocuments(rows, pajussaraClosing.documents);
-  }, [pajussaraClosing, partners]);
+  }, [tab, pajussaraClosing, partners]);
   const active = partners.find((p) => p.id === selectedPartner) || partners[0];
   const scannedLookupByPartner = useMemo(() => {
     const lookup = new Map<string, Set<string>>();
@@ -3361,12 +3390,13 @@ export default function Home() {
   }, [manualTdeRates]);
   const unidentifiedGroups = useMemo(() => {
     const groups = new Map<string, Entry[]>();
-    filtered
-      .filter((entry) => entry.partnerId === "unidentified")
-      .forEach((entry) => {
-        const key = unidentifiedKey(entry);
-        groups.set(key, [...(groups.get(key) || []), entry]);
-      });
+    filtered.forEach((entry) => {
+      if (entry.partnerId !== "unidentified") return;
+      const key = unidentifiedKey(entry);
+      const matches = groups.get(key);
+      if (matches) matches.push(entry);
+      else groups.set(key, [entry]);
+    });
     return [...groups].map(([key, rows]) => ({ key, rows }));
   }, [filtered]);
 
@@ -4378,7 +4408,7 @@ export default function Home() {
     setImportingTde(true);
     setMessage("");
     try {
-      const result = await readTdeFile(file);
+      const result = await (await loadExcelModule()).readTdeFile(file);
       const imported = new Map<string, TdeRateRecord>();
       result.clients.forEach((client) => {
         client.rates.forEach((rate) => {
@@ -4434,7 +4464,7 @@ export default function Home() {
     setImportingPajussara(true);
     setMessage("");
     try {
-      const result = await readPajussaraClosingFile(file);
+      const result = await (await loadExcelModule()).readPajussaraClosingFile(file);
       const info: PajussaraClosingInfo = {
         file: file.name,
         sheet: result.sheet,
@@ -4547,7 +4577,7 @@ export default function Home() {
 
     for (const file of files) {
       try {
-        const result = await readBilledClosingFile(file);
+        const result = await (await loadExcelModule()).readBilledClosingFile(file);
         const partner = identifyPartner(result.partner);
         if (partner.id === "unidentified")
           throw new Error("transportadora não identificada");
@@ -4803,7 +4833,7 @@ export default function Home() {
 
     for (const file of files) {
       try {
-        const result = await readRomaneioFile(file);
+        const result = await (await loadExcelModule()).readRomaneioFile(file);
         result.rows.forEach((row) => {
           const key = romaneioCompleteRowKey(row);
           if (seen.has(key)) {
@@ -4874,7 +4904,7 @@ export default function Home() {
     setImporting(true);
     setMessage("");
     try {
-      const result = await readClosingFile(file);
+      const result = await (await loadExcelModule()).readClosingFile(file);
       const seen = new Set<string>();
       const completeRows = new Set<string>();
       const tdeMap = effectiveTdeRates(tdeRates);
@@ -5068,12 +5098,12 @@ export default function Home() {
     total: totalOf(entry),
   });
 
-  function exportPajussaraMissing() {
+  async function exportPajussaraMissing() {
     if (!pajussaraClosing || !pajussaraComparison?.missing.length)
       return setMessage(
         "Não há documentos faltantes da Pajuçara para exportar.",
       );
-    exportPajussaraMissingXlsx(
+    (await loadExcelModule()).exportPajussaraMissingXlsx(
       pajussaraComparison.missing.map((entry) =>
         toExportRow(entry, "Pajuçara"),
       ),
@@ -5134,7 +5164,7 @@ export default function Home() {
     playRomaneioAttentionSound();
   }
 
-  function finishDriverClosingExport(withDiscount: boolean) {
+  async function finishDriverClosingExport(withDiscount: boolean) {
     if (!selectedDriverClosingReports.length) {
       setDriverClosingDiscountPrompt(null);
       return;
@@ -5168,6 +5198,7 @@ export default function Home() {
       }
       return { ...driver, discounts };
     });
+    const { exportDriverClosingPdf } = await loadExcelModule();
     reports.forEach((driver) => exportDriverClosingPdf(driver));
     setDriverClosingDiscountPlans((current) => {
       const next = { ...current };
@@ -5599,15 +5630,15 @@ export default function Home() {
     setMessage("Conta removida deste mês. O nome continuará disponível para os próximos lançamentos.");
   }
 
-  function generateBillingPdf() {
+  async function generateBillingPdf() {
     if (billingFilter === "all" || !visibleBillingInvoices.length) return;
-    exportBillingPdf(billingPeriodLabel(billingFilter), visibleBillingInvoices.map((invoice) => ({ partner: invoice.partnerName, value: invoice.value, createdBy: invoice.createdBy || "Não informado" })));
+    (await loadExcelModule()).exportBillingPdf(billingPeriodLabel(billingFilter), visibleBillingInvoices.map((invoice) => ({ partner: invoice.partnerName, value: invoice.value, createdBy: invoice.createdBy || "Não informado" })));
   }
 
-  function generateFinancialPdf() {
+  async function generateFinancialPdf() {
     if (!visibleFinancialEntries.length) return;
     const monthLabel = new Date(`${financialMonth}-01T12:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
-    exportFinancialPdf(monthLabel, visibleFinancialEntries.map((entry) => ({ account: entry.accountName, value: entry.value, paidAt: entry.paidAt })));
+    (await loadExcelModule()).exportFinancialPdf(monthLabel, visibleFinancialEntries.map((entry) => ({ account: entry.accountName, value: entry.value, paidAt: entry.paidAt })));
   }
 
   const openPickupRecords = useMemo(
@@ -5854,11 +5885,11 @@ export default function Home() {
     setMessage(`${selected.size} capa(s) excluída(s) do relatório.`);
   }
 
-  function exportCurrentCoverDetails() {
+  async function exportCurrentCoverDetails() {
     if (!currentCoverDraft.length) return;
     const editing = covers.find((cover) => cover.id === editingCoverId);
     const partnerName = coverPartners.find((partner) => partner.id === effectiveCoverPartnerId)?.name || editing?.partnerName || "Transportadora";
-    exportCoverDetailedPdf({
+    (await loadExcelModule()).exportCoverDetailedPdf({
       id: editing?.id || "RASCUNHO",
       sequenceNumber: editing?.sequenceNumber,
       partnerId: effectiveCoverPartnerId,
@@ -5870,7 +5901,7 @@ export default function Home() {
     });
   }
 
-  function generateCover() {
+  async function generateCover() {
     if (coverChoiceOpen || !effectiveCoverPartnerId || coverSection === "report" || !currentCoverDraft.length) {
       setMessage("Bipe ao menos uma nota fiscal antes de gerar a capa.");
       return;
@@ -5880,6 +5911,7 @@ export default function Home() {
       setMessage("A sessão não possui um operador identificado. Saia e informe o nome novamente.");
       return;
     }
+    const { exportCoverPdf } = await loadExcelModule();
     const partnerName = coverPartners.find((partner) => partner.id === effectiveCoverPartnerId)?.name || "Transportadora";
     const editing = covers.find((cover) => cover.id === editingCoverId);
     const sequenceNumber = editing?.sequenceNumber || Math.max(
@@ -5912,7 +5944,8 @@ export default function Home() {
     playRomaneioSuccessSound();
   }
 
-  function exportSelected() {
+  async function exportSelected() {
+    const { exportClosingXlsx, exportMaexAdditionalXlsx } = await loadExcelModule();
     const chosen = partners.filter(
       (p) => selectedExports.includes(p.id) && p.id !== "unidentified",
     );
@@ -7543,7 +7576,7 @@ export default function Home() {
                   <div><small>HISTÓRICO DE CAPAS</small><h3>Filtre, selecione a capa e gere o relatório</h3></div>
                   <label>De<input type="date" value={coverReportFrom} onChange={(event) => setCoverReportFrom(event.target.value)} /></label>
                   <label>Até<input type="date" value={coverReportTo} onChange={(event) => setCoverReportTo(event.target.value)} /></label>
-                  <button type="button" className="primary" disabled={!selectedReportCovers.length} onClick={() => exportCoversReportXlsx(selectedReportCovers, coverReportFrom, coverReportTo)}>Gerar relatório ({selectedReportCovers.length})</button>
+                  <button type="button" className="primary" disabled={!selectedReportCovers.length} onClick={async () => (await loadExcelModule()).exportCoversReportXlsx(selectedReportCovers, coverReportFrom, coverReportTo)}>Gerar relatório ({selectedReportCovers.length})</button>
                   <button type="button" className="danger" disabled={!selectedReportCovers.length} onClick={() => setCoverDeleteConfirmation(true)}>Excluir selecionadas</button>
                 </section>
                 <section className="cover-report-search">
@@ -7558,8 +7591,8 @@ export default function Home() {
                       <div><strong>{cover.partnerName}</strong><small>{new Date(cover.createdAt).toLocaleDateString("pt-BR")} · {cover.documents.length} item(ns) · {cover.id} · Gerado por {cover.generatedBy || "não informado"}</small>{coverReportSearch && cover.documents.filter((document) => matchesCoverDocumentSearch(document, coverReportSearch)).map((document, index) => <small className="cover-match" key={`${cover.id}-match-${index}`}>{document.manualCoverNumber ? `Encontrado: capa manual ${document.manualCoverNumber}` : `Encontrado: NF ${document.invoice || "-"} · CTE ${document.cte || "-"} · Minuta ${document.mde || "-"}`}</small>)}</div>
                       <div className="cover-history-actions">
                         <button type="button" onClick={() => startEditingCover(cover)}>Editar</button>
-                        <button type="button" onClick={() => exportCoversReportXlsx([cover], cover.createdAt.slice(0, 10), cover.createdAt.slice(0, 10))}>Gerar Excel</button>
-                        <button type="button" onClick={() => exportCoverPdf(cover)}>Baixar capa</button>
+                        <button type="button" onClick={async () => (await loadExcelModule()).exportCoversReportXlsx([cover], cover.createdAt.slice(0, 10), cover.createdAt.slice(0, 10))}>Gerar Excel</button>
+                        <button type="button" onClick={async () => (await loadExcelModule()).exportCoverPdf(cover)}>Baixar capa</button>
                       </div>
                     </div>
                   )) : <p className="cover-empty">Nenhuma capa salva neste período.</p>}

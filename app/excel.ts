@@ -1,5 +1,7 @@
 import XLSX from "xlsx-js-style";
 import { jsPDF } from "jspdf";
+import { normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
+export { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
 
 export type BillingPdfRow = { partner: string; value: number; createdBy: string };
 export type FinancialPdfRow = { account: string; value: number; paidAt: string };
@@ -328,25 +330,6 @@ const toNumber = (value: unknown) => {
     : raw;
   const parsed = Number(normalized.replace(/[^0-9.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : 0;
-};
-export const normalizeCnpj = (value: unknown) => {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  const expanded = /e[+-]?\d+$/i.test(raw.replace(",", "."))
-    ? String(Math.trunc(Number(raw.replace(",", "."))))
-    : raw;
-  const digits = expanded.replace(/\D/g, "");
-  if (!digits || digits.length > 14) return "";
-  return digits.padStart(14, "0");
-};
-export const normalizeInvoiceKey = (value: unknown) => {
-  const raw = String(value ?? "").trim();
-  const withSeries = raw.match(
-    /^0*(\d{3,})\s*(?:-|\/|\s+s[eé]rie\s+|\s+)\s*0*\d{1,2}\s*$/i,
-  );
-  const firstPart = withSeries?.[1] || raw;
-  const digits = firstPart.replace(/\D/g, "").replace(/^0+/, "");
-  return digits || (firstPart.includes("0") ? "0" : "");
 };
 const optionalNumber = (value: unknown) => {
   if (value === null || value === undefined || String(value).trim() === "")
@@ -1027,11 +1010,6 @@ export async function readPajussaraClosingFile(file: File) {
 }
 
 export type ExportRow = ImportedRow & { total: number };
-export const commissionTotal = (row: {
-  reportedTotal?: number;
-  freight: number;
-  tde: number;
-}) => Math.max(0, (row.reportedTotal ?? row.freight) + row.tde);
 const baseFreightOf = (row: ExportRow) =>
   Math.max(0, row.reportedTotal ?? row.freight);
 
