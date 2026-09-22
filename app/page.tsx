@@ -13,6 +13,7 @@ import {
 } from "react";
 import {
   getCloudStateVersion,
+  getCloudStateVersions,
   isHostedSite,
   loadCloudStateRecord,
   saveCloudState,
@@ -1012,13 +1013,16 @@ function useCloudStateSync<T>(
   skipSaveRef: { current: Set<CloudStateKey> },
   onQueue: () => void,
   onStart: () => void,
+  getExpectedVersion: (stateKey: CloudStateKey) => string,
   onFinish: (
     stateKey: CloudStateKey,
     succeeded: boolean,
     version?: string,
+    error?: Error,
   ) => void,
 ) {
   const enabledOnce = useRef(false);
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     if (!enabled) {
       enabledOnce.current = false;
@@ -1047,12 +1051,16 @@ function useCloudStateSync<T>(
         if (cancelled) return;
         started = true;
         onStart();
-        void saveCloudState(stateKey, value)
-          .then((version) => {
+        const save = saveChainRef.current.then(async () => {
+          try {
+            const version = await saveCloudState(stateKey, value, getExpectedVersion(stateKey));
             void writeCloudStateCache(stateKey, version, value).catch(() => undefined);
             onFinish(stateKey, true, version);
-          })
-          .catch(() => onFinish(stateKey, false));
+          } catch (error) {
+            onFinish(stateKey, false, undefined, error instanceof Error ? error : undefined);
+          }
+        });
+        saveChainRef.current = save;
       }, idleTimeout);
     }, saveDelay);
     return () => {
@@ -1063,6 +1071,7 @@ function useCloudStateSync<T>(
     };
   }, [
     enabled,
+    getExpectedVersion,
     onFinish,
     onQueue,
     onStart,
@@ -1297,6 +1306,7 @@ export default function Home() {
   const [cloudReady, setCloudReady] = useState(false);
   const [cloudHosted, setCloudHosted] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>("local");
+  const [cloudFailureMessage, setCloudFailureMessage] = useState("");
   const [cloudRetry, setCloudRetry] = useState(0);
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [activeOperator, setActiveOperator] = useState("");
@@ -1923,13 +1933,13 @@ export default function Home() {
             dedicatedRecords: [],
             financialEntries: [],
             financialAccountNames: [],
-          });
+          }, "");
         }
         const scans = scansRecord?.value;
         if (scans && typeof scans === "object") setScannedCtes(scans);
         else setScannedCtes({});
         cloudVersionsRef.current.scans =
-          scansRecord?.version || (await saveCloudState("scans", {}));
+          scansRecord?.version || (await saveCloudState("scans", {}, ""));
 
         const tde = tdeRecord?.value;
         if (tde?.rates && Array.isArray(tde.rates)) {
@@ -1946,20 +1956,20 @@ export default function Home() {
         }
         cloudVersionsRef.current.tde =
           tdeRecord?.version ||
-          (await saveCloudState("tde", { rates: [], importInfo: null }));
+          (await saveCloudState("tde", { rates: [], importInfo: null }, ""));
 
         const maex = maexRecord?.value;
         if (maex && typeof maex === "object") setMaexAdditionalSenders(maex);
         else setMaexAdditionalSenders({});
         cloudVersionsRef.current.maex =
-          maexRecord?.version || (await saveCloudState("maex", {}));
+          maexRecord?.version || (await saveCloudState("maex", {}, ""));
 
         const billed = billedRecord?.value;
         if (billed && typeof billed === "object")
           setBilledDocuments(normalizeBilledDocuments(billed));
         else setBilledDocuments({});
         cloudVersionsRef.current.billed =
-          billedRecord?.version || (await saveCloudState("billed", {}));
+          billedRecord?.version || (await saveCloudState("billed", {}, ""));
 
         const romaneios = romaneiosRecord?.value;
         if (Array.isArray(romaneios?.entries)) {
@@ -1992,7 +2002,7 @@ export default function Home() {
             manualFreights: {},
             pickupQuantities: {},
             driverDiscountPlans: {},
-          }));
+          }, ""));
 
         if (!cancelled) {
           cloudSaveFailedRef.current = false;
@@ -2193,16 +2203,22 @@ export default function Home() {
   );
   const markCloudSaveStart = useCallback(() => {
     lastLocalChangeRef.current = Date.now();
-    if (cloudWritesRef.current === 0) cloudSaveFailedRef.current = false;
     cloudWritesRef.current += 1;
     setCloudStatus("saving");
   }, []);
   const markCloudChangeQueued = useCallback(() => {
     lastLocalChangeRef.current = Date.now();
   }, []);
+  const getExpectedCloudVersion = useCallback(
+    (key: CloudStateKey) => cloudVersionsRef.current[key] || "",
+    [],
+  );
   const markCloudSaveFinish = useCallback(
-    (stateKey: CloudStateKey, succeeded: boolean, version?: string) => {
-      if (!succeeded) cloudSaveFailedRef.current = true;
+    (stateKey: CloudStateKey, succeeded: boolean, version?: string, error?: Error) => {
+      if (!succeeded) {
+        cloudSaveFailedRef.current = true;
+        setCloudFailureMessage(error?.message || "Falha ao gravar no banco. Os dados anteriores foram preservados.");
+      }
       if (succeeded && version) cloudVersionsRef.current[stateKey] = version;
       cloudWritesRef.current = Math.max(0, cloudWritesRef.current - 1);
       if (cloudWritesRef.current === 0)
@@ -2217,6 +2233,7 @@ export default function Home() {
     skipCloudSaveRef,
     markCloudChangeQueued,
     markCloudSaveStart,
+    getExpectedCloudVersion,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2226,6 +2243,7 @@ export default function Home() {
     skipCloudSaveRef,
     markCloudChangeQueued,
     markCloudSaveStart,
+    getExpectedCloudVersion,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2235,6 +2253,7 @@ export default function Home() {
     skipCloudSaveRef,
     markCloudChangeQueued,
     markCloudSaveStart,
+    getExpectedCloudVersion,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2244,6 +2263,7 @@ export default function Home() {
     skipCloudSaveRef,
     markCloudChangeQueued,
     markCloudSaveStart,
+    getExpectedCloudVersion,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2253,6 +2273,7 @@ export default function Home() {
     skipCloudSaveRef,
     markCloudChangeQueued,
     markCloudSaveStart,
+    getExpectedCloudVersion,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2262,6 +2283,7 @@ export default function Home() {
     skipCloudSaveRef,
     markCloudChangeQueued,
     markCloudSaveStart,
+    getExpectedCloudVersion,
     markCloudSaveFinish,
   );
   useEffect(() => {
@@ -2301,9 +2323,7 @@ export default function Home() {
       "romaneios",
     ];
     try {
-      const versions = await Promise.all(
-        keys.map(async (key) => [key, await getCloudStateVersion(key)] as const),
-      );
+      const currentVersions = await getCloudStateVersions();
       if (
         cloudWritesRef.current > 0 ||
         Object.values(romaneioDocumentDrafts).some((drafts) =>
@@ -2313,12 +2333,9 @@ export default function Home() {
         Date.now() - lastUserInteractionRef.current < 5_000
       )
         return;
-      const changedKeys = versions
-        .filter(
-          ([key, version]) =>
-            version !== undefined && version !== cloudVersionsRef.current[key],
-        )
-        .map(([key]) => key);
+      const changedKeys = keys.filter(
+        (key) => currentVersions[key] !== undefined && currentVersions[key] !== cloudVersionsRef.current[key],
+      );
       if (!changedKeys.length) return;
 
       for (const key of changedKeys) {
@@ -6193,28 +6210,19 @@ export default function Home() {
 
     setCloudStatus("loading");
     try {
-      const versions = await Promise.all([
-        saveCloudState("closing", closingCloudState),
-        saveCloudState("scans", scannedCtes),
-        saveCloudState("tde", tdeCloudState),
-        saveCloudState("maex", maexAdditionalSenders),
-        saveCloudState("billed", billedDocuments),
-        saveCloudState("romaneios", romaneiosCloudState),
-      ]);
-      ([
-        "closing",
-        "scans",
-        "tde",
-        "maex",
-        "billed",
-        "romaneios",
-      ] as CloudStateKey[])
-        .forEach((key, index) => {
-          cloudVersionsRef.current[key] = versions[index];
-        });
+      const pending: [CloudStateKey, unknown][] = [
+        ["closing", closingCloudState], ["scans", scannedCtes],
+        ["tde", tdeCloudState], ["maex", maexAdditionalSenders],
+        ["billed", billedDocuments], ["romaneios", romaneiosCloudState],
+      ];
+      for (const [key, value] of pending) {
+        cloudVersionsRef.current[key] = await saveCloudState(key, value, getExpectedCloudVersion(key));
+      }
       cloudSaveFailedRef.current = false;
+      setCloudFailureMessage("");
       setCloudStatus("ready");
-    } catch {
+    } catch (error) {
+      setCloudFailureMessage(error instanceof Error ? error.message : "Falha ao gravar no banco.");
       setCloudStatus("error");
     }
   }
@@ -6270,7 +6278,7 @@ export default function Home() {
           </h1>
           <p>
             {cloudStatus === "error"
-              ? "Para evitar informações diferentes entre computadores, o sistema fica bloqueado até a conexão voltar."
+              ? cloudFailureMessage || "Para evitar informações diferentes entre computadores, o sistema fica bloqueado até a conexão voltar."
               : "Aguarde. Nenhum dado local será usado no lugar do banco."}
           </p>
           {cloudStatus === "error" && (

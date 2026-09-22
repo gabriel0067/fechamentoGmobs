@@ -6,7 +6,8 @@ export const runtime = "nodejs";
 const OWNER = "shared:fechamentos-gmobs";
 const CHUNK_SIZE = 700_000;
 const MAX_CHUNKS = 100;
-const KEYS = new Set(["closing", "scans", "tde", "maex", "billed", "romaneios"]);
+const ALL_KEYS = ["closing", "scans", "tde", "maex", "billed", "romaneios"];
+const KEYS = new Set(ALL_KEYS);
 const ENCODINGS = new Set(["gzip-base64", "json"]);
 let client: ReturnType<typeof neon> | undefined;
 let uploadSchemaReady: Promise<void> | undefined;
@@ -71,6 +72,18 @@ export async function HEAD(request: Request) {
 }
 
 export async function GET(request: Request) {
+  if (new URL(request.url).searchParams.get("versions") === "1") {
+    if (!(await authenticatedUsername(request)))
+      return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
+    try {
+      const rows = await sql().query(
+        "SELECT state_key, version FROM cloud_state_records WHERE owner_id = $1 AND state_key IN ('closing', 'scans', 'tde', 'maex', 'billed', 'romaneios')",
+        [OWNER],
+      ) as { state_key: string; version: string }[];
+      return Response.json(Object.fromEntries(rows.map((row) => [row.state_key, row.version])),
+        { headers: { "cache-control": "no-store" } });
+    } catch (error) { return failure(error); }
+  }
   const access = await check(request);
   if (access.response) return access.response;
   const url = new URL(request.url);
@@ -119,11 +132,11 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   const access = await check(request);
   if (access.response) return access.response;
-  let input: { uploadId?: string; chunkCount?: number; encoding?: string };
+  let input: { uploadId?: string; chunkCount?: number; encoding?: string; expectedVersion?: string };
   try { input = await request.json(); }
   catch { return Response.json({ error: "Confirmação inválida." }, { status: 400 }); }
-  const { uploadId, chunkCount, encoding } = input;
-  if (!uploadId || !/^[0-9a-f-]{36}$/i.test(uploadId) || !Number.isInteger(chunkCount) || !chunkCount || chunkCount > MAX_CHUNKS || !encoding || !ENCODINGS.has(encoding))
+  const { uploadId, chunkCount, encoding, expectedVersion } = input;
+  if (!uploadId || !/^[0-9a-f-]{36}$/i.test(uploadId) || !Number.isInteger(chunkCount) || !chunkCount || chunkCount > MAX_CHUNKS || !encoding || !ENCODINGS.has(encoding) || typeof expectedVersion !== "string")
     return Response.json({ error: "Confirmação inválida." }, { status: 400 });
   try {
     await ensureUploadSchema();
@@ -133,14 +146,19 @@ export async function PUT(request: Request) {
        FROM cloud_state_upload_chunks
        WHERE owner_id = $1 AND state_key = $2 AND upload_id = $3 AND encoding = $4
        HAVING count(*) = $6 AND min(chunk_index) = 0 AND max(chunk_index) = $6 - 1
+          AND ($7 = '' OR EXISTS (
+            SELECT 1 FROM cloud_state_records current_record
+            WHERE current_record.owner_id = $1 AND current_record.state_key = $2
+              AND current_record.version = $7))
        ON CONFLICT (owner_id, state_key)
        DO UPDATE SET version = EXCLUDED.version, encoding = EXCLUDED.encoding,
                      payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+       WHERE cloud_state_records.version = $7
        RETURNING version`,
-      [OWNER, access.key, uploadId, encoding, new Date().toISOString(), chunkCount],
+      [OWNER, access.key, uploadId, encoding, new Date().toISOString(), chunkCount, expectedVersion],
     ) as Record<string, unknown>[];
     if (!rows.length)
-      return Response.json({ error: "Envio incompleto; os dados anteriores foram preservados." }, { status: 409 });
+      return Response.json({ error: "Os dados foram alterados por outra pessoa ou o envio está incompleto. Nenhum dado foi substituído." }, { status: 409 });
     await sql().query(
       "DELETE FROM cloud_state_upload_chunks WHERE owner_id = $1 AND state_key = $2 AND upload_id = $3",
       [OWNER, access.key, uploadId],

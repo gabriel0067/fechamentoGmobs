@@ -177,9 +177,16 @@ export async function getCloudStateVersion(stateKey: CloudStateKey) {
   return response.headers.get("x-gmobs-version") || "";
 }
 
+export async function getCloudStateVersions(): Promise<Partial<Record<CloudStateKey, string>>> {
+  const response = await fetch(`${CLOUD_STATE_ENDPOINT}?versions=1`, { cache: "no-store" });
+  if (!response.ok) throw cloudError(response);
+  return response.json();
+}
+
 export async function saveCloudState(
   stateKey: CloudStateKey,
   value: unknown,
+  expectedVersion: string,
 ) {
   const { encoding, payload } = await encodeState(value);
   const uploadId = crypto.randomUUID();
@@ -206,8 +213,10 @@ export async function saveCloudState(
   const response = await fetch(`${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ uploadId, chunkCount: chunks.length, encoding }),
+    body: JSON.stringify({ uploadId, chunkCount: chunks.length, encoding, expectedVersion }),
   });
+  if (response.status === 409)
+    throw new Error("Outra pessoa alterou os dados antes da sua gravação. Nenhum registro foi substituído; recarregue após preservar seu trabalho atual.");
   if (!response.ok) throw cloudError(response);
   const result = (await response.json()) as { updatedAt?: string };
   return result.updatedAt || "";
