@@ -45,8 +45,11 @@ import {
   CLOSING_STORAGE_KEY,
   readBilledStorage,
   readClosingStorage,
+  readRomaneioStorage,
   writeBilledStorage,
   writeClosingStorage,
+  writeRomaneioStorage,
+  ROMANEIO_STORAGE_KEY,
   readCloudStateCache,
   writeCloudStateCache,
 } from "./storage";
@@ -301,7 +304,6 @@ type BilledDocumentRecord = {
   markedAt: string;
   billingScope: BillingScope;
 };
-const ROMANEIO_STORAGE_KEY = "gmobs-romaneios-v1";
 const GENERAL_IMPORT_INFO_STORAGE_KEY = "gmobs-general-import-info-v1";
 const driverClosingDayEditKey = (driverKey: string, date: string) =>
   `${driverKey}|${date}`;
@@ -415,23 +417,24 @@ const matchesCoverDocumentSearch = (
     )
   );
 };
-const coverDocumentIdentityKeys = (document: CoverDocumentExport) =>
-  [
-    scanKey(document.cteKey) ? `CHAVE:${scanKey(document.cteKey)}` : "",
-    scanKey(document.cte) ? `CTE:${scanKey(document.cte)}` : "",
-    normalizeInvoiceKey(document.invoice)
-      ? `NF:${normalizeInvoiceKey(document.invoice)}`
-      : "",
-    scanKey(document.manualCoverNumber)
-      ? `CAPA:${scanKey(document.manualCoverNumber)}`
-      : "",
-  ].filter(Boolean);
 const coverDocumentsOverlap = (
   left: CoverDocumentExport,
   right: CoverDocumentExport,
 ) => {
-  const rightKeys = new Set(coverDocumentIdentityKeys(right));
-  return coverDocumentIdentityKeys(left).some((key) => rightKeys.has(key));
+  const leftCover = scanKey(left.manualCoverNumber);
+  const rightCover = scanKey(right.manualCoverNumber);
+  if (leftCover && rightCover) return leftCover === rightCover;
+  const leftKey = scanKey(left.cteKey);
+  const rightKey = scanKey(right.cteKey);
+  if (leftKey && rightKey && leftKey === rightKey) return true;
+  const leftCte = scanKey(left.cte);
+  const rightCte = scanKey(right.cte);
+  if (leftCte && rightCte && leftCte === rightCte) return true;
+  // A NF pode se repetir em parceiros distintos. Com CT-es identificados,
+  // somente o mesmo CT-e (ou a mesma chave) representa duplicidade.
+  if (leftKey || rightKey || leftCte || rightCte) return false;
+  const leftInvoice = normalizeInvoiceKey(left.invoice);
+  return Boolean(leftInvoice && leftInvoice === normalizeInvoiceKey(right.invoice));
 };
 type ManualCoverDocumentDraft = {
   invoice: string;
@@ -1386,6 +1389,7 @@ export default function Home() {
   const [dedicatedPanelPartnerFilter, setDedicatedPanelPartnerFilter] = useState("all");
   const [dedicatedReportPartnerFilter, setDedicatedReportPartnerFilter] = useState("all");
   const [expandedDedicatedIds, setExpandedDedicatedIds] = useState<string[]>([]);
+  const [deletingDedicatedId, setDeletingDedicatedId] = useState("");
   const [romaneioEntries, setRomaneioEntries] = useState<RomaneioEntry[]>([]);
   const [romaneioImportInfo, setRomaneioImportInfo] =
     useState<RomaneioImportInfo | null>(null);
@@ -1692,10 +1696,34 @@ export default function Home() {
         const parsedMaexAdditional = savedMaexAdditional
           ? JSON.parse(savedMaexAdditional)
           : null;
-        const savedRomaneios = localStorage.getItem(ROMANEIO_STORAGE_KEY);
-        const parsedRomaneios = savedRomaneios
-          ? JSON.parse(savedRomaneios)
-          : null;
+        type SavedRomaneios = {
+          entries?: RomaneioEntry[];
+          importInfo?: RomaneioImportInfo | null;
+          documentStatuses?: Record<string, RomaneioDocumentStatusRecord>;
+          routeLabels?: Record<string, string>;
+          groupNotes?: Record<string, string>;
+          manualFreights?: Record<string, ManualRomaneioFreight[]>;
+          pickupQuantities?: Record<string, number>;
+          driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
+        };
+        let parsedRomaneios: SavedRomaneios | null = null;
+        try {
+          parsedRomaneios = await readRomaneioStorage<SavedRomaneios>();
+        } catch {
+          /* tenta o armazenamento antigo sem apagar sua cópia */
+        }
+        if (!parsedRomaneios) {
+          const savedRomaneios = localStorage.getItem(ROMANEIO_STORAGE_KEY);
+          parsedRomaneios = savedRomaneios ? JSON.parse(savedRomaneios) : null;
+          if (parsedRomaneios) {
+            try {
+              await writeRomaneioStorage(parsedRomaneios);
+              localStorage.removeItem(ROMANEIO_STORAGE_KEY);
+            } catch {
+              /* preserva a cópia antiga até a migração ser confirmada */
+            }
+          }
+        }
 
         if (cancelled) return;
         if (savedClosing) {
@@ -2017,7 +2045,11 @@ export default function Home() {
     };
   }, [billingInvoices, closingAdditionals, covers, dedicatedRecords, entries, financialAccountNames, financialEntries, hydrated, pickupRecords, romaneioReferenceEntries]);
   useEffect(() => {
-    if (!hydrated || isHostedSite() || !importInfo) return;
+    if (!hydrated || isHostedSite()) return;
+    if (!importInfo) {
+      localStorage.removeItem(GENERAL_IMPORT_INFO_STORAGE_KEY);
+      return;
+    }
     if (writeLocalStorage(GENERAL_IMPORT_INFO_STORAGE_KEY, importInfo)) return;
     const timer = window.setTimeout(
       () =>
@@ -2104,8 +2136,8 @@ export default function Home() {
   }, [maexAdditionalSenders, hydrated]);
   useEffect(() => {
     if (!hydrated || isHostedSite()) return;
-    if (
-      writeLocalStorage(ROMANEIO_STORAGE_KEY, {
+    let cancelled = false;
+    void writeRomaneioStorage({
         entries: romaneioEntries,
         importInfo: romaneioImportInfo,
         documentStatuses: romaneioDocumentStatuses,
@@ -2115,16 +2147,9 @@ export default function Home() {
         pickupQuantities: romaneioPickupQuantities,
         driverDiscountPlans: driverClosingDiscountPlans,
       })
-    )
-      return;
-    const timer = window.setTimeout(
-      () =>
-        setMessage(
-          "O navegador não conseguiu salvar a última importação de romaneios.",
-        ),
-      0,
-    );
-    return () => window.clearTimeout(timer);
+      .then(() => { try { localStorage.removeItem(ROMANEIO_STORAGE_KEY); } catch { /* IndexedDB já confirmou a gravação */ } })
+      .catch(() => { if (!cancelled) setMessage("Não foi possível salvar os romaneios neste computador. Não recarregue a página; exporte um backup."); });
+    return () => { cancelled = true; };
   }, [
     hydrated,
     driverClosingDiscountPlans,
@@ -4760,6 +4785,19 @@ export default function Home() {
       )
         throw new Error("Este arquivo não é um backup válido do Fechamentos GMOBS.");
 
+      if (!cloudHosted) {
+        await writeRomaneioStorage({
+          entries: backup.romaneios?.entries || [],
+          importInfo: backup.romaneios?.importInfo || null,
+          documentStatuses: backup.romaneios?.documentStatuses || {},
+          routeLabels: backup.romaneios?.routeLabels || {},
+          groupNotes: backup.romaneios?.groupNotes || {},
+          manualFreights: backup.romaneios?.manualFreights || {},
+          pickupQuantities: backup.romaneios?.pickupQuantities || {},
+          driverDiscountPlans: backup.romaneios?.driverDiscountPlans || {},
+        });
+      }
+
       const normalizedEntries = normalizeSavedEntries(backup.closing.entries);
       setEntries(normalizedEntries);
       setRomaneioReferenceEntries(
@@ -5260,7 +5298,12 @@ export default function Home() {
     const savedDocuments = covers
       .filter((cover) => cover.id !== editingCoverId)
       .flatMap((cover) => cover.documents);
-    const additions = matches.map((entry): CoverDocumentExport => ({
+    const exactCteMatches = matches.filter((entry) =>
+      scanKey(entry.cte) === key || scanKey(entry.cteKey) === key,
+    );
+    const partnerMatches = matches.filter((entry) => entry.partnerId === effectiveCoverPartnerId);
+    const candidates = exactCteMatches.length ? exactCteMatches : partnerMatches.length ? partnerMatches : matches;
+    const candidateDocuments = candidates.map((entry): CoverDocumentExport => ({
           scannedAt,
           invoice: entry.invoice,
           invoiceKey: normalizeInvoiceKey(entry.invoice),
@@ -5277,12 +5320,12 @@ export default function Home() {
           weight: entry.weight,
           merchandiseValue: entry.merchandiseValue,
         }));
-    const alreadyScanned = additions.some((document) =>
-      [...existing, ...savedDocuments].some((item) =>
-        coverDocumentsOverlap(document, item),
-      ),
-    );
-    if (alreadyScanned) {
+    const additions: CoverDocumentExport[] = [];
+    for (const document of candidateDocuments) {
+      if ([...existing, ...savedDocuments, ...additions].some((item) => coverDocumentsOverlap(document, item))) continue;
+      additions.push(document);
+    }
+    if (!additions.length) {
       if (coverScanInputRef.current) coverScanInputRef.current.value = "";
       setMessageIsError(true);
       setMessage(`A nota ou CTE ${raw} já foi bipado e não será repetido.`);
@@ -5297,7 +5340,7 @@ export default function Home() {
     setCoverDrafts(nextDrafts);
     setScannedCtes((current) => {
       const next = { ...current };
-      matches.forEach((entry) => {
+      candidates.forEach((entry) => {
         const scan = scanKey(entry.cte) || scanKey(entry.cteKey);
         if (!scan) return;
         next[entry.partnerId] = {
@@ -5417,7 +5460,7 @@ export default function Home() {
       .flatMap((cover) => cover.documents);
     if ([...existing, ...savedDocuments].some((item) => coverDocumentsOverlap(item, document))) {
       setMessageIsError(true);
-      setMessage(`A nota fiscal ${invoice} já foi adicionada e não será repetida.`);
+      setMessage(`O CT-e ${cte} já foi adicionado e não será repetido.`);
       playRomaneioAttentionSound();
       return;
     }
@@ -5817,19 +5860,22 @@ export default function Home() {
       {expanded && <>
       <div className="dedicated-edit-grid">
         <label>Data do acompanhamento<input type="date" value={record.trackingDate} onChange={(event) => updateDedicated(record.id, { trackingDate: event.target.value })} /></label>
-        <label>Nota fiscal<input value={record.invoice} onChange={(event) => updateDedicated(record.id, { invoice: event.target.value })} /></label>
-        <label>CT-e<input value={record.cte} onChange={(event) => updateDedicated(record.id, { cte: event.target.value })} /></label>
+        <label>Nota fiscal<input key={`${record.id}-${record.invoice}`} defaultValue={record.invoice} onBlur={(event) => { if (event.target.value !== record.invoice) updateDedicated(record.id, { invoice: event.target.value }); }} /></label>
+        <label>CT-e<input key={`${record.id}-${record.cte}`} defaultValue={record.cte} onBlur={(event) => { if (event.target.value !== record.cte) updateDedicated(record.id, { cte: event.target.value }); }} /></label>
         <label>Valor do dedicado<input key={`${record.id}-${record.value}`} defaultValue={record.value === undefined ? "" : record.value.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} inputMode="decimal" placeholder="Opcional" onBlur={(event) => { const value = event.target.value.trim() ? parseMoney(event.target.value) : undefined; if (value !== null) updateDedicated(record.id, { value }); }} /></label>
-        <label>Remetente<input value={record.sender} onChange={(event) => updateDedicated(record.id, { sender: event.target.value })} /></label>
-        <label>Destinatário<input value={record.recipient} onChange={(event) => updateDedicated(record.id, { recipient: event.target.value })} /></label>
-        <label>Parceiro<input value={record.partnerName} onChange={(event) => updateDedicated(record.id, { partnerName: event.target.value })} /></label>
-        <label>Motorista<input value={record.driver} onChange={(event) => updateDedicated(record.id, { driver: event.target.value })} placeholder="Preenchido pelo romaneio ou manualmente" /></label>
+        <label>Remetente<input key={`${record.id}-${record.sender}`} defaultValue={record.sender} onBlur={(event) => { if (event.target.value !== record.sender) updateDedicated(record.id, { sender: event.target.value }); }} /></label>
+        <label>Destinatário<input key={`${record.id}-${record.recipient}`} defaultValue={record.recipient} onBlur={(event) => { if (event.target.value !== record.recipient) updateDedicated(record.id, { recipient: event.target.value }); }} /></label>
+        <label>Parceiro<input key={`${record.id}-${record.partnerName}`} defaultValue={record.partnerName} onBlur={(event) => { if (event.target.value !== record.partnerName) updateDedicated(record.id, { partnerName: event.target.value }); }} /></label>
+        <label>Motorista<input key={`${record.id}-${record.driver}`} defaultValue={record.driver} onBlur={(event) => { if (event.target.value !== record.driver) updateDedicated(record.id, { driver: event.target.value }); }} placeholder="Preenchido pelo romaneio ou manualmente" /></label>
       </div>
       {record.cteKey && <p className="dedicated-key"><small>CHAVE DO CT-e</small>{record.cteKey}</p>}
-      <label className="dedicated-observation">Observação<textarea value={record.observation} onChange={(event) => updateDedicated(record.id, { observation: event.target.value })} placeholder="Escreva qualquer acompanhamento necessário" /></label>
+      <label className="dedicated-observation">Observação<textarea key={`${record.id}-${record.observation}`} defaultValue={record.observation} onBlur={(event) => { if (event.target.value !== record.observation) updateDedicated(record.id, { observation: event.target.value }); }} placeholder="Escreva qualquer acompanhamento necessário" /></label>
       <div className="dedicated-payment">
         <label>Data do pagamento<input type="date" value={record.paidAt} onChange={(event) => updateDedicated(record.id, { paidAt: event.target.value })} /></label>
         <label className="dedicated-paid-check"><input type="checkbox" checked={record.paid} onChange={(event) => toggleDedicatedPaid(record, event.target.checked)} /><span>{record.paid ? "Pagamento confirmado" : "Marcar que foi pago"}</span></label>
+      </div>
+      <div className="dedicated-delete">
+        {deletingDedicatedId === record.id ? <><span>Excluir somente este dedicado?</span><button type="button" className="danger" onClick={() => { setDedicatedRecords((current) => current.filter((item) => item.id !== record.id)); setExpandedDedicatedIds((current) => current.filter((id) => id !== record.id)); setDeletingDedicatedId(""); setMessage("Dedicado excluído. Aguarde a confirmação de salvamento no banco."); }}>Confirmar exclusão</button><button type="button" onClick={() => setDeletingDedicatedId("")}>Cancelar</button></> : <button type="button" className="danger-link" onClick={() => setDeletingDedicatedId(record.id)}>Excluir dedicado</button>}
       </div>
       </>}
     </article>;
@@ -5911,7 +5957,6 @@ export default function Home() {
       setMessage("A sessão não possui um operador identificado. Saia e informe o nome novamente.");
       return;
     }
-    const { exportCoverPdf } = await loadExcelModule();
     const partnerName = coverPartners.find((partner) => partner.id === effectiveCoverPartnerId)?.name || "Transportadora";
     const editing = covers.find((cover) => cover.id === editingCoverId);
     const sequenceNumber = editing?.sequenceNumber || Math.max(
@@ -5937,11 +5982,18 @@ export default function Home() {
     setCoverDrafts(next);
     setEditingCoverId("");
     openCoverChoice();
-    exportCoverPdf(cover);
     setMessageIsError(false);
     const kindLabel = coverSection === "shipment" ? "embarque" : coverSection === "collection" ? "coleta" : "capas";
-    setMessage(`${cover.id} de ${kindLabel} ${editing ? "atualizada" : "gerada"} por ${effectiveCoverGenerator} e salva no relatório.`);
+    setMessage(`${cover.id} de ${kindLabel} ${editing ? "atualizada" : "gerada"} por ${effectiveCoverGenerator}. Aguarde a confirmação de salvamento no banco.`);
     playRomaneioSuccessSound();
+    try {
+      const { exportCoverPdf } = await loadExcelModule();
+      exportCoverPdf(cover);
+    } catch (error) {
+      console.error("Não foi possível baixar o PDF da capa", error);
+      setMessageIsError(true);
+      setMessage(`${cover.id} foi incluída no relatório, mas o PDF não pôde ser baixado. Use “Baixar capa” no relatório após confirmar o salvamento no banco.`);
+    }
   }
 
   async function exportSelected() {

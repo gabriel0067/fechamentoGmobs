@@ -2077,12 +2077,17 @@ const coverDate = (value: string) =>
   value ? new Date(value).toLocaleDateString("pt-BR") : new Date().toLocaleDateString("pt-BR");
 const uniqueCoverDocuments = (documents: CoverDocumentExport[]) => [
   ...new Map(
-    documents.map((document) => [
-      [document.cteKey, document.cte, document.invoiceKey || document.invoice, document.manualCoverNumber]
-        .map((value) => String(value || "").replace(/\W/g, "").toUpperCase())
-        .join("|"),
-      document,
-    ]),
+    documents.map((document) => {
+      const clean = (value: string | undefined) => String(value || "").replace(/\W/g, "").toUpperCase();
+      const key = clean(document.cteKey)
+        ? `CHAVE:${clean(document.cteKey)}`
+        : clean(document.cte)
+          ? `CTE:${clean(document.cte)}`
+          : clean(document.manualCoverNumber)
+            ? `CAPA:${clean(document.manualCoverNumber)}`
+            : `NF:${clean(document.invoiceKey || document.invoice)}`;
+      return [key, document] as const;
+    }),
   ).values(),
 ];
 
@@ -2112,7 +2117,7 @@ export function exportCoverPdf(cover: CoverExport) {
       (page + 1) * documentsPerPage,
     );
     pdf.setDrawColor(25, 25, 25);
-    pdf.setTextColor(228, 228, 228);
+    pdf.setTextColor(178, 192, 183);
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(Math.min(42, Math.max(24, 330 / Math.max(6, cover.partnerName.length))));
     pdf.text(cover.partnerName.toUpperCase(), 105, 162, { align: "center", angle: 35, maxWidth: 150 });

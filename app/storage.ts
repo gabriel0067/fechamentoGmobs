@@ -3,10 +3,12 @@ const DATABASE_VERSION = 1;
 const STORE_NAME = "application-state";
 export const CLOSING_STORAGE_KEY = "gmobs-closing-v3";
 export const BILLED_STORAGE_KEY = "gmobs-billed-documents-v1";
+export const ROMANEIO_STORAGE_KEY = "gmobs-romaneios-v1";
 const CLOUD_CACHE_PREFIX = "gmobs-cloud-cache-v1:";
 
 let closingWriteQueue: Promise<void> = Promise.resolve();
 let billedWriteQueue: Promise<void> = Promise.resolve();
+let romaneioWriteQueue: Promise<void> = Promise.resolve();
 
 const openDatabase = () =>
   new Promise<IDBDatabase>((resolve, reject) => {
@@ -55,6 +57,10 @@ export function readBilledStorage<T>() {
   return readStorage<T>(BILLED_STORAGE_KEY);
 }
 
+export function readRomaneioStorage<T>() {
+  return readStorage<T>(ROMANEIO_STORAGE_KEY);
+}
+
 export function readCloudStateCache<T>(stateKey: string) {
   return readStorage<{ version: string; value: T }>(`${CLOUD_CACHE_PREFIX}${stateKey}`);
 }
@@ -94,6 +100,14 @@ export function writeBilledStorage(value: unknown) {
     .catch(() => undefined)
     .then(() => writeStorageNow(BILLED_STORAGE_KEY, value));
   billedWriteQueue = nextWrite;
+  return nextWrite;
+}
+
+export function writeRomaneioStorage(value: unknown) {
+  const nextWrite = romaneioWriteQueue
+    .catch(() => undefined)
+    .then(() => writeStorageNow(ROMANEIO_STORAGE_KEY, value));
+  romaneioWriteQueue = nextWrite;
   return nextWrite;
 }
 
