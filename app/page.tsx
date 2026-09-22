@@ -6282,9 +6282,14 @@ export default function Home() {
               : "Aguarde. Nenhum dado local será usado no lugar do banco."}
           </p>
           {cloudStatus === "error" && (
-            <button type="button" className="primary" onClick={retryCloudAccess}>
-              Tentar novamente
-            </button>
+            <>
+              <button type="button" onClick={downloadBackup}>
+                Baixar cópia do trabalho desta tela
+              </button>
+              <button type="button" className="primary" onClick={retryCloudAccess}>
+                Tentar novamente
+              </button>
+            </>
           )}
         </section>
       </main>
