@@ -17,6 +17,7 @@ import {
   isHostedSite,
   loadCloudStateRecord,
   saveCloudState,
+  saveCloudStateReconciled,
   type CloudStateKey,
 } from "./cloud-storage";
 import {
@@ -1014,6 +1015,7 @@ function useCloudStateSync<T>(
   onQueue: () => void,
   onStart: () => void,
   getExpectedVersion: (stateKey: CloudStateKey) => string,
+  onReconciled: (value: T) => void,
   onFinish: (
     stateKey: CloudStateKey,
     succeeded: boolean,
@@ -1053,9 +1055,17 @@ function useCloudStateSync<T>(
         onStart();
         const save = saveChainRef.current.then(async () => {
           try {
-            const version = await saveCloudState(stateKey, value, getExpectedVersion(stateKey));
-            void writeCloudStateCache(stateKey, version, value).catch(() => undefined);
-            onFinish(stateKey, true, version);
+            const expectedVersion = getExpectedVersion(stateKey);
+            const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
+            const result = await saveCloudStateReconciled(
+              stateKey,
+              value,
+              expectedVersion,
+              cached?.version === expectedVersion ? cached.value : value,
+            );
+            await writeCloudStateCache(stateKey, result.version, result.value).catch(() => undefined);
+            if (result.reconciled) onReconciled(result.value);
+            onFinish(stateKey, true, result.version);
           } catch (error) {
             onFinish(stateKey, false, undefined, error instanceof Error ? error : undefined);
           }
@@ -1072,6 +1082,7 @@ function useCloudStateSync<T>(
   }, [
     enabled,
     getExpectedVersion,
+    onReconciled,
     onFinish,
     onQueue,
     onStart,
@@ -2213,6 +2224,49 @@ export default function Home() {
     (key: CloudStateKey) => cloudVersionsRef.current[key] || "",
     [],
   );
+  const reconcileClosing = useCallback((value: typeof closingCloudState) => {
+    skipCloudSaveRef.current.add("closing");
+    const normalizedEntries = normalizeSavedEntries(value.entries || []);
+    setEntries(normalizedEntries);
+    setRomaneioReferenceEntries(normalizeRomaneioReferenceEntries(value.referenceEntries, normalizedEntries));
+    setImportInfo(value.importInfo || null);
+    setCovers(Array.isArray(value.covers) ? value.covers : []);
+    setCoverGenerators(Array.isArray(value.coverGenerators) ? value.coverGenerators : []);
+    setClosingAdditionals(Array.isArray(value.closingAdditionals) ? value.closingAdditionals : []);
+    setBillingInvoices(Array.isArray(value.billingInvoices) ? value.billingInvoices : []);
+    setPickupRecords(Array.isArray(value.pickupRecords) ? value.pickupRecords : []);
+    setDedicatedRecords(Array.isArray(value.dedicatedRecords) ? value.dedicatedRecords : []);
+    setFinancialEntries(Array.isArray(value.financialEntries) ? value.financialEntries : []);
+    setFinancialAccountNames(Array.isArray(value.financialAccountNames) ? value.financialAccountNames : []);
+  }, []);
+  const reconcileScans = useCallback((value: typeof scannedCtes) => {
+    skipCloudSaveRef.current.add("scans");
+    setScannedCtes(value || {});
+  }, []);
+  const reconcileTde = useCallback((value: typeof tdeCloudState) => {
+    skipCloudSaveRef.current.add("tde");
+    setTdeRates(value.rates || []);
+    setTdeImportInfo(value.importInfo || null);
+  }, []);
+  const reconcileMaex = useCallback((value: typeof maexAdditionalSenders) => {
+    skipCloudSaveRef.current.add("maex");
+    setMaexAdditionalSenders(value || {});
+  }, []);
+  const reconcileBilled = useCallback((value: typeof billedDocuments) => {
+    skipCloudSaveRef.current.add("billed");
+    setBilledDocuments(normalizeBilledDocuments(value || {}));
+  }, []);
+  const reconcileRomaneios = useCallback((value: typeof romaneiosCloudState) => {
+    skipCloudSaveRef.current.add("romaneios");
+    setRomaneioEntries(value.entries || []);
+    setRomaneioImportInfo(value.importInfo || null);
+    setRomaneioDocumentStatuses(value.documentStatuses || {});
+    setRomaneioRouteLabels(value.routeLabels || {});
+    setRomaneioGroupNotes(value.groupNotes || {});
+    setManualRomaneioFreights(value.manualFreights || {});
+    setRomaneioPickupQuantities(value.pickupQuantities || {});
+    setDriverClosingDiscountPlans(value.driverDiscountPlans || {});
+  }, []);
   const markCloudSaveFinish = useCallback(
     (stateKey: CloudStateKey, succeeded: boolean, version?: string, error?: Error) => {
       if (!succeeded) {
@@ -2234,6 +2288,7 @@ export default function Home() {
     markCloudChangeQueued,
     markCloudSaveStart,
     getExpectedCloudVersion,
+    reconcileClosing,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2244,6 +2299,7 @@ export default function Home() {
     markCloudChangeQueued,
     markCloudSaveStart,
     getExpectedCloudVersion,
+    reconcileScans,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2254,6 +2310,7 @@ export default function Home() {
     markCloudChangeQueued,
     markCloudSaveStart,
     getExpectedCloudVersion,
+    reconcileTde,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2264,6 +2321,7 @@ export default function Home() {
     markCloudChangeQueued,
     markCloudSaveStart,
     getExpectedCloudVersion,
+    reconcileMaex,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2274,6 +2332,7 @@ export default function Home() {
     markCloudChangeQueued,
     markCloudSaveStart,
     getExpectedCloudVersion,
+    reconcileBilled,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2284,6 +2343,7 @@ export default function Home() {
     markCloudChangeQueued,
     markCloudSaveStart,
     getExpectedCloudVersion,
+    reconcileRomaneios,
     markCloudSaveFinish,
   );
   useEffect(() => {
@@ -6262,10 +6322,7 @@ export default function Home() {
       />
     );
 
-  if (
-    cloudHosted &&
-    (!cloudReady || cloudStatus === "loading" || cloudStatus === "error")
-  )
+  if (cloudHosted && !cloudReady)
     return (
       <main className="access-shell">
         <section className={`access-card ${cloudStatus}`}>
@@ -6282,14 +6339,9 @@ export default function Home() {
               : "Aguarde. Nenhum dado local será usado no lugar do banco."}
           </p>
           {cloudStatus === "error" && (
-            <>
-              <button type="button" onClick={downloadBackup}>
-                Baixar cópia do trabalho desta tela
-              </button>
-              <button type="button" className="primary" onClick={retryCloudAccess}>
-                Tentar novamente
-              </button>
-            </>
+            <button type="button" className="primary" onClick={retryCloudAccess}>
+              Tentar novamente
+            </button>
           )}
         </section>
       </main>
@@ -6311,6 +6363,15 @@ export default function Home() {
           <button type="button" onClick={logout}>Sair</button>
         </div>
       </header>
+      {cloudReady && cloudStatus === "error" && (
+        <aside className="cloud-sync-warning" role="status">
+          <div>
+            <strong>Esta alteração ainda não foi sincronizada.</strong>
+            <span>{cloudFailureMessage || "O banco não respondeu, mas seu trabalho continua aberto nesta tela."}</span>
+          </div>
+          <button type="button" onClick={retryCloudAccess}>Tentar sincronizar</button>
+        </aside>
+      )}
       <nav className={`tabs ${tabPending ? "switching" : ""}`} aria-label="Etapas do fechamento" aria-busy={tabPending}>
         <button
           className={tab === "import" ? "active" : ""}

@@ -138,6 +138,25 @@ button {
 .header .storage-status.error > span {
   background: #c14444;
 }
+.cloud-sync-warning {
+  position: sticky;
+  top: 10px;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 18px 12px;
+  padding: 11px 14px;
+  border: 1px solid #e6b8b5;
+  border-radius: 12px;
+  background: #fff4f3;
+  color: #782b27;
+  box-shadow: 0 8px 24px rgba(80, 28, 24, .12);
+}
+.cloud-sync-warning div { display: grid; gap: 2px; }
+.cloud-sync-warning span { font-size: 13px; }
+.cloud-sync-warning button { flex: 0 0 auto; }
 .header-actions {
   display: flex;
   align-items: center;

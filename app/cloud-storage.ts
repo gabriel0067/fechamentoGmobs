@@ -6,6 +6,7 @@ export type CloudStateKey =
   | "billed"
   | "romaneios";
 export type CloudStateRecord<T> = { value: T; version: string };
+export type CloudSaveResult<T> = { value: T; version: string; reconciled: boolean };
 
 type CloudEncoding = "gzip-base64" | "json";
 
@@ -177,6 +178,54 @@ export async function getCloudStateVersion(stateKey: CloudStateKey) {
   return response.headers.get("x-gmobs-version") || "";
 }
 
+export class CloudStateConflictError extends Error {}
+
+const sameValue = (left: unknown, right: unknown) =>
+  JSON.stringify(left) === JSON.stringify(right);
+
+export function mergeConcurrentValue(base: unknown, local: unknown, remote: unknown): unknown {
+  if (sameValue(local, base)) return remote;
+  if (sameValue(remote, base)) return local;
+  if (Array.isArray(base) && Array.isArray(local) && Array.isArray(remote)) {
+    const identity = (item: unknown) => {
+      if (!item || typeof item !== "object") return "";
+      const record = item as Record<string, unknown>;
+      return String(record.id || record.key || "");
+    };
+    if ([...base, ...local, ...remote].every((item) => identity(item))) {
+      const baseMap = new Map(base.map((item) => [identity(item), item]));
+      const localMap = new Map(local.map((item) => [identity(item), item]));
+      const remoteMap = new Map(remote.map((item) => [identity(item), item]));
+      const merged: unknown[] = [];
+      for (const key of new Set([...baseMap.keys(), ...remoteMap.keys(), ...localMap.keys()])) {
+        const baseItem = baseMap.get(key);
+        const localItem = localMap.get(key);
+        const remoteItem = remoteMap.get(key);
+        if (baseItem !== undefined && localItem === undefined) continue;
+        if (localItem === undefined) { if (remoteItem !== undefined) merged.push(remoteItem); continue; }
+        if (remoteItem === undefined) { merged.push(localItem); continue; }
+        merged.push(mergeConcurrentValue(baseItem, localItem, remoteItem));
+      }
+      return merged;
+    }
+    return [...new Set([...remote, ...local].map((item) => JSON.stringify(item)))].map((item) => JSON.parse(item));
+  }
+  if (base && local && remote && typeof base === "object" && typeof local === "object" && typeof remote === "object") {
+    const baseRecord = base as Record<string, unknown>;
+    const localRecord = local as Record<string, unknown>;
+    const remoteRecord = remote as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const key of new Set([...Object.keys(baseRecord), ...Object.keys(remoteRecord), ...Object.keys(localRecord)])) {
+      if (key in baseRecord && !(key in localRecord)) continue;
+      if (!(key in localRecord)) { if (key in remoteRecord) result[key] = remoteRecord[key]; continue; }
+      if (!(key in remoteRecord)) { result[key] = localRecord[key]; continue; }
+      result[key] = mergeConcurrentValue(baseRecord[key], localRecord[key], remoteRecord[key]);
+    }
+    return result;
+  }
+  return local;
+}
+
 export async function getCloudStateVersions(): Promise<Partial<Record<CloudStateKey, string>>> {
   const response = await fetch(`${CLOUD_STATE_ENDPOINT}?versions=1`, { cache: "no-store" });
   if (!response.ok) throw cloudError(response);
@@ -216,8 +265,26 @@ export async function saveCloudState(
     body: JSON.stringify({ uploadId, chunkCount: chunks.length, encoding, expectedVersion }),
   });
   if (response.status === 409)
-    throw new Error("Outra pessoa alterou os dados antes da sua gravação. Nenhum registro foi substituído; recarregue após preservar seu trabalho atual.");
+    throw new CloudStateConflictError("Outra pessoa alterou os dados durante a gravação.");
   if (!response.ok) throw cloudError(response);
   const result = (await response.json()) as { updatedAt?: string };
   return result.updatedAt || "";
+}
+
+export async function saveCloudStateReconciled<T>(
+  stateKey: CloudStateKey,
+  value: T,
+  expectedVersion: string,
+  baseValue: T,
+): Promise<CloudSaveResult<T>> {
+  try {
+    return { value, version: await saveCloudState(stateKey, value, expectedVersion), reconciled: false };
+  } catch (error) {
+    if (!(error instanceof CloudStateConflictError)) throw error;
+    const remote = await loadCloudStateRecord<T>(stateKey);
+    if (!remote) throw error;
+    const merged = mergeConcurrentValue(baseValue, value, remote.value) as T;
+    const version = await saveCloudState(stateKey, merged, remote.version);
+    return { value: merged, version, reconciled: true };
+  }
 }
