@@ -7321,10 +7321,15 @@ export default function Home() {
                         </label>
                       );
                     })}
-                    <div className="romaneio-save-bar retained-save"><span><strong>{Object.values(retainedResolutionDrafts).filter(Boolean).length} baixa(s) selecionada(s)</strong><small>É obrigatório gravar para retirar do relatório de Retidos.</small></span><button type="button" className="primary" disabled={!Object.values(retainedResolutionDrafts).some(Boolean)} onClick={saveRetainedResolutions}>Gravar baixas</button></div>
+                    <div className="romaneio-save-bar retained-save"><span><strong>{Object.values(retainedResolutionDrafts).filter(Boolean).length} baixa(s) selecionada(s)</strong><small>É obrigatório gravar para retirar do relatório de Retidos.</small></span></div>
                   </div>
                 ) : (
                   <div className="empty romaneio-empty"><span>✓</span><h3>Nenhum documento retido encontrado</h3><p>Altere os filtros ou aguarde novos documentos retidos.</p></div>
+                )}
+                {Object.values(retainedResolutionDrafts).some(Boolean) && (
+                  <button type="button" className="primary romaneio-floating-save" onClick={saveRetainedResolutions}>
+                    Gravar baixas ({Object.values(retainedResolutionDrafts).filter(Boolean).length})
+                  </button>
                 )}
                   </>
                 )}
