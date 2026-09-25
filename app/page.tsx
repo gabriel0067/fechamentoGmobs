@@ -9,7 +9,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useTransition,
 } from "react";
 import {
   getCloudStateVersion,
@@ -1278,7 +1277,6 @@ async function loadCachedCloudStateRecord<T>(stateKey: CloudStateKey) {
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("import");
-  const [tabPending, startTabTransition] = useTransition();
   const [closingAuditOpen, setClosingAuditOpen] = useState(false);
   const [closingAuditLimit, setClosingAuditLimit] = useState(100);
   const [scanListLimit, setScanListLimit] = useState(50);
@@ -1482,6 +1480,9 @@ export default function Home() {
     Record<string, DriverClosingDayEdit>
   >({});
   const [openRomaneios, setOpenRomaneios] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [openFullRomaneios, setOpenFullRomaneios] = useState<Record<string, boolean>>(
     {},
   );
   const [romaneioDocumentDrafts, setRomaneioDocumentDrafts] = useState<
@@ -6304,12 +6305,12 @@ export default function Home() {
   }
 
   function navigateTab(nextTab: Tab) {
-    setMessage("");
+    if (message) setMessage("");
     if (nextTab === "covers") {
       if (!editingCoverId) setCoverPartnerId("");
       openCoverChoice();
     }
-    startTabTransition(() => setTab(nextTab));
+    setTab(nextTab);
   }
 
   if (!hydrated)
@@ -6388,7 +6389,7 @@ export default function Home() {
           <button type="button" onClick={retryCloudAccess}>Tentar sincronizar</button>
         </aside>
       )}
-      <nav className={`tabs ${tabPending ? "switching" : ""}`} aria-label="Etapas do fechamento" aria-busy={tabPending}>
+      <nav className="tabs" aria-label="Etapas do fechamento">
         <button
           className={tab === "import" ? "active" : ""}
           onClick={() => navigateTab("import")}
@@ -7404,7 +7405,19 @@ export default function Home() {
                         ),
                       ).join(" · ");
                       return (
-                        <details className="romaneio-card romaneio-full-card" key={group.key}>
+                        <details
+                          className="romaneio-card romaneio-full-card"
+                          key={group.key}
+                          open={Boolean(openFullRomaneios[group.key])}
+                          onToggle={(event) => {
+                            const isOpen = event.currentTarget.open;
+                            setOpenFullRomaneios((current) =>
+                              current[group.key] === isOpen
+                                ? current
+                                : { ...current, [group.key]: isOpen },
+                            );
+                          }}
+                        >
                           <summary>
                             <span>
                               <small>EMISSÃO</small>
@@ -7433,7 +7446,7 @@ export default function Home() {
                             </span>
                             <b aria-hidden="true">⌄</b>
                           </summary>
-                          <div className="romaneio-detail daily-detail">
+                          {openFullRomaneios[group.key] && <div className="romaneio-detail daily-detail">
                             <div className="romaneio-detail-info daily-info">
                               <span><small>Nº ROMANEIO</small><strong>{group.romaneios.join(" · ")}</strong></span>
                               <span><small>EMISSÃO</small><strong>{formatRomaneioDay(group.day)}</strong></span>
@@ -7508,7 +7521,7 @@ export default function Home() {
                               })}
                             </div>
                             <p className="romaneio-source">Arquivo(s): {group.sourceFiles.join(", ")}</p>
-                          </div>
+                          </div>}
                         </details>
                       );
                     })}
