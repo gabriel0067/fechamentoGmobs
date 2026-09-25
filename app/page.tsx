@@ -3023,8 +3023,10 @@ export default function Home() {
         })),
     [driverClosingDiscountPlans],
   );
-  const driverClosingSummaries = useMemo<DriverClosingSummary[]>(() => {
-    if (tab !== "romaneios" || romaneioSection !== "closing") return [];
+  const driverClosingSummariesByMode = useMemo<Record<"driver" | "vehicle", DriverClosingSummary[]>>(() => {
+    if (tab !== "romaneios" || romaneioSection !== "closing")
+      return { driver: [], vehicle: [] };
+    const buildSummaries = (mode: "driver" | "vehicle") => {
     const withinPeriod = (day: string) =>
       (!driverClosingFrom || day >= driverClosingFrom) &&
       (!driverClosingTo || day <= driverClosingTo);
@@ -3052,12 +3054,12 @@ export default function Home() {
       .filter((group) => withinPeriod(group.day))
       .forEach((group) => {
         const plate = group.plates.find(Boolean) || "Sem placa";
-        const key = driverClosingMode === "vehicle"
+        const key = mode === "vehicle"
           ? `placa:${scanKey(plate) || "sem-placa"}`
           : normalized(group.driver) || "motorista-nao-informado";
         const current = drivers.get(key) || {
           key,
-          driver: driverClosingMode === "vehicle" ? `Veículo ${plate}` : group.driver || "Motorista não informado",
+          driver: mode === "vehicle" ? `Veículo ${plate}` : group.driver || "Motorista não informado",
           cpf: new Set<string>(),
           plates: new Set<string>(),
           vehicleTypes: new Set<string>(),
@@ -3081,7 +3083,7 @@ export default function Home() {
         const pickupCount = romaneioPickupQuantities[group.key] || 0;
         if (!countedDocuments.length && !manualCount && !pickupCount) return;
         const plate = group.plates.find(Boolean) || "Sem placa";
-        const driverKey = driverClosingMode === "vehicle"
+        const driverKey = mode === "vehicle"
           ? `placa:${scanKey(plate) || "sem-placa"}`
           : normalized(group.driver) || "motorista-nao-informado";
         const driver = drivers.get(driverKey);
@@ -3147,12 +3149,16 @@ export default function Home() {
         };
       })
       .sort((a, b) => a.driver.localeCompare(b.driver, "pt-BR"));
+    };
+    return {
+      driver: buildSummaries("driver"),
+      vehicle: buildSummaries("vehicle"),
+    };
   }, [
     tab,
     romaneioSection,
     driverClosingFrom,
     driverClosingTo,
-    driverClosingMode,
     romaneioDailyGroups,
     romaneioDocumentStatuses,
     romaneioGroupNotes,
@@ -3161,6 +3167,7 @@ export default function Home() {
     romaneioPickupQuantities,
     driverClosingProductionForGroup,
   ]);
+  const driverClosingSummaries = driverClosingSummariesByMode[driverClosingMode];
   const selectedDriverClosingReports = useMemo(
     () =>
       driverClosingSummaries
