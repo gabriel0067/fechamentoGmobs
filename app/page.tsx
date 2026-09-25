@@ -7390,6 +7390,19 @@ export default function Home() {
                           !romaneioStatusForDocument(romaneioDocumentStatuses, group, document) &&
                           !romaneioDocumentDrafts[group.key]?.[document.key]?.situation,
                       ).length;
+                      const checkedBy = Array.from(
+                        new Set(
+                          group.documents
+                            .map((document) =>
+                              romaneioStatusForDocument(
+                                romaneioDocumentStatuses,
+                                group,
+                                document,
+                              )?.savedBy?.trim(),
+                            )
+                            .filter((name): name is string => Boolean(name)),
+                        ),
+                      ).join(" · ");
                       return (
                         <details className="romaneio-card romaneio-full-card" key={group.key}>
                           <summary>
@@ -7409,6 +7422,10 @@ export default function Home() {
                             <span className={pendingCount ? "romaneio-summary-open" : "romaneio-summary-closed"}>
                               <small>SITUAÇÃO</small>
                               <strong>{pendingCount ? `${pendingCount} aberto(s)` : "Conferido"}</strong>
+                            </span>
+                            <span>
+                              <small>TICADO POR</small>
+                              <strong>{checkedBy || "—"}</strong>
                             </span>
                             <span className="daily-production">
                               <small>PRODUÇÃO</small>
@@ -7475,7 +7492,6 @@ export default function Home() {
                                         {saved ? romaneioSituationLabel[saved.situation] : "Aberto"}
                                       </b>
                                       {saved?.reason ? <small>Motivo: {saved.reason}</small> : null}
-                                      {saved?.savedBy ? <small>Ticado por: {saved.savedBy}</small> : null}
                                       {saved ? (
                                         <button
                                           type="button"

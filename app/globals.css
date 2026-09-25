@@ -2326,7 +2326,7 @@ button {
 }
 .romaneio-full-card summary {
   grid-template-columns:
-    100px minmax(180px, 1.2fr) minmax(150px, 1fr) 115px 125px 22px;
+    100px minmax(180px, 1.2fr) minmax(140px, 1fr) 105px minmax(110px, 0.8fr) 115px 22px;
 }
 .romaneio-full-note {
   display: grid;
