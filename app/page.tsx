@@ -30,6 +30,7 @@ import {
   type PajussaraClosingDocument,
 } from "./excel";
 import { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
+import { romaneioFreightTotal } from "./romaneio-light";
 
 let excelModulePromise: Promise<typeof import("./excel")> | null = null;
 function loadExcelModule() {
@@ -138,6 +139,7 @@ type RomaneioEntry = ImportedRomaneioRow & {
 };
 type RomaneioImportedTotals = {
   freight: number;
+  freightLines: number[];
   weight: number;
   deliveries: number;
   volumes: number;
@@ -1389,11 +1391,7 @@ export default function Home() {
   const [deletingFinancialId, setDeletingFinancialId] = useState("");
   const [pickupRecords, setPickupRecords] = useState<PickupRecord[]>([]);
   const [pickupSection, setPickupSection] = useState<"panel" | "report">("panel");
-  const [pickupNumber, setPickupNumber] = useState("");
-  const [pickupInvoice, setPickupInvoice] = useState("");
   const [pickupPartnerId, setPickupPartnerId] = useState("");
-  const [pickupClientName, setPickupClientName] = useState("");
-  const [pickupVolumes, setPickupVolumes] = useState("");
   const [pickupPartnerFilter, setPickupPartnerFilter] = useState("all");
   const [pickupReportPartnerFilter, setPickupReportPartnerFilter] = useState("all");
   const [pickupReportDriverFilter, setPickupReportDriverFilter] = useState("");
@@ -1404,7 +1402,7 @@ export default function Home() {
   const [dedicatedRecords, setDedicatedRecords] = useState<DedicatedRecord[]>([]);
   const [dedicatedSection, setDedicatedSection] = useState<"panel" | "report">("panel");
   const dedicatedSearchRef = useRef<HTMLInputElement>(null);
-  const [dedicatedValue, setDedicatedValue] = useState("");
+  const dedicatedValueRef = useRef<HTMLInputElement>(null);
   const [dedicatedConfirmation, setDedicatedConfirmation] = useState<DedicatedDraft | null>(null);
   const [dedicatedReportSearch, setDedicatedReportSearch] = useState("");
   const [dedicatedPanelPartnerFilter, setDedicatedPanelPartnerFilter] = useState("all");
@@ -1474,6 +1472,7 @@ export default function Home() {
   >("checking");
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
   const [driverClosingTo, setDriverClosingTo] = useState("");
+  const [driverClosingMode, setDriverClosingMode] = useState<"driver" | "vehicle">("driver");
   const [selectedDriverClosings, setSelectedDriverClosings] = useState<
     string[]
   >([]);
@@ -2679,8 +2678,10 @@ export default function Home() {
         current.sourceFiles.push(row.sourceFile);
       const romaneioTotalKey = normalized(row.romaneio) || row.id;
       const previousTotal = current.importedTotalsByRomaneio[romaneioTotalKey];
+      const freightLines = [...(previousTotal?.freightLines || []), row.freight];
       current.importedTotalsByRomaneio[romaneioTotalKey] = {
-        freight: roundMoney((previousTotal?.freight || 0) + row.freight),
+        freight: romaneioFreightTotal(freightLines),
+        freightLines,
         weight: roundMoney((previousTotal?.weight || 0) + row.weight),
         deliveries: (previousTotal?.deliveries || 0) + row.deliveries,
         volumes: (previousTotal?.volumes || 0) + row.volumes,
@@ -3049,10 +3050,13 @@ export default function Home() {
     romaneioDailyGroups
       .filter((group) => withinPeriod(group.day))
       .forEach((group) => {
-        const key = normalized(group.driver) || "motorista-nao-informado";
+        const plate = group.plates.find(Boolean) || "Sem placa";
+        const key = driverClosingMode === "vehicle"
+          ? `placa:${scanKey(plate) || "sem-placa"}`
+          : normalized(group.driver) || "motorista-nao-informado";
         const current = drivers.get(key) || {
           key,
-          driver: group.driver || "Motorista não informado",
+          driver: driverClosingMode === "vehicle" ? `Veículo ${plate}` : group.driver || "Motorista não informado",
           cpf: new Set<string>(),
           plates: new Set<string>(),
           vehicleTypes: new Set<string>(),
@@ -3075,7 +3079,10 @@ export default function Home() {
         const manualCount = manualRomaneioFreights[group.key]?.length || 0;
         const pickupCount = romaneioPickupQuantities[group.key] || 0;
         if (!countedDocuments.length && !manualCount && !pickupCount) return;
-        const driverKey = normalized(group.driver) || "motorista-nao-informado";
+        const plate = group.plates.find(Boolean) || "Sem placa";
+        const driverKey = driverClosingMode === "vehicle"
+          ? `placa:${scanKey(plate) || "sem-placa"}`
+          : normalized(group.driver) || "motorista-nao-informado";
         const driver = drivers.get(driverKey);
         if (!driver) return;
         const day = driver.days.get(group.day) || {
@@ -3144,6 +3151,7 @@ export default function Home() {
     romaneioSection,
     driverClosingFrom,
     driverClosingTo,
+    driverClosingMode,
     romaneioDailyGroups,
     romaneioDocumentStatuses,
     romaneioGroupNotes,
@@ -4453,14 +4461,19 @@ export default function Home() {
       });
       return next;
     });
-    releaseRomaneioDocumentsToClosing(
-      selectedKeys.map((key) => ({
-        documentKey: key,
-        situation: "delivered",
-        day: romaneioDocumentStatuses[key]?.day || "",
-        savedAt,
-      })),
-    );
+    releaseRomaneioDocumentsToClosing(selectedKeys.flatMap((key) => {
+      const record = romaneioDocumentStatuses[key];
+      if (!record) return [];
+      const group = romaneioDailyGroups.find((item) =>
+        item.day === record.day &&
+        item.romaneios.some((number) => record.romaneios.includes(number)),
+      );
+      const document = group?.documents.find((item) =>
+        item.referenceType === record.referenceType &&
+        item.referenceNumber === record.referenceNumber,
+      );
+      return document ? [{ documentKey: document.key, situation: "delivered" as const, day: record.day, savedAt }] : [];
+    }));
     setRetainedResolutionDrafts({});
     setMessage(
       `${selectedKeys.length} documento(s) retirado(s) dos retidos e gravado(s) como Entregue.`,
@@ -5783,20 +5796,25 @@ export default function Home() {
 
   function addPickup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const pickupNumber = String(form.get("pickupNumber") || "").trim();
+    const pickupInvoice = String(form.get("pickupInvoice") || "").trim();
+    const pickupClientName = String(form.get("pickupClientName") || "").trim();
+    const pickupVolumes = String(form.get("pickupVolumes") || "");
     const partner = partnerAliases.find(([id]) => id === pickupPartnerId);
     const volumes = Number(pickupVolumes.replace(/\D/g, ""));
-    if (!pickupNumber.trim() || !partner || !pickupClientName.trim() || !Number.isFinite(volumes) || volumes <= 0) {
+    if (!pickupNumber || !partner || !pickupClientName || !Number.isFinite(volumes) || volumes <= 0) {
       setMessageIsError(true);
       setMessage("Preencha o número da coleta, a parceira, o cliente e a quantidade de volumes.");
       return;
     }
     setPickupRecords((current) => [...current, {
       id: newId(),
-      number: pickupNumber.trim(),
-      invoice: pickupInvoice.trim(),
+      number: pickupNumber,
+      invoice: pickupInvoice,
       partnerId: partner[0],
       partnerName: partner[1],
-      clientName: pickupClientName.trim(),
+      clientName: pickupClientName,
       volumes,
       driver: "",
       completedAt: "",
@@ -5804,11 +5822,8 @@ export default function Home() {
       createdAt: new Date().toISOString(),
       createdBy: activeOperator,
     }]);
-    setPickupNumber("");
-    setPickupInvoice("");
     setPickupPartnerId("");
-    setPickupClientName("");
-    setPickupVolumes("");
+    event.currentTarget.reset();
     setMessageIsError(false);
     setMessage("Coleta lançada no painel.");
   }
@@ -5867,8 +5882,9 @@ export default function Home() {
       playRomaneioAttentionSound();
       return;
     }
-    const parsedValue = dedicatedValue.trim() ? parseMoney(dedicatedValue) : undefined;
-    if (dedicatedValue.trim() && (parsedValue === null || parsedValue === undefined || parsedValue < 0)) {
+    const dedicatedValue = dedicatedValueRef.current?.value.trim() || "";
+    const parsedValue = dedicatedValue ? parseMoney(dedicatedValue) : undefined;
+    if (dedicatedValue && (parsedValue === null || parsedValue === undefined || parsedValue < 0)) {
       setMessageIsError(true);
       setMessage("Informe um valor válido ou deixe o valor do dedicado em branco.");
       return;
@@ -5909,7 +5925,7 @@ export default function Home() {
     }]);
     setDedicatedConfirmation(null);
     if (dedicatedSearchRef.current) dedicatedSearchRef.current.value = "";
-    setDedicatedValue("");
+    if (dedicatedValueRef.current) dedicatedValueRef.current.value = "";
     setMessageIsError(false);
     setMessage("Dedicado confirmado e adicionado ao painel.");
     playRomaneioSuccessSound();
@@ -7459,6 +7475,7 @@ export default function Home() {
                                         {saved ? romaneioSituationLabel[saved.situation] : "Aberto"}
                                       </b>
                                       {saved?.reason ? <small>Motivo: {saved.reason}</small> : null}
+                                      {saved?.savedBy ? <small>Ticado por: {saved.savedBy}</small> : null}
                                       {saved ? (
                                         <button
                                           type="button"
@@ -7486,10 +7503,17 @@ export default function Home() {
               <div className="driver-closing-view">
                 <div className="toolbar driver-closing-toolbar">
                   <div>
-                    <small>FECHAMENTO DOS MOTORISTAS</small>
+                    <small>{driverClosingMode === "vehicle" ? "FECHAMENTO DOS VEÍCULOS" : "FECHAMENTO DOS MOTORISTAS"}</small>
                     <h2>Produção entregue por período</h2>
-                    <p>Escolha livremente as datas, confira os totais e exporte um arquivo separado para cada motorista selecionado.</p>
+                    <p>{driverClosingMode === "vehicle" ? "Agrupe pela placa para conferir quanto cada carro da casa produziu, mesmo com motoristas diferentes." : "Escolha livremente as datas, confira os totais e exporte um arquivo separado para cada motorista selecionado."}</p>
                   </div>
+                  <label>
+                    Fechar por
+                    <select value={driverClosingMode} onChange={(event) => { setDriverClosingMode(event.target.value as "driver" | "vehicle"); setSelectedDriverClosings([]); setDriverClosingPreviewOpen(false); }}>
+                      <option value="driver">Motorista</option>
+                      <option value="vehicle">Placa do veículo</option>
+                    </select>
+                  </label>
                   <label>
                     De
                     <input type="date" value={driverClosingFrom} onChange={(event) => setDriverClosingFrom(event.target.value)} />
@@ -7500,13 +7524,13 @@ export default function Home() {
                   </label>
                 </div>
                 <div className="driver-closing-summary">
-                  <span><small>MOTORISTAS NO PERÍODO</small><strong>{driverClosingSummaries.length}</strong></span>
+                  <span><small>{driverClosingMode === "vehicle" ? "VEÍCULOS NO PERÍODO" : "MOTORISTAS NO PERÍODO"}</small><strong>{driverClosingSummaries.length}</strong></span>
                   <span><small>SELECIONADOS</small><strong>{driverClosingSummaries.filter((driver) => selectedDriverClosings.includes(driver.key)).length}</strong></span>
                   <span><small>NOTAS ENTREGUES</small><strong>{driverClosingSummaries.reduce((sum, driver) => sum + driver.totalInvoices, 0).toLocaleString("pt-BR")}</strong></span>
                   <span><small>PRODUÇÃO GRAVADA</small><strong>{money(driverClosingSummaries.reduce((sum, driver) => sum + driver.totalFreight, 0))}</strong></span>
                 </div>
                 <div className="selection-head driver-selection-head">
-                  <p>{selectedDriverClosings.length} motorista(s) marcado(s)</p>
+                  <p>{selectedDriverClosings.length} {driverClosingMode === "vehicle" ? "veículo(s)" : "motorista(s)"} marcado(s)</p>
                   <div>
                     <button type="button" onClick={() => setSelectedDriverClosings(driverClosingSummaries.map((driver) => driver.key))}>Selecionar todos</button>
                     <button type="button" onClick={() => setSelectedDriverClosings([])}>Limpar</button>
@@ -7537,7 +7561,7 @@ export default function Home() {
                     ))}
                   </div>
                 ) : (
-                  <div className="empty romaneio-empty"><span>□</span><h3>Nenhum motorista no período</h3><p>Altere as datas ou importe os relatórios de romaneio correspondentes.</p></div>
+                  <div className="empty romaneio-empty"><span>□</span><h3>Nenhum {driverClosingMode === "vehicle" ? "veículo" : "motorista"} no período</h3><p>Altere as datas ou importe os relatórios de romaneio correspondentes.</p></div>
                 )}
                 <div className="driver-closing-export">
                   <div><strong>Prévia antes do PDF</strong><small>Confira os dias, ajuste cidades e inclua observações antes de gerar um arquivo PDF por motorista.</small></div>
@@ -7548,7 +7572,7 @@ export default function Home() {
                     <div className="driver-closing-preview-head">
                       <div>
                         <small>PRÉVIA DO PDF</small>
-                        <h3>Conferir fechamento de motorista</h3>
+                        <h3>Conferir fechamento de {driverClosingMode === "vehicle" ? "veículo" : "motorista"}</h3>
                         <p>As alterações feitas aqui valem para o PDF gerado agora e não mudam os dados originais dos romaneios.</p>
                       </div>
                       <button type="button" className="primary" onClick={exportSelectedDriverClosings}>Baixar PDF(s)</button>
@@ -7582,8 +7606,9 @@ export default function Home() {
                                   <div className="driver-pdf-day-row" key={day.date}>
                                     <span><strong>{formatRomaneioDay(day.date)}</strong></span>
                                     <input
-                                      value={edit?.cityText ?? day.cityText ?? day.cities.join(" · ")}
-                                      onChange={(event) =>
+                                      key={`city-${editKey}-${edit?.cityText ?? day.cityText ?? day.cities.join(" · ")}`}
+                                      defaultValue={edit?.cityText ?? day.cityText ?? day.cities.join(" · ")}
+                                      onBlur={(event) =>
                                         updateDriverClosingDayEdit(
                                           report.key,
                                           day.date,
@@ -7596,8 +7621,9 @@ export default function Home() {
                                     <span><strong>{day.invoiceCount}</strong></span>
                                     <span><strong>{money(day.freight)}</strong></span>
                                     <input
-                                      value={edit?.observation ?? day.observation ?? ""}
-                                      onChange={(event) =>
+                                      key={`observation-${editKey}-${edit?.observation ?? day.observation ?? ""}`}
+                                      defaultValue={edit?.observation ?? day.observation ?? ""}
+                                      onBlur={(event) =>
                                         updateDriverClosingDayEdit(
                                           report.key,
                                           day.date,
@@ -7835,14 +7861,14 @@ export default function Home() {
               <div className="pickup-workspace">
                 <form className="pickup-launch-form" onSubmit={addPickup}>
                   <div><small>LANÇAR COLETA</small><h3>Nova solicitação</h3></div>
-                  <label>Número da coleta<input value={pickupNumber} onChange={(event) => setPickupNumber(event.target.value)} placeholder="Digite o número" /></label>
-                  <label>Número da nota fiscal <small className="optional-field">Opcional — pode deixar em branco</small><input value={pickupInvoice} onChange={(event) => setPickupInvoice(event.target.value)} placeholder="Digite a NF, se houver" /></label>
+                  <label>Número da coleta<input name="pickupNumber" placeholder="Digite o número" /></label>
+                  <label>Número da nota fiscal <small className="optional-field">Opcional — pode deixar em branco</small><input name="pickupInvoice" placeholder="Digite a NF, se houver" /></label>
                   <span className="cover-partner-label">Parceiro oficial</span>
                   <div className="cover-partner-options pickup-partners" role="radiogroup" aria-label="Parceiro da coleta">
                     {partnerAliases.map(([id, name]) => <button key={id} type="button" role="radio" aria-checked={pickupPartnerId === id} className={pickupPartnerId === id ? "active" : ""} onClick={() => setPickupPartnerId(id)}>{name}</button>)}
                   </div>
-                  <label>Nome do cliente<input value={pickupClientName} onChange={(event) => setPickupClientName(event.target.value)} placeholder="Cliente da coleta" /></label>
-                  <label>Quantidade de volumes<input type="number" min="1" inputMode="numeric" value={pickupVolumes} onChange={(event) => setPickupVolumes(event.target.value)} placeholder="0" /></label>
+                  <label>Nome do cliente<input name="pickupClientName" placeholder="Cliente da coleta" /></label>
+                  <label>Quantidade de volumes<input name="pickupVolumes" type="number" min="1" inputMode="numeric" placeholder="0" /></label>
                   <button type="submit" className="primary">Lançar coleta</button>
                 </form>
                 <section className="pickup-panel">
@@ -7892,7 +7918,7 @@ export default function Home() {
               <form className="dedicated-launch" onSubmit={prepareDedicated}>
                 <div><small>LANÇAR DEDICADO</small><h3>Busque pelos relatórios já importados</h3><p>Digite a NF, o CT-e ou bipe a chave do CT-e. Antes de inserir, os dados serão mostrados para confirmação.</p></div>
                 <label>Nota fiscal, CT-e ou chave<input ref={dedicatedSearchRef} placeholder="Bipe ou digite o documento" /></label>
-                <label>Valor do dedicado <small>Opcional</small><input value={dedicatedValue} inputMode="decimal" onChange={(event) => setDedicatedValue(event.target.value)} placeholder="Pode deixar em branco" /></label>
+                <label>Valor do dedicado <small>Opcional</small><input ref={dedicatedValueRef} inputMode="decimal" placeholder="Pode deixar em branco" /></label>
                 <button type="submit" className="primary">Localizar e conferir</button>
               </form>
               <div className="dedicated-panel-heading"><div><small>PENDENTES DE CONFIRMAÇÃO</small><h3>Painel de dedicados em aberto</h3></div><div className="dedicated-heading-controls"><label>Parceiro<select value={dedicatedPanelPartnerFilter} onChange={(event) => setDedicatedPanelPartnerFilter(event.target.value)}><option value="all">Todos os parceiros</option>{partnerAliases.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><b>{openDedicatedRecords.length} pendente(s)</b></div></div>
