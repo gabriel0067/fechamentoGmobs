@@ -29,7 +29,10 @@ import {
   type PajussaraClosingDocument,
 } from "./excel";
 import { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
-import { romaneioFreightTotal } from "./romaneio-light";
+import {
+  romaneioClosingInvoiceCount,
+  romaneioFreightTotal,
+} from "./romaneio-light";
 
 let excelModulePromise: Promise<typeof import("./excel")> | null = null;
 function loadExcelModule() {
@@ -3043,6 +3046,7 @@ export default function Home() {
           {
             cities: Set<string>;
             invoices: Set<string>;
+            backDocuments: Set<string>;
             freight: number;
             romaneios: Set<string>;
             observations: Set<string>;
@@ -3081,7 +3085,11 @@ export default function Home() {
         });
         const manualCount = manualRomaneioFreights[group.key]?.length || 0;
         const pickupCount = romaneioPickupQuantities[group.key] || 0;
-        if (!countedDocuments.length && !manualCount && !pickupCount) return;
+        const backDocuments = group.documents.filter((document) =>
+          romaneioStatusForDocument(romaneioDocumentStatuses, group, document)
+            ?.situation === "back"
+        );
+        if (!countedDocuments.length && !manualCount && !pickupCount && !backDocuments.length) return;
         const plate = group.plates.find(Boolean) || "Sem placa";
         const driverKey = mode === "vehicle"
           ? `placa:${scanKey(plate) || "sem-placa"}`
@@ -3091,6 +3099,7 @@ export default function Home() {
         const day = driver.days.get(group.day) || {
           cities: new Set<string>(),
           invoices: new Set<string>(),
+          backDocuments: new Set<string>(),
           freight: 0,
           romaneios: new Set<string>(),
           observations: new Set<string>(),
@@ -3106,6 +3115,9 @@ export default function Home() {
             normalizeInvoiceKey(document.invoice) || `documento:${document.key}`,
           );
         });
+        backDocuments.forEach((document) =>
+          day.backDocuments.add(`${group.key}:${document.key}`),
+        );
         (manualRomaneioFreights[group.key] || []).forEach((item) =>
           day.invoices.add(
             normalizeInvoiceKey(item.invoice) || `manual:${item.id}`,
@@ -3130,7 +3142,10 @@ export default function Home() {
               ),
               romaneios: [...day.romaneios].sort(),
               observation: [...day.observations].join(" · "),
-              invoiceCount: day.invoices.size,
+              invoiceCount: romaneioClosingInvoiceCount(
+                day.invoices.size,
+                day.backDocuments.size,
+              ),
               freight: day.freight,
             }),
           )

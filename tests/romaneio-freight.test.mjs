@@ -7,7 +7,7 @@ const source = await readFile(new URL("../app/romaneio-light.ts", import.meta.ur
 const transpiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
 const cjsModule = { exports: {} };
 new Function("module", "exports", transpiled)(cjsModule, cjsModule.exports);
-const { romaneioFreightTotal } = cjsModule.exports;
+const { romaneioClosingInvoiceCount, romaneioFreightTotal } = cjsModule.exports;
 
 test("não duplica um frete total repetido nas linhas do mesmo romaneio", () => {
   assert.equal(romaneioFreightTotal([100, 100]), 100);
@@ -16,4 +16,9 @@ test("não duplica um frete total repetido nas linhas do mesmo romaneio", () => 
 
 test("soma parcelas diferentes do frete", () => {
   assert.equal(romaneioFreightTotal([100, 50, 25.5]), 175.5);
+});
+
+test("desconta somente os documentos marcados como volta do total de notas", () => {
+  assert.equal(romaneioClosingInvoiceCount(8, 2), 6);
+  assert.equal(romaneioClosingInvoiceCount(8, 0), 8);
 });

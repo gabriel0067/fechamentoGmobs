@@ -8,3 +8,8 @@ export const romaneioFreightTotal = (values: number[]) => {
   if (rounded.every((value) => value === rounded[0])) return rounded[0] / 100;
   return rounded.reduce((sum, value) => sum + value, 0) / 100;
 };
+
+export const romaneioClosingInvoiceCount = (
+  countedInvoices: number,
+  backDocuments: number,
+) => countedInvoices - backDocuments;
