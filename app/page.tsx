@@ -694,23 +694,12 @@ const romaneioSituationLabel: Record<RomaneioSituation, string> = {
 const romaneioOperationalStatus = (
   situation: RomaneioSituation,
 ): "ET" | "OC" => (situation === "delivered" ? "ET" : "OC");
-const romaneioStatusForDocument = (
-  statuses: Record<string, RomaneioDocumentStatusRecord>,
-  group: RomaneioDailyGroup,
-  document: RomaneioDailyDocument,
- ) => {
-  const exact = statuses[`${group.key}|${document.key}`];
-  if (exact) return exact;
-  return Object.values(statuses)
-    .filter(
-      (record) =>
-        record.day === group.day &&
-        record.romaneios.some((number) => group.romaneios.includes(number)) &&
-        record.referenceType === document.referenceType &&
-        record.referenceNumber === document.referenceNumber,
-    )
-    .sort((a, b) => b.savedAt.localeCompare(a.savedAt))[0];
-};
+const romaneioStatusLookupKey = (
+  day: string,
+  romaneio: string,
+  referenceType: string,
+  referenceNumber: string,
+) => JSON.stringify([day, romaneio, referenceType, referenceNumber]);
 const playRomaneioSuccessSound = () => {
   try {
     const context = new AudioContext();
@@ -2782,6 +2771,42 @@ export default function Home() {
       .sort((left, right) => left.order - right.order)
       .map(({ group, document }) => ({ group, document }));
   }
+  const romaneioStatusFallbackIndex = useMemo(() => {
+    const index = new Map<string, RomaneioDocumentStatusRecord>();
+    for (const record of Object.values(romaneioDocumentStatuses)) {
+      for (const romaneio of record.romaneios) {
+        const key = romaneioStatusLookupKey(
+          record.day,
+          romaneio,
+          record.referenceType,
+          record.referenceNumber,
+        );
+        const current = index.get(key);
+        if (!current || record.savedAt > current.savedAt) index.set(key, record);
+      }
+    }
+    return index;
+  }, [romaneioDocumentStatuses]);
+  const getRomaneioStatus = useCallback(
+    (group: RomaneioDailyGroup, document: RomaneioDailyDocument) => {
+      const exact = romaneioDocumentStatuses[`${group.key}|${document.key}`];
+      if (exact) return exact;
+      let latest: RomaneioDocumentStatusRecord | undefined;
+      for (const romaneio of group.romaneios) {
+        const match = romaneioStatusFallbackIndex.get(
+          romaneioStatusLookupKey(
+            group.day,
+            romaneio,
+            document.referenceType,
+            document.referenceNumber,
+          ),
+        );
+        if (match && (!latest || match.savedAt > latest.savedAt)) latest = match;
+      }
+      return latest;
+    },
+    [romaneioDocumentStatuses, romaneioStatusFallbackIndex],
+  );
   const hasRomaneioSearch = Boolean(romaneioSearch.trim());
   const romaneioCheckingSearchIndex = useMemo(
     () => !hasRomaneioSearch ? null : new Map(romaneioDailyGroups.map((group) => [
@@ -2798,9 +2823,6 @@ export default function Home() {
             document.mde,
             document.cte,
             document.invoice,
-            document.sender,
-            document.recipient,
-            document.city,
           ]),
         ].join(" ")),
     ] as const)),
@@ -2833,19 +2855,12 @@ export default function Home() {
           ...group.documents.flatMap((document) => [
             document.document,
             document.referenceNumber,
-            document.sender,
-            document.recipient,
-            document.city,
             document.invoice,
-            romaneioSituationLabel[
-              romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation || "delivered"
-            ],
           ]),
         ].join(" ")),
     ] as const)),
     [
     romaneioDailyGroups,
-    romaneioDocumentStatuses,
     romaneioGroupNotes,
     romaneioRouteLabels,
     hasRomaneioFullSearch,
@@ -2945,7 +2960,7 @@ export default function Home() {
         0,
       );
       const payableDocuments = group.documents.filter((document) => {
-        const situation = romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation;
+        const situation = getRomaneioStatus(group, document)?.situation;
         return situation === "delivered" || situation === "retained";
       });
       const documentProduction = payableDocuments.reduce(
@@ -2958,7 +2973,7 @@ export default function Home() {
         ? roundMoney(group.freight * ROMANEIO_PRODUCTION_FACTOR + manualProduction)
         : roundMoney(manualProduction);
     },
-    [manualRomaneioFreights, romaneioDocumentStatuses],
+    [getRomaneioStatus, manualRomaneioFreights],
   );
   const romaneioOperationalDocumentCount = useCallback(
     (group: RomaneioDailyGroup) =>
@@ -2971,7 +2986,7 @@ export default function Home() {
     (group: RomaneioDailyGroup) => {
       const deliveredDocuments = group.documents.filter(
         (document) =>
-          romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation === "delivered",
+          getRomaneioStatus(group, document)?.situation === "delivered",
       );
       const manualProduction = (manualRomaneioFreights[group.key] || []).reduce(
         (sum, item) => sum + manualFreightProduction(item.grossFreight),
@@ -2987,7 +3002,7 @@ export default function Home() {
         ? roundMoney(group.freight * ROMANEIO_PRODUCTION_FACTOR + manualProduction)
         : roundMoney(manualProduction);
     },
-    [manualRomaneioFreights, romaneioDocumentStatuses],
+    [getRomaneioStatus, manualRomaneioFreights],
   );
   const currentDriverClosingDiscounts = useCallback(
     (
@@ -3059,14 +3074,13 @@ export default function Home() {
       .filter((group) => withinPeriod(group.day))
       .forEach((group) => {
         const countedDocuments = group.documents.filter((document) => {
-          const situation = romaneioStatusForDocument(romaneioDocumentStatuses, group, document)?.situation;
+          const situation = getRomaneioStatus(group, document)?.situation;
           return situation === "delivered" || situation === "return";
         });
         const manualCount = manualRomaneioFreights[group.key]?.length || 0;
         const pickupCount = romaneioPickupQuantities[group.key] || 0;
         const backDocuments = group.documents.filter((document) =>
-          romaneioStatusForDocument(romaneioDocumentStatuses, group, document)
-            ?.situation === "back"
+          getRomaneioStatus(group, document)?.situation === "back"
         );
         if (!countedDocuments.length && !manualCount && !pickupCount && !backDocuments.length) return;
         const plate = group.plates.find(Boolean) || "Sem placa";
@@ -3154,11 +3168,11 @@ export default function Home() {
     driverClosingFrom,
     driverClosingTo,
     romaneioDailyGroups,
-    romaneioDocumentStatuses,
     romaneioGroupNotes,
     romaneioRouteLabels,
     manualRomaneioFreights,
     romaneioPickupQuantities,
+    getRomaneioStatus,
     driverClosingProductionForGroup,
   ]);
   const driverClosingSummaries = driverClosingSummariesByMode[driverClosingMode];
@@ -3951,7 +3965,7 @@ export default function Home() {
   function requestMarkAllRomaneioDelivered(group: RomaneioDailyGroup) {
     const drafts = romaneioDocumentDrafts[group.key] || {};
     const pendingCount = group.documents.filter((document) => {
-      if (romaneioStatusForDocument(romaneioDocumentStatuses, group, document)) return false;
+      if (getRomaneioStatus(group, document)) return false;
       const draft = drafts[document.key];
       return !draft?.situation;
     }).length;
@@ -3972,7 +3986,7 @@ export default function Home() {
       const currentDrafts = current[group.key] || {};
       const nextDrafts = { ...currentDrafts };
       group.documents.forEach((document) => {
-        if (romaneioStatusForDocument(romaneioDocumentStatuses, group, document)) return;
+        if (getRomaneioStatus(group, document)) return;
         if (nextDrafts[document.key]?.situation) return;
         nextDrafts[document.key] = { situation: "delivered", reason: "" };
       });
@@ -4139,7 +4153,7 @@ export default function Home() {
     let matches = findRomaneioScanMatches(typedIdentifiers);
     const pendingNewTrip = matches.some(
       ({ group, document }) =>
-        !romaneioStatusForDocument(romaneioDocumentStatuses, group, document),
+        !getRomaneioStatus(group, document),
     );
     if (retained && !pendingNewTrip) {
       const retainedGroup = romaneioDailyGroups.find((group) =>
@@ -4196,7 +4210,7 @@ export default function Home() {
     }
     const pendingMatch = matches.find(
       ({ group, document }) =>
-        !romaneioStatusForDocument(romaneioDocumentStatuses, group, document) &&
+        !getRomaneioStatus(group, document) &&
         !romaneioDocumentDrafts[group.key]?.[document.key]?.situation,
     );
     const match = pendingMatch || matches[0];
@@ -4269,7 +4283,7 @@ export default function Home() {
       return;
     }
     const pendingCount = group.documents.filter((document) => {
-      if (romaneioStatusForDocument(romaneioDocumentStatuses, group, document)) return false;
+      if (getRomaneioStatus(group, document)) return false;
       const draft = drafts[document.key];
       if (!draft?.situation) return true;
       if (draft.situation !== "return") return false;
@@ -7061,7 +7075,7 @@ export default function Home() {
                         missingDocumentsByDriver.get(normalized(group.driver)) || []
                       ).filter((record) => record.day < group.day);
                       const visibleDocuments = group.documents.filter(
-                        (document) => !romaneioStatusForDocument(romaneioDocumentStatuses, group, document),
+                        (document) => !getRomaneioStatus(group, document),
                       );
                       const pendingDocuments = visibleDocuments.filter(
                         (document) => !drafts[document.key]?.situation,
@@ -7442,7 +7456,11 @@ export default function Home() {
                     <label htmlFor="romaneio-full-search">Procurar</label>
                     <RomaneioFullSearchField
                       value={romaneioFullSearch}
-                      onSearch={setRomaneioFullSearch}
+                      onSearch={(value) => {
+                        setRomaneioFullSearch(value);
+                        setRomaneioFullListLimit(15);
+                        setOpenFullRomaneios({});
+                      }}
                     />
                   </div>
                 </div>
@@ -7465,18 +7483,14 @@ export default function Home() {
                         romaneioOperationalDocumentCount(group);
                       const pendingCount = group.documents.filter(
                         (document) =>
-                          !romaneioStatusForDocument(romaneioDocumentStatuses, group, document) &&
+                          !getRomaneioStatus(group, document) &&
                           !romaneioDocumentDrafts[group.key]?.[document.key]?.situation,
                       ).length;
                       const checkedBy = Array.from(
                         new Set(
                           group.documents
                             .map((document) =>
-                              romaneioStatusForDocument(
-                                romaneioDocumentStatuses,
-                                group,
-                                document,
-                              )?.savedBy?.trim(),
+                              getRomaneioStatus(group, document)?.savedBy?.trim(),
                             )
                             .filter((name): name is string => Boolean(name)),
                         ),
@@ -7566,7 +7580,7 @@ export default function Home() {
                                 <span>DOCUMENTO</span><span>REMETENTE</span><span>DESTINATÁRIO / CIDADE</span><span>FRETE / PRODUÇÃO</span><span>SITUAÇÃO</span>
                               </div>
                               {group.documents.map((document) => {
-                                const saved = romaneioStatusForDocument(romaneioDocumentStatuses, group, document);
+                                const saved = getRomaneioStatus(group, document);
                                 const city = document.city || routeLabel;
                                 return (
                                   <div className="daily-document-row" key={document.key}>

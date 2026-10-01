@@ -1710,6 +1710,10 @@ button {
   border-radius: 13px;
   background: white;
 }
+.romaneio-card:not([open]) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 98px;
+}
 .romaneio-card[open] {
   border-color: #9fc8b3;
   box-shadow: 0 7px 20px #17202a0b;
