@@ -22,3 +22,33 @@ test("a reconciliacao preserva adicoes distintas e exclusoes locais", async () =
     covers: [{ id: "1", name: "antiga" }, { id: "3", name: "remota" }, { id: "2", name: "local" }],
   });
 });
+
+test("a reconciliacao respeita exclusao remota e preserva edicao concorrente", async () => {
+  const source = await readFile(new URL("../app/cloud-storage.ts", import.meta.url), "utf8");
+  const helper = source.match(/const sameValue[\s\S]*?\n}\n\nexport async function saveCloudState/)?.[0]
+    ?.replace(/\nexport async function saveCloudState[\s\S]*/, "");
+  assert.ok(helper, "função de reconciliação não encontrada");
+  const javascript = ts.transpileModule(`${helper}\nexport { mergeConcurrentValue };`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const module = { exports: {} };
+  new Function("module", "exports", javascript)(module, module.exports);
+  const merge = module.exports.mergeConcurrentValue;
+
+  assert.deepEqual(
+    merge(
+      { covers: [{ id: "1", name: "antiga" }, { id: "2", name: "mantida" }] },
+      { covers: [{ id: "1", name: "antiga" }, { id: "2", name: "mantida" }] },
+      { covers: [{ id: "2", name: "mantida" }] },
+    ),
+    { covers: [{ id: "2", name: "mantida" }] },
+  );
+  assert.deepEqual(
+    merge(
+      { covers: [{ id: "1", name: "antiga" }] },
+      { covers: [] },
+      { covers: [{ id: "1", name: "editada em outro computador" }] },
+    ),
+    { covers: [{ id: "1", name: "editada em outro computador" }] },
+  );
+});

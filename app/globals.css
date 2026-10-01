@@ -2133,6 +2133,28 @@ button {
 .driver-pdf-day-row span {
   min-width: 0;
 }
+.driver-manual-subject {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.3fr) repeat(3, minmax(150px, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #d7e2dc;
+  border-radius: 12px;
+  background: #f3f8f5;
+}
+.driver-manual-subject > div {
+  display: grid;
+  gap: 3px;
+}
+.driver-manual-subject small { color: #64776c; }
+.driver-manual-subject input {
+  min-width: 0;
+  border: 1px solid #cfd9d3;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fff;
+}
 .driver-day-remove {
   white-space: nowrap;
 }
@@ -3288,6 +3310,8 @@ button {
   .driver-manual-day {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .driver-manual-subject { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .driver-manual-subject > div { grid-column: 1 / -1; }
   .driver-manual-day strong,
   .driver-manual-day small {
     grid-column: 1 / -1;
@@ -3405,6 +3429,8 @@ button {
   .driver-manual-day {
     grid-template-columns: 1fr;
   }
+  .driver-manual-subject { grid-template-columns: 1fr; }
+  .driver-manual-subject > div { grid-column: auto; }
   .driver-manual-day strong,
   .driver-manual-day small {
     grid-column: auto;

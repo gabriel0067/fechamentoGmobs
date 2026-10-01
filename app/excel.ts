@@ -2083,6 +2083,80 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
   pdf.save(`Fechamento Motorista - ${safeDriver} - ${safePeriod}.pdf`);
 }
 
+export function exportVehicleClosingSummaryPdf(reports: DriverClosingExport[]) {
+  const period = [reports[0]?.periodFrom, reports[0]?.periodTo]
+    .filter(Boolean)
+    .map(pdfDate)
+    .join(" a ") || "Todo o período";
+  const rows = reports.map((report) => ({
+    plate: report.plates.join(" · ") || report.driver.replace(/^Veículo\s+/i, "") || "Sem placa",
+    invoices: report.days.reduce((sum, day) => sum + day.invoiceCount, 0),
+    production: report.days.reduce((sum, day) => sum + day.freight, 0),
+  }));
+  const totalInvoices = rows.reduce((sum, row) => sum + row.invoices, 0);
+  const totalProduction = rows.reduce((sum, row) => sum + row.production, 0);
+  const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const margin = 18;
+  const tableWidth = pageWidth - margin * 2;
+  const widths = [tableWidth * 0.44, tableWidth * 0.24, tableWidth * 0.32];
+  const moneyText = (value: number) =>
+    value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  let y = 18;
+
+  const drawHeader = () => {
+    pdf.setFillColor(20, 108, 67);
+    pdf.rect(margin, y, tableWidth, 14, "F");
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(14);
+    pdf.text("FECHAMENTO CONSOLIDADO POR VEÍCULO", margin + 5, y + 6);
+    pdf.setFontSize(8);
+    pdf.text(`Período: ${period}`, margin + 5, y + 11);
+    y += 18;
+    pdf.setFillColor(23, 35, 28);
+    pdf.rect(margin, y, tableWidth, 8, "F");
+    pdf.setFontSize(9);
+    let x = margin;
+    ["PLACA", "QUANTIDADE DE NFs", "VALOR PRODUZIDO"].forEach((label, index) => {
+      pdf.text(label, x + (index ? widths[index] / 2 : 3), y + 5.3, { align: index ? "center" : "left" });
+      x += widths[index];
+    });
+    y += 8;
+  };
+
+  drawHeader();
+  rows.forEach((row, index) => {
+    if (y > 185) {
+      pdf.addPage("a4", "landscape");
+      y = 18;
+      drawHeader();
+    }
+    if (index % 2) pdf.setFillColor(243, 248, 245);
+    else pdf.setFillColor(255, 255, 255);
+    pdf.rect(margin, y, tableWidth, 9, "F");
+    pdf.setDrawColor(217, 227, 221);
+    pdf.line(margin, y + 9, margin + tableWidth, y + 9);
+    pdf.setTextColor(32, 43, 36);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(9.5);
+    pdf.text(row.plate, margin + 3, y + 5.8);
+    pdf.text(row.invoices.toLocaleString("pt-BR"), margin + widths[0] + widths[1] / 2, y + 5.8, { align: "center" });
+    pdf.text(moneyText(row.production), margin + widths[0] + widths[1] + widths[2] / 2, y + 5.8, { align: "center" });
+    y += 9;
+  });
+  pdf.setFillColor(255, 227, 109);
+  pdf.rect(margin, y, tableWidth, 10, "F");
+  pdf.setTextColor(23, 35, 28);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(10);
+  pdf.text("TOTAL", margin + 3, y + 6.5);
+  pdf.text(totalInvoices.toLocaleString("pt-BR"), margin + widths[0] + widths[1] / 2, y + 6.5, { align: "center" });
+  pdf.text(moneyText(totalProduction), margin + widths[0] + widths[1] + widths[2] / 2, y + 6.5, { align: "center" });
+
+  pdf.save(`Fechamento por Veiculos - ${safePdfFilenamePart(period) || "periodo"}.pdf`);
+}
+
 const coverDate = (value: string) =>
   value ? new Date(value).toLocaleDateString("pt-BR") : new Date().toLocaleDateString("pt-BR");
 const uniqueCoverDocuments = (documents: CoverDocumentExport[]) => [

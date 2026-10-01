@@ -223,9 +223,15 @@ export function mergeConcurrentValue(base: unknown, local: unknown, remote: unkn
         const baseItem = baseMap.get(key);
         const localItem = localMap.get(key);
         const remoteItem = remoteMap.get(key);
-        if (baseItem !== undefined && localItem === undefined) continue;
+        if (baseItem !== undefined && localItem === undefined) {
+          if (remoteItem !== undefined && !sameValue(remoteItem, baseItem)) merged.push(remoteItem);
+          continue;
+        }
         if (localItem === undefined) { if (remoteItem !== undefined) merged.push(remoteItem); continue; }
-        if (remoteItem === undefined) { merged.push(localItem); continue; }
+        if (remoteItem === undefined) {
+          if (baseItem === undefined || !sameValue(localItem, baseItem)) merged.push(localItem);
+          continue;
+        }
         merged.push(mergeConcurrentValue(baseItem, localItem, remoteItem));
       }
       return merged;
@@ -238,9 +244,15 @@ export function mergeConcurrentValue(base: unknown, local: unknown, remote: unkn
     const remoteRecord = remote as Record<string, unknown>;
     const result: Record<string, unknown> = {};
     for (const key of new Set([...Object.keys(baseRecord), ...Object.keys(remoteRecord), ...Object.keys(localRecord)])) {
-      if (key in baseRecord && !(key in localRecord)) continue;
+      if (key in baseRecord && !(key in localRecord)) {
+        if (key in remoteRecord && !sameValue(remoteRecord[key], baseRecord[key])) result[key] = remoteRecord[key];
+        continue;
+      }
       if (!(key in localRecord)) { if (key in remoteRecord) result[key] = remoteRecord[key]; continue; }
-      if (!(key in remoteRecord)) { result[key] = localRecord[key]; continue; }
+      if (!(key in remoteRecord)) {
+        if (!(key in baseRecord) || !sameValue(localRecord[key], baseRecord[key])) result[key] = localRecord[key];
+        continue;
+      }
       result[key] = mergeConcurrentValue(baseRecord[key], localRecord[key], remoteRecord[key]);
     }
     return result;

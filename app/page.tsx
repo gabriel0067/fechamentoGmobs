@@ -274,6 +274,11 @@ type DriverClosingManualDayDraft = {
   grossFreight: string;
   invoiceCount: string;
 };
+type DriverClosingManualSubjectDraft = {
+  driver: string;
+  cpf: string;
+  plate: string;
+};
 type DriverClosingPreviewReport = DriverClosingExport & {
   key: string;
 };
@@ -1445,6 +1450,11 @@ export default function Home() {
   const [driverClosingManualDrafts, setDriverClosingManualDrafts] = useState<
     Record<string, DriverClosingManualDayDraft>
   >({});
+  const [driverClosingManualSubjects, setDriverClosingManualSubjects] = useState<
+    DriverClosingSummary[]
+  >([]);
+  const [driverClosingManualSubjectDraft, setDriverClosingManualSubjectDraft] =
+    useState<DriverClosingManualSubjectDraft>({ driver: "", cpf: "", plate: "" });
   const [openRomaneios, setOpenRomaneios] = useState<Record<string, boolean>>(
     {},
   );
@@ -3175,7 +3185,13 @@ export default function Home() {
     getRomaneioStatus,
     driverClosingProductionForGroup,
   ]);
-  const driverClosingSummaries = driverClosingSummariesByMode[driverClosingMode];
+  const driverClosingSummaries = useMemo(
+    () => driverClosingMode === "driver"
+      ? [...driverClosingSummariesByMode.driver, ...driverClosingManualSubjects]
+          .sort((a, b) => a.driver.localeCompare(b.driver, "pt-BR"))
+      : driverClosingSummariesByMode.vehicle,
+    [driverClosingManualSubjects, driverClosingMode, driverClosingSummariesByMode],
+  );
   const selectedDriverClosingReports = useMemo(
     () =>
       driverClosingSummaries
@@ -5373,15 +5389,49 @@ export default function Home() {
     }));
   }
 
-  function exportSelectedDriverClosings() {
+  async function exportSelectedDriverClosings() {
     if (!selectedDriverClosingReports.length) {
       setMessageIsError(true);
       setMessage("Selecione ao menos um motorista para exportar.");
       playRomaneioAttentionSound();
       return;
     }
+    if (driverClosingMode === "vehicle") {
+      const { exportVehicleClosingSummaryPdf } = await loadExcelModule();
+      exportVehicleClosingSummaryPdf(selectedDriverClosingReports);
+      setMessageIsError(false);
+      setMessage(`Relatório único gerado com ${selectedDriverClosingReports.length} veículo(s) selecionado(s).`);
+      return;
+    }
     setDriverClosingDiscountPrompt({ amount: "", installments: "1" });
     playRomaneioAttentionSound();
+  }
+
+  function addManualDriverClosingSubject(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const driver = driverClosingManualSubjectDraft.driver.trim();
+    if (!driver) {
+      setMessageIsError(true);
+      setMessage("Informe o nome do motorista que deseja adicionar manualmente.");
+      return;
+    }
+    const key = `manual:${newId()}`;
+    const subject: DriverClosingSummary = {
+      key,
+      driver,
+      cpf: driverClosingManualSubjectDraft.cpf.trim(),
+      plates: driverClosingManualSubjectDraft.plate.trim() ? [driverClosingManualSubjectDraft.plate.trim().toUpperCase()] : [],
+      vehicleTypes: [],
+      days: [],
+      totalInvoices: 0,
+      totalFreight: 0,
+    };
+    setDriverClosingManualSubjects((current) => [...current, subject]);
+    setSelectedDriverClosings((current) => [...new Set([...current, key])]);
+    setDriverClosingManualSubjectDraft({ driver: "", cpf: "", plate: "" });
+    setDriverClosingPreviewOpen(true);
+    setMessageIsError(false);
+    setMessage(`${driver} foi adicionado à prévia. Agora inclua os dias manuais.`);
   }
 
   async function finishDriverClosingExport(withDiscount: boolean) {
@@ -7462,6 +7512,7 @@ export default function Home() {
                         setOpenFullRomaneios({});
                       }}
                     />
+                    <small>A busca consulta todos os {romaneioDailyGroups.length.toLocaleString("pt-BR")} romaneios e exibe somente os resultados que contêm o texto informado.</small>
                   </div>
                 </div>
                 {!visibleFullRomaneioGroups.length ? (
@@ -7656,6 +7707,15 @@ export default function Home() {
                     <button type="button" onClick={() => setSelectedDriverClosings([])}>Limpar</button>
                   </div>
                 </div>
+                {driverClosingMode === "driver" && (
+                  <form className="driver-manual-subject" onSubmit={addManualDriverClosingSubject}>
+                    <div><strong>Adicionar motorista manual</strong><small>Use mesmo quando ele não aparece nos romaneios do período.</small></div>
+                    <input value={driverClosingManualSubjectDraft.driver} onChange={(event) => setDriverClosingManualSubjectDraft((current) => ({ ...current, driver: event.target.value }))} placeholder="Nome do motorista" aria-label="Nome do motorista manual" />
+                    <input value={driverClosingManualSubjectDraft.cpf} onChange={(event) => setDriverClosingManualSubjectDraft((current) => ({ ...current, cpf: event.target.value }))} placeholder="CPF (opcional)" aria-label="CPF do motorista manual" />
+                    <input value={driverClosingManualSubjectDraft.plate} onChange={(event) => setDriverClosingManualSubjectDraft((current) => ({ ...current, plate: event.target.value }))} placeholder="Placa (opcional)" aria-label="Placa do motorista manual" />
+                    <button type="submit">Adicionar</button>
+                  </form>
+                )}
                 {driverClosingSummaries.length ? (
                   <div className="driver-closing-list">
                     {driverClosingSummaries.slice(0, driverClosingListLimit).map((driver) => (
@@ -7689,7 +7749,7 @@ export default function Home() {
                   <div className="empty romaneio-empty"><span>□</span><h3>Nenhum {driverClosingMode === "vehicle" ? "veículo" : "motorista"} no período</h3><p>Altere as datas ou importe os relatórios de romaneio correspondentes.</p></div>
                 )}
                 <div className="driver-closing-export">
-                  <div><strong>Prévia antes do PDF</strong><small>Confira os dias, ajuste cidades e inclua observações antes de gerar um arquivo PDF por motorista.</small></div>
+                  <div><strong>Prévia antes do PDF</strong><small>{driverClosingMode === "vehicle" ? "Selecione os carros para gerar um único relatório consolidado com placa, quantidade de NFs e produção." : "Confira os dias, ajuste cidades e inclua observações antes de gerar um arquivo PDF por motorista."}</small></div>
                   <button type="button" className="primary" onClick={openDriverClosingPreview}>Abrir prévia</button>
                 </div>
                 {driverClosingPreviewOpen && (
@@ -7700,7 +7760,7 @@ export default function Home() {
                         <h3>Conferir fechamento de {driverClosingMode === "vehicle" ? "veículo" : "motorista"}</h3>
                         <p>As alterações feitas aqui valem para o PDF gerado agora e não mudam os dados originais dos romaneios.</p>
                       </div>
-                      <button type="button" className="primary" onClick={exportSelectedDriverClosings}>Baixar PDF(s)</button>
+                      <button type="button" className="primary" onClick={exportSelectedDriverClosings}>{driverClosingMode === "vehicle" ? "Fechar veículos selecionados" : "Baixar PDF(s)"}</button>
                     </div>
                     {selectedDriverClosingReports.map((report) => {
                       return (
