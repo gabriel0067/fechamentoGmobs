@@ -1966,6 +1966,10 @@ button {
   display: grid;
   gap: 8px;
 }
+.driver-closing-more {
+  justify-self: center;
+  min-width: 180px;
+}
 .driver-closing-list label {
   display: grid;
   grid-template-columns: auto auto minmax(220px, 1fr) repeat(3, minmax(90px, auto));
@@ -2089,7 +2093,7 @@ button {
 .driver-pdf-day-row {
   display: grid;
   grid-template-columns:
-    92px minmax(220px, 1.5fr) 72px 120px minmax(220px, 1.4fr);
+    92px minmax(220px, 1.5fr) 72px 120px minmax(220px, 1.4fr) auto;
   gap: 10px;
   align-items: center;
 }
@@ -2124,6 +2128,29 @@ button {
 }
 .driver-pdf-day-row span {
   min-width: 0;
+}
+.driver-day-remove {
+  white-space: nowrap;
+}
+.driver-manual-day {
+  display: grid;
+  grid-template-columns: auto 150px minmax(180px, 1fr) 150px 150px auto;
+  gap: 9px;
+  align-items: center;
+  padding: 12px;
+  border-top: 1px solid #dfe6e2;
+  background: #f3f8f5;
+}
+.driver-manual-day input {
+  min-width: 0;
+  border: 1px solid #cfd9d3;
+  border-radius: 7px;
+  padding: 8px 9px;
+  background: #fff;
+}
+.driver-manual-day small {
+  grid-column: 1 / -1;
+  color: #64776c;
 }
 .driver-pdf-empty {
   margin: 0;
@@ -3254,6 +3281,13 @@ button {
   .driver-pdf-day-row input:last-child {
     grid-column: 1 / -1;
   }
+  .driver-manual-day {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .driver-manual-day strong,
+  .driver-manual-day small {
+    grid-column: 1 / -1;
+  }
   .driver-discount-fields {
     grid-template-columns: 1fr;
   }
@@ -3362,6 +3396,13 @@ button {
     grid-template-columns: 1fr;
   }
   .driver-pdf-day-row input:last-child {
+    grid-column: auto;
+  }
+  .driver-manual-day {
+    grid-template-columns: 1fr;
+  }
+  .driver-manual-day strong,
+  .driver-manual-day small {
     grid-column: auto;
   }
   .romaneio-bulk-actions {

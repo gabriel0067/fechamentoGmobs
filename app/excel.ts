@@ -1897,7 +1897,7 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
   const pageWidth = pdf.internal.pageSize.getWidth();
   const margin = 18;
   const tableWidth = pageWidth - margin * 2;
-  const widths = [18, 24, 18, 54, 18, 26, 16];
+  const widths = [18, 22, 14, 66, 16, 24, 14];
   const startY = 24;
   const minRows = 18;
   const rowHeight = 4.8;
@@ -1905,6 +1905,17 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
 
   const moneyText = (value: number) =>
     value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const fitSingleLine = (value: string, maxWidth: number) => {
+    if (pdf.getTextWidth(value) <= maxWidth) return value;
+    let low = 0;
+    let high = value.length;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (pdf.getTextWidth(`${value.slice(0, middle)}…`) <= maxWidth) low = middle;
+      else high = middle - 1;
+    }
+    return `${value.slice(0, low).trimEnd()}…`;
+  };
 
   pdf.setDrawColor(0, 0, 0);
   pdf.setFillColor(0, 0, 0);
@@ -1973,10 +1984,9 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
       const cityWithObservation = [city, day.observation ? `Obs.: ${day.observation}` : ""]
         .filter(Boolean)
         .join(" - ");
-      const cityLines = pdf.splitTextToSize(cityWithObservation, widths[3] - 2);
       pdf.setTextColor(0, 0, 0);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(5.8);
+      pdf.setFontSize(5.2);
       x = margin;
       pdf.text(pdfDate(day.date), x + widths[0] / 2, rowY + 3.3, {
         align: "center",
@@ -1991,7 +2001,7 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
       x += widths[1];
       pdf.text("-", x + widths[2] / 2, rowY + 3.3, { align: "center" });
       x += widths[2];
-      pdf.text(cityLines.slice(0, 2), x + 1, rowY + 3.1);
+      pdf.text(fitSingleLine(cityWithObservation, widths[3] - 2), x + 1, rowY + 3.1);
       x += widths[3];
       pdf.text(String(day.invoiceCount), x + widths[4] / 2, rowY + 3.3, {
         align: "center",

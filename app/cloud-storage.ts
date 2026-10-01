@@ -12,6 +12,28 @@ type CloudEncoding = "gzip-base64" | "json";
 
 const CLOUD_STATE_ENDPOINT = "/api/cloud-state";
 const TRANSFER_CHUNK_SIZE = 700_000;
+const CLOUD_RETRY_DELAYS = [250, 750, 1_500];
+
+const wait = (milliseconds: number) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function fetchCloud(input: RequestInfo | URL, init?: RequestInit) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= CLOUD_RETRY_DELAYS.length; attempt++) {
+    try {
+      const response = await fetch(input, init);
+      if (response.status < 500 && response.status !== 429) return response;
+      lastError = new Error(`Falha temporária do banco (${response.status}).`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < CLOUD_RETRY_DELAYS.length)
+      await wait(CLOUD_RETRY_DELAYS[attempt]);
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("O banco não respondeu após novas tentativas.");
+}
 
 let codecWorker: Worker | null = null;
 let nextCodecRequestId = 0;
@@ -131,7 +153,7 @@ function cloudError(response: Response) {
 }
 
 export async function loadCloudStateRecord<T>(stateKey: CloudStateKey) {
-  const head = await fetch(
+  const head = await fetchCloud(
     `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
     { method: "HEAD", cache: "no-store" },
   );
@@ -148,7 +170,7 @@ export async function loadCloudStateRecord<T>(stateKey: CloudStateKey) {
   for (let start = 0; start < count; start += 4) {
     const batch = await Promise.all(
       Array.from({ length: Math.min(4, count - start) }, async (_, offset) => {
-        const response = await fetch(
+        const response = await fetchCloud(
           `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}&index=${start + offset}&version=${encodeURIComponent(version)}`,
           { cache: "no-store" },
         );
@@ -169,7 +191,7 @@ export async function loadCloudState<T>(stateKey: CloudStateKey) {
 }
 
 export async function getCloudStateVersion(stateKey: CloudStateKey) {
-  const response = await fetch(
+  const response = await fetchCloud(
     `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
     { method: "HEAD", cache: "no-store" },
   );
@@ -227,7 +249,7 @@ export function mergeConcurrentValue(base: unknown, local: unknown, remote: unkn
 }
 
 export async function getCloudStateVersions(): Promise<Partial<Record<CloudStateKey, string>>> {
-  const response = await fetch(`${CLOUD_STATE_ENDPOINT}?versions=1`, { cache: "no-store" });
+  const response = await fetchCloud(`${CLOUD_STATE_ENDPOINT}?versions=1`, { cache: "no-store" });
   if (!response.ok) throw cloudError(response);
   return response.json();
 }
@@ -248,10 +270,10 @@ export async function saveCloudState(
   if (!chunks.length) chunks.push("");
   if (chunks.length > 100)
     throw new Error("O conjunto de dados excede o limite de transferência; não foi salvo.");
-  for (let start = 0; start < chunks.length; start += 4) {
+  for (let start = 0; start < chunks.length; start += 2) {
     await Promise.all(
-      chunks.slice(start, start + 4).map(async (chunk, offset) => {
-        const response = await fetch(
+      chunks.slice(start, start + 2).map(async (chunk, offset) => {
+        const response = await fetchCloud(
           `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}&upload=${uploadId}&index=${start + offset}`,
           { method: "POST", headers: { "content-type": "text/plain;charset=UTF-8", "x-gmobs-encoding": encoding }, body: chunk },
         );
@@ -259,13 +281,16 @@ export async function saveCloudState(
       }),
     );
   }
-  const response = await fetch(`${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`, {
+  const response = await fetchCloud(`${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ uploadId, chunkCount: chunks.length, encoding, expectedVersion }),
   });
-  if (response.status === 409)
+  if (response.status === 409) {
+    const currentVersion = await getCloudStateVersion(stateKey).catch(() => "");
+    if (currentVersion === uploadId) return uploadId;
     throw new CloudStateConflictError("Outra pessoa alterou os dados durante a gravação.");
+  }
   if (!response.ok) throw cloudError(response);
   const result = (await response.json()) as { updatedAt?: string };
   return result.updatedAt || "";
@@ -277,14 +302,26 @@ export async function saveCloudStateReconciled<T>(
   expectedVersion: string,
   baseValue: T,
 ): Promise<CloudSaveResult<T>> {
-  try {
-    return { value, version: await saveCloudState(stateKey, value, expectedVersion), reconciled: false };
-  } catch (error) {
-    if (!(error instanceof CloudStateConflictError)) throw error;
-    const remote = await loadCloudStateRecord<T>(stateKey);
-    if (!remote) throw error;
-    const merged = mergeConcurrentValue(baseValue, value, remote.value) as T;
-    const version = await saveCloudState(stateKey, merged, remote.version);
-    return { value: merged, version, reconciled: true };
+  let localValue = value;
+  let base = baseValue;
+  let version = expectedVersion;
+  let reconciled = false;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return {
+        value: localValue,
+        version: await saveCloudState(stateKey, localValue, version),
+        reconciled,
+      };
+    } catch (error) {
+      if (!(error instanceof CloudStateConflictError) || attempt === 3) throw error;
+      const remote = await loadCloudStateRecord<T>(stateKey);
+      if (!remote) throw error;
+      localValue = mergeConcurrentValue(base, localValue, remote.value) as T;
+      base = remote.value;
+      version = remote.version;
+      reconciled = true;
+    }
   }
+  throw new Error("Não foi possível reconciliar as alterações simultâneas.");
 }

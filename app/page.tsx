@@ -264,8 +264,15 @@ type DriverClosingSummary = {
   totalFreight: number;
 };
 type DriverClosingDayEdit = {
+  cityText?: string;
+  observation?: string;
+  deleted?: boolean;
+};
+type DriverClosingManualDayDraft = {
+  date: string;
   cityText: string;
-  observation: string;
+  grossFreight: string;
+  invoiceCount: string;
 };
 type DriverClosingPreviewReport = DriverClosingExport & {
   key: string;
@@ -979,38 +986,6 @@ const romaneioCompleteRowKey = (
     ),
   );
 
-type ScheduledBrowserWork = { kind: "idle" | "timeout"; id: number };
-type BrowserWithIdleWork = Window &
-  typeof globalThis & {
-    requestIdleCallback?: (
-      callback: () => void,
-      options?: { timeout?: number },
-    ) => number;
-    cancelIdleCallback?: (id: number) => void;
-  };
-
-const scheduleBrowserWork = (
-  callback: () => void,
-  timeout: number,
-): ScheduledBrowserWork => {
-  const browser = window as BrowserWithIdleWork;
-  if (browser.requestIdleCallback)
-    return {
-      kind: "idle",
-      id: browser.requestIdleCallback(callback, { timeout }),
-    };
-  return { kind: "timeout", id: window.setTimeout(callback, 0) };
-};
-
-const cancelScheduledBrowserWork = (work: ScheduledBrowserWork) => {
-  const browser = window as BrowserWithIdleWork;
-  if (work.kind === "idle" && browser.cancelIdleCallback) {
-    browser.cancelIdleCallback(work.id);
-    return;
-  }
-  window.clearTimeout(work.id);
-};
-
 function useCloudStateSync<T>(
   stateKey: CloudStateKey,
   value: T,
@@ -1043,44 +1018,36 @@ function useCloudStateSync<T>(
     onQueue();
     let started = false;
     let cancelled = false;
-    let queuedWork: ScheduledBrowserWork | null = null;
     const saveDelay =
       stateKey === "closing" || stateKey === "romaneios" || stateKey === "billed"
-        ? 2_500
-        : 900;
-    const idleTimeout =
-      stateKey === "closing" || stateKey === "romaneios" || stateKey === "billed"
-        ? 8_000
-        : 4_000;
+        ? 350
+        : 250;
     const timer = window.setTimeout(() => {
-      queuedWork = scheduleBrowserWork(() => {
-        if (cancelled) return;
-        started = true;
-        onStart();
-        const save = saveChainRef.current.then(async () => {
-          try {
-            const expectedVersion = getExpectedVersion(stateKey);
-            const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
-            const result = await saveCloudStateReconciled(
-              stateKey,
-              value,
-              expectedVersion,
-              cached?.version === expectedVersion ? cached.value : value,
-            );
-            await writeCloudStateCache(stateKey, result.version, result.value).catch(() => undefined);
-            if (result.reconciled) onReconciled(result.value);
-            onFinish(stateKey, true, result.version);
-          } catch (error) {
-            onFinish(stateKey, false, undefined, error instanceof Error ? error : undefined);
-          }
-        });
-        saveChainRef.current = save;
-      }, idleTimeout);
+      if (cancelled) return;
+      started = true;
+      onStart();
+      const save = saveChainRef.current.then(async () => {
+        try {
+          const expectedVersion = getExpectedVersion(stateKey);
+          const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
+          const result = await saveCloudStateReconciled(
+            stateKey,
+            value,
+            expectedVersion,
+            cached?.version === expectedVersion ? cached.value : value,
+          );
+          await writeCloudStateCache(stateKey, result.version, result.value).catch(() => undefined);
+          if (result.reconciled) onReconciled(result.value);
+          onFinish(stateKey, true, result.version);
+        } catch (error) {
+          onFinish(stateKey, false, undefined, error instanceof Error ? error : undefined);
+        }
+      });
+      saveChainRef.current = save;
     }, saveDelay);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
-      if (queuedWork && !started) cancelScheduledBrowserWork(queuedWork);
       if (!started) return;
     };
   }, [
@@ -1474,6 +1441,7 @@ export default function Home() {
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
   const [driverClosingTo, setDriverClosingTo] = useState("");
   const [driverClosingMode, setDriverClosingMode] = useState<"driver" | "vehicle">("driver");
+  const [driverClosingListLimit, setDriverClosingListLimit] = useState(40);
   const [selectedDriverClosings, setSelectedDriverClosings] = useState<
     string[]
   >([]);
@@ -1481,6 +1449,12 @@ export default function Home() {
     useState(false);
   const [driverClosingDayEdits, setDriverClosingDayEdits] = useState<
     Record<string, DriverClosingDayEdit>
+  >({});
+  const [driverClosingManualDays, setDriverClosingManualDays] = useState<
+    Record<string, (DriverClosingDay & { manualId: string })[]>
+  >({});
+  const [driverClosingManualDrafts, setDriverClosingManualDrafts] = useState<
+    Record<string, DriverClosingManualDayDraft>
   >({});
   const [openRomaneios, setOpenRomaneios] = useState<Record<string, boolean>>(
     {},
@@ -1557,6 +1531,7 @@ export default function Home() {
   const backupInputRef = useRef<HTMLInputElement>(null);
   const cloudWritesRef = useRef(0);
   const cloudSaveFailedRef = useRef(false);
+  const cloudFailedKeysRef = useRef(new Set<CloudStateKey>());
   const cloudVersionsRef = useRef<Partial<Record<CloudStateKey, string>>>({});
   const skipCloudSaveRef = useRef(new Set<CloudStateKey>());
   const lastLocalChangeRef = useRef(0);
@@ -2273,8 +2248,14 @@ export default function Home() {
   const markCloudSaveFinish = useCallback(
     (stateKey: CloudStateKey, succeeded: boolean, version?: string, error?: Error) => {
       if (!succeeded) {
+        cloudFailedKeysRef.current.add(stateKey);
         cloudSaveFailedRef.current = true;
         setCloudFailureMessage(error?.message || "Falha ao gravar no banco. Os dados anteriores foram preservados.");
+      }
+      if (succeeded) {
+        cloudFailedKeysRef.current.delete(stateKey);
+        cloudSaveFailedRef.current = cloudFailedKeysRef.current.size > 0;
+        if (!cloudSaveFailedRef.current) setCloudFailureMessage("");
       }
       if (succeeded && version) cloudVersionsRef.current[stateKey] = version;
       cloudWritesRef.current = Math.max(0, cloudWritesRef.current - 1);
@@ -2372,8 +2353,7 @@ export default function Home() {
       cloudWritesRef.current > 0 ||
       cloudSaveFailedRef.current ||
       hasUnsavedRomaneioDrafts ||
-      Date.now() - lastLocalChangeRef.current < 15_000 ||
-      Date.now() - lastUserInteractionRef.current < 5_000 ||
+      Date.now() - lastLocalChangeRef.current < 2_000 ||
       document.visibilityState !== "visible"
     )
       return;
@@ -2392,8 +2372,7 @@ export default function Home() {
         Object.values(romaneioDocumentDrafts).some((drafts) =>
           Object.values(drafts).some((draft) => draft.situation),
         ) ||
-        Date.now() - lastLocalChangeRef.current < 15_000 ||
-        Date.now() - lastUserInteractionRef.current < 5_000
+        Date.now() - lastLocalChangeRef.current < 2_000
       )
         return;
       const changedKeys = keys.filter(
@@ -2517,7 +2496,7 @@ export default function Home() {
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refreshCloudData();
     };
-    const interval = window.setInterval(refreshWhenVisible, 20_000);
+    const interval = window.setInterval(refreshWhenVisible, 5_000);
     window.addEventListener("focus", refreshWhenVisible);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
@@ -3197,10 +3176,18 @@ export default function Home() {
             periodFrom: driverClosingFrom,
             periodTo: driverClosingTo,
             discounts: currentDriverClosingDiscounts(driver.key),
-            days: driver.days.map((day) => {
+            days: [
+              ...driver.days.filter((day) =>
+                !driverClosingDayEdits[
+                  driverClosingDayEditKey(driver.key, day.date)
+                ]?.deleted
+              ),
+              ...(driverClosingManualDays[driver.key] || []),
+            ].map((day) => {
+              const manualId = "manualId" in day ? String(day.manualId) : "";
               const edit =
                 driverClosingDayEdits[
-                  driverClosingDayEditKey(driver.key, day.date)
+                  driverClosingDayEditKey(driver.key, manualId || day.date)
                 ];
               return {
                 ...day,
@@ -3215,6 +3202,7 @@ export default function Home() {
         ),
     [
       driverClosingDayEdits,
+      driverClosingManualDays,
       driverClosingFrom,
       driverClosingSummaries,
       driverClosingTo,
@@ -5301,6 +5289,73 @@ export default function Home() {
             : current[driverClosingDayEditKey(driverKey, date)]?.observation ??
               "",
       },
+    }));
+  }
+
+  function removeDriverClosingDay(driverKey: string, date: string) {
+    setDriverClosingDayEdits((current) => ({
+      ...current,
+      [driverClosingDayEditKey(driverKey, date)]: {
+        ...current[driverClosingDayEditKey(driverKey, date)],
+        deleted: true,
+      },
+    }));
+  }
+
+  function updateDriverClosingManualDraft(
+    driverKey: string,
+    field: keyof DriverClosingManualDayDraft,
+    value: string,
+  ) {
+    setDriverClosingManualDrafts((current) => ({
+      ...current,
+      [driverKey]: {
+        date: current[driverKey]?.date || "",
+        cityText: current[driverKey]?.cityText || "",
+        grossFreight: current[driverKey]?.grossFreight || "",
+        invoiceCount: current[driverKey]?.invoiceCount || "",
+        [field]: value,
+      },
+    }));
+  }
+
+  function addDriverClosingManualDay(driverKey: string) {
+    const draft = driverClosingManualDrafts[driverKey];
+    const grossFreight = parseMoney(draft?.grossFreight || "");
+    const invoiceCount = Number(draft?.invoiceCount || "");
+    if (!draft?.date || !draft.cityText.trim() || grossFreight === null || grossFreight < 0 || !Number.isInteger(invoiceCount) || invoiceCount < 0) {
+      setMessageIsError(true);
+      setMessage("Preencha data, cidade, frete bruto e quantidade de NFs do dia manual.");
+      return;
+    }
+    setDriverClosingManualDays((current) => ({
+      ...current,
+      [driverKey]: [
+        ...(current[driverKey] || []),
+        {
+          manualId: newId(),
+          date: draft.date,
+          cities: [draft.cityText.trim()],
+          cityText: draft.cityText.trim(),
+          invoiceCount,
+          freight: roundMoney(grossFreight * ROMANEIO_PRODUCTION_FACTOR),
+          observation: "Dia acrescentado manualmente na prévia",
+          romaneios: [],
+        },
+      ],
+    }));
+    setDriverClosingManualDrafts((current) => ({
+      ...current,
+      [driverKey]: { date: "", cityText: "", grossFreight: "", invoiceCount: "" },
+    }));
+    setMessageIsError(false);
+    setMessage("Dia manual incluído na prévia com o desconto de 13% aplicado ao frete bruto.");
+  }
+
+  function removeDriverClosingManualDay(driverKey: string, manualId: string) {
+    setDriverClosingManualDays((current) => ({
+      ...current,
+      [driverKey]: (current[driverKey] || []).filter((day) => day.manualId !== manualId),
     }));
   }
 
@@ -7560,7 +7615,7 @@ export default function Home() {
                   </div>
                   <label>
                     Fechar por
-                    <select value={driverClosingMode} onChange={(event) => { setDriverClosingMode(event.target.value as "driver" | "vehicle"); setSelectedDriverClosings([]); setDriverClosingPreviewOpen(false); }}>
+                    <select value={driverClosingMode} onChange={(event) => { setDriverClosingMode(event.target.value as "driver" | "vehicle"); setDriverClosingListLimit(40); setSelectedDriverClosings([]); setDriverClosingPreviewOpen(false); }}>
                       <option value="driver">Motorista</option>
                       <option value="vehicle">Placa do veículo</option>
                     </select>
@@ -7589,7 +7644,7 @@ export default function Home() {
                 </div>
                 {driverClosingSummaries.length ? (
                   <div className="driver-closing-list">
-                    {driverClosingSummaries.map((driver) => (
+                    {driverClosingSummaries.slice(0, driverClosingListLimit).map((driver) => (
                       <label key={driver.key} className={selectedDriverClosings.includes(driver.key) ? "selected" : ""}>
                         <input
                           type="checkbox"
@@ -7610,6 +7665,11 @@ export default function Home() {
                         <span><small>PRODUÇÃO</small><strong>{money(driver.totalFreight)}</strong></span>
                       </label>
                     ))}
+                    {driverClosingSummaries.length > driverClosingListLimit && (
+                      <button type="button" className="driver-closing-more" onClick={() => setDriverClosingListLimit((current) => current + 40)}>
+                        Mostrar mais 40
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <div className="empty romaneio-empty"><span>□</span><h3>Nenhum {driverClosingMode === "vehicle" ? "veículo" : "motorista"} no período</h3><p>Altere as datas ou importe os relatórios de romaneio correspondentes.</p></div>
@@ -7648,13 +7708,16 @@ export default function Home() {
                                 <span>Observação</span>
                               </div>
                               {report.days.map((day) => {
+                                const manualId = "manualId" in day
+                                  ? String((day as DriverClosingDay & { manualId: string }).manualId)
+                                  : "";
                                 const editKey = driverClosingDayEditKey(
                                   report.key,
-                                  day.date,
+                                  manualId || day.date,
                                 );
                                 const edit = driverClosingDayEdits[editKey];
                                 return (
-                                  <div className="driver-pdf-day-row" key={day.date}>
+                                  <div className="driver-pdf-day-row" key={manualId || day.date}>
                                     <span><strong>{formatRomaneioDay(day.date)}</strong></span>
                                     <input
                                       key={`city-${editKey}-${edit?.cityText ?? day.cityText ?? day.cities.join(" · ")}`}
@@ -7685,6 +7748,13 @@ export default function Home() {
                                       placeholder="Observação do dia"
                                       aria-label={`Observação de ${formatRomaneioDay(day.date)}`}
                                     />
+                                    <button
+                                      type="button"
+                                      className="danger-link driver-day-remove"
+                                      onClick={() => manualId
+                                        ? removeDriverClosingManualDay(report.key, manualId)
+                                        : removeDriverClosingDay(report.key, day.date)}
+                                    >Excluir dia</button>
                                   </div>
                                 );
                               })}
@@ -7692,6 +7762,37 @@ export default function Home() {
                           ) : (
                             <p className="driver-pdf-empty">Nenhum dia entregue gravado para este motorista no período.</p>
                           )}
+                          <div className="driver-manual-day">
+                            <strong>Adicionar dia manual</strong>
+                            <input
+                              type="date"
+                              value={driverClosingManualDrafts[report.key]?.date || ""}
+                              onChange={(event) => updateDriverClosingManualDraft(report.key, "date", event.target.value)}
+                              aria-label={`Data manual de ${report.driver}`}
+                            />
+                            <input
+                              value={driverClosingManualDrafts[report.key]?.cityText || ""}
+                              onChange={(event) => updateDriverClosingManualDraft(report.key, "cityText", event.target.value)}
+                              placeholder="Cidade"
+                              aria-label={`Cidade manual de ${report.driver}`}
+                            />
+                            <input
+                              value={driverClosingManualDrafts[report.key]?.grossFreight || ""}
+                              onChange={(event) => updateDriverClosingManualDraft(report.key, "grossFreight", event.target.value)}
+                              placeholder="Frete bruto"
+                              inputMode="decimal"
+                              aria-label={`Frete bruto manual de ${report.driver}`}
+                            />
+                            <input
+                              value={driverClosingManualDrafts[report.key]?.invoiceCount || ""}
+                              onChange={(event) => updateDriverClosingManualDraft(report.key, "invoiceCount", event.target.value)}
+                              placeholder="Quantidade de NFs"
+                              inputMode="numeric"
+                              aria-label={`Quantidade manual de NFs de ${report.driver}`}
+                            />
+                            <button type="button" onClick={() => addDriverClosingManualDay(report.key)}>Adicionar</button>
+                            <small>O sistema aplica automaticamente 13% de desconto sobre o frete bruto informado.</small>
+                          </div>
                         </section>
                       );
                     })}
