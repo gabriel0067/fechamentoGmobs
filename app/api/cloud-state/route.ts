@@ -70,6 +70,8 @@ export async function HEAD(request: Request) {
   const access = await check(request);
   if (access.response) return access.response;
   try {
+    await ensureUploadSchema();
+    await discardExpiredUploads();
     const rows = await sql().query(
       "SELECT version, encoding, length(payload) AS size FROM cloud_state_records WHERE owner_id = $1 AND state_key = $2",
       [OWNER, access.key],
