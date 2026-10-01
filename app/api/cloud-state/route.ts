@@ -48,6 +48,19 @@ async function check(request: Request) {
   return { key };
 }
 
+async function discardExpiredUploads() {
+  await sql().query(
+    "DELETE FROM cloud_state_upload_chunks WHERE created_at < now() - interval '5 minutes'",
+  );
+}
+
+async function discardUpload(stateKey: string, uploadId: string) {
+  await sql().query(
+    "DELETE FROM cloud_state_upload_chunks WHERE owner_id = $1 AND state_key = $2 AND upload_id = $3",
+    [OWNER, stateKey, uploadId],
+  );
+}
+
 function failure(error: unknown) {
   console.error("Falha ao acessar o estado no Neon", error);
   return Response.json({ error: "Não foi possível acessar os dados." }, { status: 500 });
@@ -118,6 +131,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "Parte excede o limite." }, { status: 413 });
   try {
     await ensureUploadSchema();
+    await discardExpiredUploads();
     await sql().query(
       `INSERT INTO cloud_state_upload_chunks (owner_id, state_key, upload_id, chunk_index, encoding, payload)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -157,12 +171,11 @@ export async function PUT(request: Request) {
        RETURNING version`,
       [OWNER, access.key, uploadId, encoding, new Date().toISOString(), chunkCount, expectedVersion],
     ) as Record<string, unknown>[];
-    if (!rows.length)
+    if (!rows.length) {
+      await discardUpload(access.key, uploadId);
       return Response.json({ error: "Os dados foram alterados por outra pessoa ou o envio está incompleto. Nenhum dado foi substituído." }, { status: 409 });
-    await sql().query(
-      "DELETE FROM cloud_state_upload_chunks WHERE owner_id = $1 AND state_key = $2 AND upload_id = $3",
-      [OWNER, access.key, uploadId],
-    );
+    }
+    await discardUpload(access.key, uploadId);
     return Response.json({ saved: true, updatedAt: uploadId });
   } catch (error) { return failure(error); }
 }
