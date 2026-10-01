@@ -61,6 +61,35 @@ async function discardUpload(stateKey: string, uploadId: string) {
   );
 }
 
+function isStorageLimit(error: unknown) {
+  const value = error as { code?: string; message?: string };
+  return value?.code === "53100" || /project size limit|disk full|no space left/i.test(value?.message || "");
+}
+
+async function recoverTemporaryUploadSpace() {
+  // This table contains only incomplete transfer pieces. The authoritative
+  // records live in cloud_state_records and are deliberately left untouched.
+  await sql().query("TRUNCATE TABLE cloud_state_upload_chunks");
+}
+
+async function insertUploadChunk(
+  stateKey: string, uploadId: string, index: number, encoding: string, chunk: string,
+) {
+  const statement = `INSERT INTO cloud_state_upload_chunks
+      (owner_id, state_key, upload_id, chunk_index, encoding, payload)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (owner_id, state_key, upload_id, chunk_index)
+    DO UPDATE SET encoding = EXCLUDED.encoding, payload = EXCLUDED.payload`;
+  const params = [OWNER, stateKey, uploadId, index, encoding, chunk];
+  try {
+    await sql().query(statement, params);
+  } catch (error) {
+    if (!isStorageLimit(error)) throw error;
+    await recoverTemporaryUploadSpace();
+    await sql().query(statement, params);
+  }
+}
+
 function failure(error: unknown) {
   console.error("Falha ao acessar o estado no Neon", error);
   return Response.json({ error: "Não foi possível acessar os dados." }, { status: 500 });
@@ -87,6 +116,19 @@ export async function HEAD(request: Request) {
 }
 
 export async function GET(request: Request) {
+  if (new URL(request.url).searchParams.get("storage") === "1") {
+    if (!(await authenticatedUsername(request)))
+      return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
+    try {
+      await ensureUploadSchema();
+      const rows = await sql().query(`SELECT
+        pg_total_relation_size('cloud_state_records') AS records_bytes,
+        pg_total_relation_size('cloud_state_upload_chunks') AS temporary_bytes,
+        (SELECT coalesce(sum(octet_length(payload)), 0) FROM cloud_state_records WHERE owner_id = $1) AS useful_payload_bytes,
+        (SELECT count(*) FROM cloud_state_upload_chunks) AS temporary_parts`, [OWNER]) as Record<string, unknown>[];
+      return Response.json(rows[0], { headers: { "cache-control": "no-store" } });
+    } catch (error) { return failure(error); }
+  }
   if (new URL(request.url).searchParams.get("versions") === "1") {
     if (!(await authenticatedUsername(request)))
       return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
@@ -134,13 +176,7 @@ export async function POST(request: Request) {
   try {
     await ensureUploadSchema();
     await discardExpiredUploads();
-    await sql().query(
-      `INSERT INTO cloud_state_upload_chunks (owner_id, state_key, upload_id, chunk_index, encoding, payload)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (owner_id, state_key, upload_id, chunk_index)
-       DO UPDATE SET encoding = EXCLUDED.encoding, payload = EXCLUDED.payload`,
-      [OWNER, access.key, uploadId, index, encoding, chunk],
-    );
+    await insertUploadChunk(access.key, uploadId, index, encoding, chunk);
     return new Response(null, { status: 204 });
   } catch (error) { return failure(error); }
 }
