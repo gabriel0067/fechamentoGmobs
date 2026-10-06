@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "../app/excel-light.ts";
+import {
+  commissionTotal,
+  normalizeCnpj,
+  normalizeInvoiceKey,
+  uniqueFitlogExportRows,
+} from "../app/excel-light.ts";
 
 test("normalização leve mantém CNPJ com zeros à esquerda", () => {
   assert.equal(normalizeCnpj("6127582000905"), "06127582000905");
@@ -13,4 +18,13 @@ test("normalização leve mantém base da NF sem série", () => {
 test("total do fechamento permanece BA mais TDE", () => {
   assert.equal(commissionTotal({ freight: 100, tde: 15 }), 115);
   assert.equal(commissionTotal({ freight: 100, reportedTotal: 80, tde: 15 }), 95);
+});
+
+test("Fitlog exporta uma única linha por CT-e e NF", () => {
+  const rows = [
+    { cte: "501067", invoice: "3326215 - 2", sender: "A", recipient: "B" },
+    { cte: "501067", invoice: "3326215 - 2", sender: "A", recipient: "B" },
+    { cte: "501068", invoice: "3326215 - 2", sender: "A", recipient: "B" },
+  ];
+  assert.deepEqual(uniqueFitlogExportRows(rows), [rows[0], rows[2]]);
 });

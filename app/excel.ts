@@ -1,6 +1,10 @@
 import XLSX from "xlsx-js-style";
 import { jsPDF } from "jspdf";
-import { normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
+import {
+  normalizeCnpj,
+  normalizeInvoiceKey,
+  uniqueFitlogExportRows,
+} from "./excel-light";
 export { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
 
 export type BillingPdfRow = { partner: string; value: number; createdBy: string };
@@ -2439,6 +2443,7 @@ export function exportClosingXlsx(
 ) {
   const isArgius = normalize(partnerName) === "argius";
   const isFitlog = normalize(partnerName) === "fitlog";
+  const outputRows = isFitlog ? uniqueFitlogExportRows(rows) : rows;
   const safePeriod = period.replace(/[^a-zA-Z0-9À-ÿ]+/g, " ").trim();
   if (isArgius) {
     const normalWorkbook = XLSX.utils.book_new();
@@ -2470,13 +2475,13 @@ export function exportClosingXlsx(
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(
     workbook,
-    buildClosingSheet(rows, partnerName, period, {
+    buildClosingSheet(outputRows, partnerName, period, {
       showTde: true,
       showDedicated: !isFitlog,
     }),
     "DadosExcel",
   );
-  const freightComplements = rows.filter(
+  const freightComplements = outputRows.filter(
     (row) => normalize(row.status) === "cf",
   );
   if (freightComplements.length) {
