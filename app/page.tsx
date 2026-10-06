@@ -28,7 +28,12 @@ import {
   type CoverDocumentExport,
   type PajussaraClosingDocument,
 } from "./excel";
-import { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
+import {
+  commissionTotal,
+  normalizeCnpj,
+  normalizeInvoiceKey,
+  uniqueFitlogExportRows,
+} from "./excel-light";
 import {
   romaneioClosingInvoiceCount,
   romaneioFreightPartsTotal,
@@ -658,15 +663,6 @@ const entryMatchesGlobalDocumentScan = (
   );
 };
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
-const entryStableIdentity = (entry: Pick<Entry, "partnerId" | "cteKey" | "cte" | "mde" | "invoice" | "sender" | "recipient">) => {
-  const cteKey = scanKey(entry.cteKey);
-  if (cteKey) return `CHAVE:${cteKey}`;
-  const cte = numericDocumentId(entry.cte);
-  if (cte) return `CTE:${entry.partnerId}:${cte}`;
-  const mde = numericDocumentId(entry.mde);
-  if (mde) return `MDE:${mde}`;
-  return `NF:${entry.partnerId}:${normalizeInvoiceKey(entry.invoice)}:${normalized(entry.sender)}:${normalized(entry.recipient)}`;
-};
 // A mesma chave pode aparecer novamente em uma reentrega. Ela não deve gerar
 // outra cobrança por si só, mas a linha completa precisa continuar consultável.
 const romaneioReferenceIdentity = (entry: RomaneioReferenceEntry) =>
@@ -676,6 +672,36 @@ const romaneioReferenceIdentity = (entry: RomaneioReferenceEntry) =>
     entry.sender, entry.recipient, entry.city, entry.observation,
     entry.reportedTotal, entry.freight,
   ].map((value) => String(value ?? "").trim()));
+const closingEntryImportIdentity = (entry: Entry) =>
+  JSON.stringify([
+    entry.partnerId, entry.status, entry.date, entry.deliveryDate, entry.mde,
+    entry.cte, entry.cteKey, entry.invoice, entry.sender, entry.senderCnpj,
+    entry.recipient, entry.recipientCnpj, entry.city, entry.observation,
+    entry.weight, entry.volumes, entry.merchandiseValue, entry.freight,
+    entry.partnerFreight, entry.sourceTde ?? entry.tde, entry.tda, entry.trt,
+    entry.redelivery, entry.dedicated, entry.adjustment, entry.reportedTotal,
+  ].map((value) => String(value ?? "").trim()));
+const restoreEligibleSpecialEntries = (
+  savedEntries: Entry[],
+  referenceEntries: RomaneioReferenceEntry[],
+) => {
+  const restored = [...savedEntries];
+  const seen = new Set(restored.map(closingEntryImportIdentity));
+  referenceEntries.forEach((reference) => {
+    const sourceStatus = normalized(reference.sourceStatus || reference.status);
+    if (!reference.sourceEligible || !["re", "cf"].includes(sourceStatus)) return;
+    const entry: Entry = {
+      ...reference,
+      status: sourceStatus.toUpperCase(),
+      isRedelivery: sourceStatus === "re",
+    };
+    const key = closingEntryImportIdentity(entry);
+    if (seen.has(key)) return;
+    seen.add(key);
+    restored.push(entry);
+  });
+  return restored;
+};
 const newId = () =>
   globalThis.crypto?.randomUUID?.() ||
   `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -1740,13 +1766,12 @@ export default function Home() {
         if (cancelled) return;
         if (savedClosing) {
           const normalizedEntries = normalizeSavedEntries(savedClosing.entries);
-          setEntries(normalizedEntries);
-          setRomaneioReferenceEntries(
-            normalizeRomaneioReferenceEntries(
-              savedClosing.referenceEntries,
-              normalizedEntries,
-            ),
+          const normalizedReferences = normalizeRomaneioReferenceEntries(
+            savedClosing.referenceEntries,
+            normalizedEntries,
           );
+          setEntries(restoreEligibleSpecialEntries(normalizedEntries, normalizedReferences));
+          setRomaneioReferenceEntries(normalizedReferences);
           if (Array.isArray(savedClosing.covers)) setCovers(savedClosing.covers);
           if (Array.isArray(savedClosing.coverGenerators))
             setCoverGenerators(savedClosing.coverGenerators);
@@ -1901,13 +1926,12 @@ export default function Home() {
         const closing = closingRecord?.value;
         if (closing?.entries && Array.isArray(closing.entries)) {
           const normalizedEntries = normalizeSavedEntries(closing.entries);
-          setEntries(normalizedEntries);
-          setRomaneioReferenceEntries(
-            normalizeRomaneioReferenceEntries(
-              closing.referenceEntries,
-              normalizedEntries,
-            ),
+          const normalizedReferences = normalizeRomaneioReferenceEntries(
+            closing.referenceEntries,
+            normalizedEntries,
           );
+          setEntries(restoreEligibleSpecialEntries(normalizedEntries, normalizedReferences));
+          setRomaneioReferenceEntries(normalizedReferences);
           setImportInfo(closing.importInfo || null);
           setCovers(Array.isArray(closing.covers) ? closing.covers : []);
           setCoverGenerators(
@@ -2414,13 +2438,12 @@ export default function Home() {
           const normalizedEntries = normalizeSavedEntries(
             record.value.entries || [],
           );
-          setEntries(normalizedEntries);
-          setRomaneioReferenceEntries(
-            normalizeRomaneioReferenceEntries(
-              record.value.referenceEntries,
-              normalizedEntries,
-            ),
+          const normalizedReferences = normalizeRomaneioReferenceEntries(
+            record.value.referenceEntries,
+            normalizedEntries,
           );
+          setEntries(restoreEligibleSpecialEntries(normalizedEntries, normalizedReferences));
+          setRomaneioReferenceEntries(normalizedReferences);
           setImportInfo(record.value.importInfo || null);
           setCovers(Array.isArray(record.value.covers) ? record.value.covers : []);
           setCoverGenerators(
@@ -3718,11 +3741,14 @@ export default function Home() {
   const closingRowsByPartner = useMemo(() => {
     const rows = new Map<string, Entry[]>();
     partners.forEach((partner) => {
+      const eligibleRows = usesScanForPartner(partner.id)
+        ? partner.rows.filter(isScanned)
+        : partner.rows;
       rows.set(
         partner.id,
-        usesScanForPartner(partner.id)
-          ? partner.rows.filter(isScanned)
-          : partner.rows,
+        partner.id === "fitlog"
+          ? uniqueFitlogExportRows(eligibleRows)
+          : eligibleRows,
       );
     });
     return rows;
@@ -5082,7 +5108,6 @@ export default function Home() {
     setMessage("");
     try {
       const result = await (await loadExcelModule()).readClosingFile(file);
-      const seen = new Set<string>();
       const completeRows = new Set<string>();
       const tdeMap = effectiveTdeRates(tdeRates);
       let duplicates = 0;
@@ -5098,10 +5123,7 @@ export default function Home() {
       const referenceEntries = uniqueReferenceRows.map(
         (row): RomaneioReferenceEntry => {
         const partner = identifyPartner(row.partner);
-        const key = `${partner.id}|${row.cte}|${row.invoice}`.toLowerCase();
-        const repeated = seen.has(key);
-        seen.add(key);
-        const isRedelivery = row.isRedelivery || repeated;
+        const isRedelivery = row.isRedelivery;
         const recipientCnpj = normalizeCnpj(row.recipientCnpj);
         const tde = recipientCnpj
           ? tdeMap.get(`${recipientCnpj}|${partner.id}`) ?? row.tde
@@ -5174,10 +5196,10 @@ export default function Home() {
         (entry) => entry.sourceEligible || Boolean(entry.romaneioDocumentKey),
       );
       const existingKeys = new Set(
-        [...entries, ...romaneioReferenceEntries].map(entryStableIdentity),
+        entries.map(closingEntryImportIdentity),
       );
       const additions = importedCandidates.filter((entry) => {
-        const key = entryStableIdentity(entry);
+        const key = closingEntryImportIdentity(entry);
         if (existingKeys.has(key)) {
           duplicates++;
           return false;

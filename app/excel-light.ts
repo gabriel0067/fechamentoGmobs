@@ -29,8 +29,15 @@ export const uniqueFitlogExportRows = <T extends {
   cte: unknown;
   cteKey?: unknown;
   invoice: unknown;
+  status?: unknown;
+  date?: unknown;
+  deliveryDate?: unknown;
   sender?: unknown;
   recipient?: unknown;
+  observation?: unknown;
+  freight?: unknown;
+  reportedTotal?: unknown;
+  tde?: unknown;
 }>(rows: T[]) => {
   const seen = new Set<string>();
   return rows.filter((row) => {
@@ -40,11 +47,35 @@ export const uniqueFitlogExportRows = <T extends {
     const fallback = [row.sender, row.recipient]
       .map((value) => String(value ?? "").trim().toLocaleLowerCase("pt-BR"))
       .join("|");
-    const key = accessKey
+    const documentKey = accessKey
       ? `chave:${accessKey}|nf:${invoice}`
       : cte
         ? `cte:${cte}|nf:${invoice}`
         : `nf:${invoice}|${fallback}`;
+    const status = String(row.status ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+    const isSeparateEvent = status === "re" || status === "cf";
+    const eventDetails = isSeparateEvent
+      ? [
+          row.date,
+          row.deliveryDate,
+          row.sender,
+          row.recipient,
+          row.observation,
+          row.reportedTotal ?? row.freight,
+          row.tde,
+        ]
+          .map((value) => String(value ?? "").trim().toLocaleLowerCase("pt-BR"))
+          .join("|")
+      : "";
+    // RE e CF são cobranças independentes da entrega original, mesmo quando
+    // repetem CT-e e NF. Somente uma repetição completa do mesmo evento sai.
+    const key = isSeparateEvent
+      ? `evento:${status}|${documentKey}|${eventDetails}`
+      : documentKey;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

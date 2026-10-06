@@ -28,3 +28,13 @@ test("Fitlog exporta uma única linha por CT-e e NF", () => {
   ];
   assert.deepEqual(uniqueFitlogExportRows(rows), [rows[0], rows[2]]);
 });
+
+test("Fitlog preserva reentrega e complemento do mesmo CT-e e NF", () => {
+  const rows = [
+    { cte: "501067", invoice: "3326215 - 2", status: "ET", freight: 100 },
+    { cte: "501067", invoice: "3326215 - 2", status: "RE", freight: 100 },
+    { cte: "501067", invoice: "3326215 - 2", status: "CF", freight: 400 },
+    { cte: "501067", invoice: "3326215 - 2", status: "CF", freight: 400 },
+  ];
+  assert.deepEqual(uniqueFitlogExportRows(rows), rows.slice(0, 3));
+});
