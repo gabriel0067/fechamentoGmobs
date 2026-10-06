@@ -49,9 +49,18 @@ async function check(request: Request) {
 }
 
 async function discardExpiredUploads() {
-  await sql().query(
-    "DELETE FROM cloud_state_upload_chunks WHERE created_at < now() - interval '5 minutes'",
-  );
+  await sql().query(`DO $cleanup$
+    BEGIN
+      LOCK TABLE cloud_state_upload_chunks IN ACCESS EXCLUSIVE MODE;
+      DELETE FROM cloud_state_upload_chunks
+      WHERE created_at < now() - interval '5 minutes';
+
+      IF NOT EXISTS (SELECT 1 FROM cloud_state_upload_chunks)
+         AND pg_total_relation_size('cloud_state_upload_chunks') > 8 * 1024 * 1024 THEN
+        TRUNCATE TABLE cloud_state_upload_chunks;
+      END IF;
+    END
+  $cleanup$`);
 }
 
 async function discardUpload(stateKey: string, uploadId: string) {
@@ -133,6 +142,8 @@ export async function GET(request: Request) {
     if (!(await authenticatedUsername(request)))
       return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
     try {
+      await ensureUploadSchema();
+      await discardExpiredUploads();
       const rows = await sql().query(
         "SELECT state_key, version FROM cloud_state_records WHERE owner_id = $1 AND state_key IN ('closing', 'scans', 'tde', 'maex', 'billed', 'romaneios')",
         [OWNER],
