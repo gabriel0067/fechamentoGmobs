@@ -31,7 +31,7 @@ import {
 import { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
 import {
   romaneioClosingInvoiceCount,
-  romaneioFreightTotal,
+  romaneioFreightPartsTotal,
 } from "./romaneio-light";
 
 let excelModulePromise: Promise<typeof import("./excel")> | null = null;
@@ -141,7 +141,7 @@ type RomaneioEntry = ImportedRomaneioRow & {
 };
 type RomaneioImportedTotals = {
   freight: number;
-  freightLines: number[];
+  freightParts: { key: string; value: number }[];
   weight: number;
   deliveries: number;
   volumes: number;
@@ -979,6 +979,20 @@ const romaneioCompleteRowKey = (
       ),
     ),
   );
+const romaneioStableRowKey = (
+  row: ImportedRomaneioRow & Partial<Pick<RomaneioEntry, "id" | "sourceFile">>,
+) => {
+  const documents = [...new Set(row.documents.map(romaneioDocumentKey))]
+    .filter(Boolean)
+    .sort();
+  if (!documents.length) return romaneioCompleteRowKey(row);
+  return [
+    normalized(row.filial),
+    String(row.emissionDate || "").slice(0, 10),
+    normalized(row.romaneio),
+    documents.join("|"),
+  ].join("|");
+};
 
 function useCloudStateSync<T>(
   stateKey: CloudStateKey,
@@ -2660,10 +2674,19 @@ export default function Home() {
         current.sourceFiles.push(row.sourceFile);
       const romaneioTotalKey = normalized(row.romaneio) || row.id;
       const previousTotal = current.importedTotalsByRomaneio[romaneioTotalKey];
-      const freightLines = [...(previousTotal?.freightLines || []), row.freight];
+      const freightPartKey = [...new Set(row.documents.map(romaneioDocumentKey))]
+        .filter(Boolean)
+        .sort()
+        .join("|") || `linha:${row.id}`;
+      const freightParts = [
+        ...(previousTotal?.freightParts || []),
+        { key: freightPartKey, value: row.freight },
+      ];
       current.importedTotalsByRomaneio[romaneioTotalKey] = {
-        freight: romaneioFreightTotal(freightLines),
-        freightLines,
+        // Reimportações antigas podem já ter deixado duas versões da mesma
+        // parcela. A primeira versão salva vence e só é somada uma vez.
+        freight: romaneioFreightPartsTotal(freightParts),
+        freightParts,
         weight: roundMoney((previousTotal?.weight || 0) + row.weight),
         deliveries: (previousTotal?.deliveries || 0) + row.deliveries,
         volumes: (previousTotal?.volumes || 0) + row.volumes,
@@ -2993,26 +3016,8 @@ export default function Home() {
     [manualRomaneioFreights, romaneioPickupQuantities],
   );
   const driverClosingProductionForGroup = useCallback(
-    (group: RomaneioDailyGroup) => {
-      const deliveredDocuments = group.documents.filter(
-        (document) =>
-          getRomaneioStatus(group, document)?.situation === "delivered",
-      );
-      const manualProduction = (manualRomaneioFreights[group.key] || []).reduce(
-        (sum, item) => sum + manualFreightProduction(item.grossFreight),
-        0,
-      );
-      const documentProduction = deliveredDocuments.reduce(
-        (sum, document) => sum + document.production,
-        0,
-      );
-      if (documentProduction > 0)
-        return roundMoney(documentProduction + manualProduction);
-      return deliveredDocuments.length
-        ? roundMoney(group.freight * ROMANEIO_PRODUCTION_FACTOR + manualProduction)
-        : roundMoney(manualProduction);
-    },
-    [getRomaneioStatus, manualRomaneioFreights],
+    (group: RomaneioDailyGroup) => savedRomaneioProduction(group),
+    [savedRomaneioProduction],
   );
   const currentDriverClosingDiscounts = useCallback(
     (
@@ -4997,14 +5002,17 @@ export default function Home() {
     setMessage("");
     const additions: RomaneioEntry[] = [];
     const errors: string[] = [];
-    const seen = new Set(romaneioEntries.map(romaneioCompleteRowKey));
+    // O que já está salvo sempre vence. Relatórios cumulativos acrescentam
+    // apenas parcelas/documentos ainda inexistentes e nunca substituem uma
+    // linha anterior nem sua conferência.
+    const seen = new Set(romaneioEntries.map(romaneioStableRowKey));
     let duplicates = 0;
 
     for (const file of files) {
       try {
         const result = await (await loadExcelModule()).readRomaneioFile(file);
         result.rows.forEach((row) => {
-          const key = romaneioCompleteRowKey(row);
+          const key = romaneioStableRowKey(row);
           if (seen.has(key)) {
             duplicates++;
             return;

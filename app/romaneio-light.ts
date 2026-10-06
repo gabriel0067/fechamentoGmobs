@@ -9,6 +9,17 @@ export const romaneioFreightTotal = (values: number[]) => {
   return rounded.reduce((sum, value) => sum + value, 0) / 100;
 };
 
+export const romaneioFreightPartsTotal = (
+  parts: { key: string; value: number }[],
+) => {
+  const latestByPart = new Map<string, number>();
+  parts.forEach(({ key, value }) => {
+    if (key && Number.isFinite(value) && !latestByPart.has(key))
+      latestByPart.set(key, value);
+  });
+  return romaneioFreightTotal(Array.from(latestByPart.values()));
+};
+
 export const romaneioClosingInvoiceCount = (
   countedInvoices: number,
   backDocuments: number,
