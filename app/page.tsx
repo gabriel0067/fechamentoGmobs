@@ -1489,6 +1489,7 @@ export default function Home() {
   );
   const [retainedDriverFilter, setRetainedDriverFilter] = useState("");
   const [retainedPartnerFilter, setRetainedPartnerFilter] = useState("");
+  const [openRetainedDrivers, setOpenRetainedDrivers] = useState<Record<string, boolean>>({});
   const [retainedSection, setRetainedSection] = useState<"documents" | "ranking">("documents");
   const [retainedHistory, setRetainedHistory] = useState<RetainedHistoryEvent[]>([]);
   const [retainedReleaseConfirmation, setRetainedReleaseConfirmation] =
@@ -4647,6 +4648,16 @@ export default function Home() {
       ...current,
       [matching.key]: true,
     }));
+    const driverKey = normalized(matching.driver) || "motorista-nao-informado";
+    setOpenRetainedDrivers((current) => ({ ...current, [driverKey]: true }));
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() =>
+        document.getElementById(`retained-${matching.key}`)?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        }),
+      ),
+    );
     if (retainedScanInputRef.current) retainedScanInputRef.current.value = "";
     setMessageIsError(false);
     setMessage(
@@ -7651,8 +7662,20 @@ export default function Home() {
                 {visibleRetainedRomaneioDocuments.length ? (
                   <div className="retained-list">
                     {retainedDocumentsByDriver.map((driverGroup) => (
-                      <section className="retained-driver-group" key={normalized(driverGroup.driver)}>
-                        <header><strong>{driverGroup.driver}</strong><b>{driverGroup.records.length} retido(s)</b></header>
+                      <details
+                        className="retained-driver-group"
+                        key={normalized(driverGroup.driver)}
+                        open={Boolean(openRetainedDrivers[normalized(driverGroup.driver) || "motorista-nao-informado"])}
+                        onToggle={(event) => {
+                          const driverKey = normalized(driverGroup.driver) || "motorista-nao-informado";
+                          const open = event.currentTarget.open;
+                          setOpenRetainedDrivers((current) =>
+                            current[driverKey] === open ? current : { ...current, [driverKey]: open },
+                          );
+                        }}
+                      >
+                        <summary><strong>{driverGroup.driver}</strong><span><b>{driverGroup.records.length} retido(s)</b><i aria-hidden="true">⌄</i></span></summary>
+                        <div className="retained-driver-documents">
                         {driverGroup.records.map((record) => {
                       const currentDocument = currentRomaneioDocumentsByKey.get(record.key);
                       const grossFreight = currentDocument?.grossFreight || record.grossFreight;
@@ -7670,7 +7693,7 @@ export default function Home() {
                         record.routes.join(" · ") ||
                         "Sem cidade";
                       return (
-                        <label className={retainedResolutionDrafts[record.key] ? "selected" : ""} key={record.key}>
+                        <label id={`retained-${record.key}`} className={retainedResolutionDrafts[record.key] ? "selected" : ""} key={record.key}>
                           <input type="checkbox" checked={Boolean(retainedResolutionDrafts[record.key])} onChange={(event) => setRetainedResolutionDrafts((current) => ({...current, [record.key]: event.target.checked}))} />
                           <span className="document-id"><strong>{record.referenceType} {record.referenceNumber}</strong><small>{record.romaneios.join(" · ")} · {formatRomaneioDay(record.day)}</small></span>
                           <span><strong>{record.driver}</strong><small>{record.routes.join(" · ") || "Sem rota"}</small></span>
@@ -7680,7 +7703,8 @@ export default function Home() {
                         </label>
                       );
                         })}
-                      </section>
+                        </div>
+                      </details>
                     ))}
                     <div className="romaneio-save-bar retained-save"><span><strong>{Object.values(retainedResolutionDrafts).filter(Boolean).length} baixa(s) selecionada(s)</strong><small>É obrigatório gravar para retirar do relatório de Retidos.</small></span></div>
                   </div>

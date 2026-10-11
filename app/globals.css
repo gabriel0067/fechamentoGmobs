@@ -2714,7 +2714,7 @@ button {
 .progressive-list-control button { padding: 7px 10px; white-space: nowrap; }
 .tabs.switching { cursor: progress; }
 .tabs.switching button { pointer-events: none; opacity: .72; }
-.retained-driver-group > label, .cover-report-card, .billing-list > article, .financial-list > article, .pickup-cards > article, .dedicated-list > article { content-visibility: auto; contain-intrinsic-size: auto 78px; }
+.retained-driver-documents > label, .cover-report-card, .billing-list > article, .financial-list > article, .pickup-cards > article, .dedicated-list > article { content-visibility: auto; contain-intrinsic-size: auto 78px; }
 .billing-view { display: grid; gap: 20px; }
 .billing-access-card { width: min(440px, 100%); margin: 42px auto; display: grid; gap: 10px; padding: 30px; border: 1px solid #d9e3dd; border-radius: 18px; background: #fff; box-shadow: 0 16px 45px rgba(26, 50, 37, .1); text-align: center; }
 .billing-lock { width: 54px; height: 54px; margin: 0 auto 4px; display: grid; place-items: center; border-radius: 16px; background: #e7f3ec; color: #087447; font-size: 25px; }
@@ -2958,9 +2958,14 @@ button {
   gap: 7px;
 }
 .retained-driver-group { display: grid; gap: 7px; }
-.retained-driver-group > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-radius: 9px; background: #edf3ef; color: #385044; padding: 9px 12px; }
-.retained-driver-group > header > b { color: #087447; font-size: 12px; }
-.retained-driver-group > label {
+.retained-driver-group > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-radius: 9px; background: #edf3ef; color: #385044; padding: 11px 12px; cursor: pointer; list-style: none; }
+.retained-driver-group > summary::-webkit-details-marker { display: none; }
+.retained-driver-group > summary > span { display: flex; align-items: center; gap: 10px; }
+.retained-driver-group > summary b { color: #087447; font-size: 12px; }
+.retained-driver-group > summary i { font-style: normal; transition: transform .18s ease; }
+.retained-driver-group[open] > summary i { transform: rotate(180deg); }
+.retained-driver-documents { display: grid; gap: 7px; }
+.retained-driver-documents > label {
   display: grid;
   grid-template-columns: auto minmax(130px, 0.8fr) minmax(150px, 1fr) minmax(180px, 1.3fr) 135px 125px;
   gap: 12px;
@@ -2971,34 +2976,34 @@ button {
   background: #fffdf9;
   cursor: pointer;
 }
-.retained-driver-group > label.selected {
+.retained-driver-documents > label.selected {
   border-color: #77ad91;
   background: #f0f8f4;
 }
-.retained-driver-group > label > input {
+.retained-driver-documents > label > input {
   width: 18px;
   height: 18px;
   accent-color: #146c43;
 }
-.retained-driver-group > label > span {
+.retained-driver-documents > label > span {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
-.retained-driver-group > label strong,
-.retained-driver-group > label small {
+.retained-driver-documents > label strong,
+.retained-driver-documents > label small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.retained-driver-group > label strong {
+.retained-driver-documents > label strong {
   font-size: 11px;
 }
-.retained-driver-group > label small {
+.retained-driver-documents > label small {
   color: #786f60;
   font-size: 9px;
 }
-.retained-driver-group > label > b {
+.retained-driver-documents > label > b {
   padding: 6px 8px;
   border-radius: 999px;
   background: #e7d6bb;
@@ -3006,7 +3011,7 @@ button {
   text-align: center;
   font-size: 10px;
 }
-.retained-driver-group > label.selected > b {
+.retained-driver-documents > label.selected > b {
   background: #197649;
   color: white;
 }
@@ -3294,11 +3299,11 @@ button {
   .daily-document-row .document-situation {
     grid-column: 1 / -1;
   }
-  .retained-driver-group > label {
+  .retained-driver-documents > label {
     grid-template-columns: auto repeat(2, minmax(0, 1fr));
   }
-  .retained-driver-group > label > span:nth-of-type(3),
-  .retained-driver-group > label > span:nth-of-type(4) {
+  .retained-driver-documents > label > span:nth-of-type(3),
+  .retained-driver-documents > label > span:nth-of-type(4) {
     grid-column: 2 / -1;
   }
   .romaneio-documents > div {
@@ -3513,13 +3518,13 @@ button {
     align-items: stretch;
     flex-direction: column;
   }
-  .retained-driver-group > label {
+  .retained-driver-documents > label {
     grid-template-columns: auto minmax(0, 1fr);
   }
-  .retained-driver-group > label > span,
-  .retained-driver-group > label > span:nth-of-type(3),
-  .retained-driver-group > label > span:nth-of-type(4),
-  .retained-driver-group > label > b {
+  .retained-driver-documents > label > span,
+  .retained-driver-documents > label > span:nth-of-type(3),
+  .retained-driver-documents > label > span:nth-of-type(4),
+  .retained-driver-documents > label > b {
     grid-column: 2;
   }
   .preview-layout {

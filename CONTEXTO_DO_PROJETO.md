@@ -462,6 +462,7 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - A busca da lista de Retidos aceita NF, CT-e, MD-e/minuta e chave de acesso; localizar apenas seleciona o documento, e a baixa só ocorre ao gravar.
 - Se a busca localizar um documento já baixado, informa a data, a hora, o operador, o motorista e o romaneio da baixa registrada no histórico.
 - Os retidos são exibidos em grupos por motorista e mantêm o botão flutuante de gravação.
+- Os grupos de retidos começam recolhidos; podem ser abertos pelo cabeçalho e são abertos automaticamente quando uma busca localiza um documento daquele motorista.
 - Ao bipar um retido na Ticagem, o sistema pede confirmação antes de gravá-lo como Entregue.
 - Ao bipar um documento retido em Capas, a baixa do retido é vinculada automaticamente.
 - Foi criado histórico persistente de lançamentos e baixas de retidos, com exportação em Excel.
