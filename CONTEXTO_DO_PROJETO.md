@@ -457,3 +457,12 @@ Na mesma data, os campos de motivo de Retorno, nota manual de romaneio, frete br
 ## Regra de manutenção deste documento
 
 Atualize este arquivo sempre que houver uma decisão relevante, mudança de regra de negócio, nova funcionalidade, alteração de arquitetura ou novo próximo passo. Não registre senhas, tokens, dados de clientes ou informações confidenciais.
+# Atualização de retidos e sincronização — 11/10/2026
+
+- A busca da lista de Retidos aceita NF, CT-e, MD-e/minuta e chave de acesso; localizar apenas seleciona o documento, e a baixa só ocorre ao gravar.
+- Os retidos são exibidos em grupos por motorista e mantêm o botão flutuante de gravação.
+- Ao bipar um retido na Ticagem, o sistema pede confirmação antes de gravá-lo como Entregue.
+- Ao bipar um documento retido em Capas, a baixa do retido é vinculada automaticamente.
+- Foi criado histórico persistente de lançamentos e baixas de retidos, com exportação em Excel.
+- A atualização automática entre computadores passou de 5 para 60 segundos, continua ocorrendo ao voltar para a janela e é adiada enquanto o usuário está operando.
+- Ao tentar fechar/recarregar a página durante uma gravação pendente ou com falha, o navegador avisa antes de sair.

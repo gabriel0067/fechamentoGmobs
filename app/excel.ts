@@ -9,6 +9,22 @@ export { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-lig
 
 export type BillingPdfRow = { partner: string; value: number; createdBy: string };
 export type FinancialPdfRow = { account: string; value: number; paidAt: string };
+export type RetainedHistoryExportRow = {
+  action: "retained" | "released";
+  occurredAt: string;
+  operator?: string;
+  source: "checking" | "retained-report" | "covers";
+  day: string;
+  driver: string;
+  romaneios: string[];
+  referenceType: string;
+  referenceNumber: string;
+  cte: string;
+  invoice: string;
+  sender: string;
+  recipient: string;
+  city: string;
+};
 
 const compactMoney = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const compactDate = (value: string) => {
@@ -69,6 +85,37 @@ export function exportBillingPdf(period: string, rows: BillingPdfRow[]) {
 
 export function exportFinancialPdf(month: string, rows: FinancialPdfRow[]) {
   exportCompactTablePdf("Financeiro mensal", month, ["CONTA", "VALOR", "DATA DO PAGAMENTO"], rows.map((row) => [row.account, compactMoney(row.value), compactDate(row.paidAt)]), rows.reduce((sum, row) => sum + row.value, 0), `Financeiro - ${month}.pdf`);
+}
+
+export function exportRetainedHistoryXlsx(rows: RetainedHistoryExportRow[]) {
+  const sourceLabels: Record<RetainedHistoryExportRow["source"], string> = {
+    checking: "Ticagem",
+    "retained-report": "Relatório de retidos",
+    covers: "Capas",
+  };
+  const output = [...rows]
+    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+    .map((row) => ({
+      "Data/hora": new Date(row.occurredAt).toLocaleString("pt-BR"),
+      "Ação": row.action === "retained" ? "Lançado como retido" : "Baixa como entregue",
+      "Operador": row.operator || "Não informado",
+      "Origem": sourceLabels[row.source],
+      "Data do romaneio": compactDate(row.day),
+      "Motorista": row.driver,
+      "Romaneio(s)": row.romaneios.join(" · "),
+      "Tipo": row.referenceType,
+      "Documento": row.referenceNumber,
+      "CT-e": row.cte,
+      "NF": row.invoice,
+      "Remetente": row.sender,
+      "Destinatário": row.recipient,
+      "Cidade": row.city,
+    }));
+  const sheet = XLSX.utils.json_to_sheet(output);
+  sheet["!cols"] = [19, 23, 18, 20, 16, 30, 18, 12, 20, 20, 18, 30, 30, 22].map((wch) => ({ wch }));
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Histórico de retidos");
+  XLSX.writeFile(workbook, `Relatório de Retidos - ${new Date().toLocaleDateString("pt-BR").replaceAll("/", "-")}.xlsx`, { compression: true });
 }
 
 export type ImportedRow = {

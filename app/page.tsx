@@ -190,6 +190,27 @@ type RomaneioDocumentStatusRecord = {
   identifiers: string[];
   observation?: string;
 };
+type RetainedHistoryEvent = {
+  id: string;
+  documentKey: string;
+  action: "retained" | "released";
+  occurredAt: string;
+  operator?: string;
+  source: "checking" | "retained-report" | "covers";
+  referenceType: RomaneioDocumentStatusRecord["referenceType"];
+  referenceNumber: string;
+  invoice: string;
+  cte: string;
+  driver: string;
+  day: string;
+  romaneios: string[];
+  sender: string;
+  recipient: string;
+  city: string;
+};
+type RetainedReleaseConfirmation = {
+  record: RomaneioDocumentStatusRecord;
+};
 type RomaneioDocumentDraft = {
   situation: RomaneioSituation | "";
   reason: string;
@@ -1469,6 +1490,9 @@ export default function Home() {
   const [retainedDriverFilter, setRetainedDriverFilter] = useState("");
   const [retainedPartnerFilter, setRetainedPartnerFilter] = useState("");
   const [retainedSection, setRetainedSection] = useState<"documents" | "ranking">("documents");
+  const [retainedHistory, setRetainedHistory] = useState<RetainedHistoryEvent[]>([]);
+  const [retainedReleaseConfirmation, setRetainedReleaseConfirmation] =
+    useState<RetainedReleaseConfirmation | null>(null);
   const [romaneioSection, setRomaneioSection] = useState<
     "checking" | "closing" | "full"
   >("checking");
@@ -1743,6 +1767,7 @@ export default function Home() {
           manualFreights?: Record<string, ManualRomaneioFreight[]>;
           pickupQuantities?: Record<string, number>;
           driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
+          retainedHistory?: RetainedHistoryEvent[];
         };
         let parsedRomaneios: SavedRomaneios | null = null;
         try {
@@ -1846,6 +1871,8 @@ export default function Home() {
           typeof parsedRomaneios.driverDiscountPlans === "object"
         )
           setDriverClosingDiscountPlans(parsedRomaneios.driverDiscountPlans);
+        if (Array.isArray(parsedRomaneios?.retainedHistory))
+          setRetainedHistory(parsedRomaneios.retainedHistory);
       } catch {
         /* começa vazio se o armazenamento estiver inválido */
       } finally {
@@ -1919,6 +1946,7 @@ export default function Home() {
               manualFreights?: Record<string, ManualRomaneioFreight[]>;
               pickupQuantities?: Record<string, number>;
               driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
+              retainedHistory?: RetainedHistoryEvent[];
             }>("romaneios"),
           ]);
         if (cancelled) return;
@@ -2007,6 +2035,7 @@ export default function Home() {
           setManualRomaneioFreights(romaneios.manualFreights || {});
           setRomaneioPickupQuantities(romaneios.pickupQuantities || {});
           setDriverClosingDiscountPlans(romaneios.driverDiscountPlans || {});
+          setRetainedHistory(romaneios.retainedHistory || []);
         } else {
           setRomaneioEntries([]);
           setRomaneioImportInfo(null);
@@ -2016,6 +2045,7 @@ export default function Home() {
           setManualRomaneioFreights({});
           setRomaneioPickupQuantities({});
           setDriverClosingDiscountPlans({});
+          setRetainedHistory([]);
         }
         cloudVersionsRef.current.romaneios =
           romaneiosRecord?.version ||
@@ -2028,6 +2058,7 @@ export default function Home() {
             manualFreights: {},
             pickupQuantities: {},
             driverDiscountPlans: {},
+            retainedHistory: [],
           }, ""));
 
         if (!cancelled) {
@@ -2182,6 +2213,7 @@ export default function Home() {
         manualFreights: manualRomaneioFreights,
         pickupQuantities: romaneioPickupQuantities,
         driverDiscountPlans: driverClosingDiscountPlans,
+        retainedHistory,
       })
       .then(() => { try { localStorage.removeItem(ROMANEIO_STORAGE_KEY); } catch { /* IndexedDB já confirmou a gravação */ } })
       .catch(() => { if (!cancelled) setMessage("Não foi possível salvar os romaneios neste computador. Não recarregue a página; exporte um backup."); });
@@ -2196,6 +2228,7 @@ export default function Home() {
     romaneioImportInfo,
     romaneioPickupQuantities,
     romaneioRouteLabels,
+    retainedHistory,
   ]);
   const closingCloudState = useMemo(
     () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo, covers, coverGenerators, closingAdditionals, billingInvoices, pickupRecords, dedicatedRecords, financialEntries, financialAccountNames }),
@@ -2215,6 +2248,7 @@ export default function Home() {
       manualFreights: manualRomaneioFreights,
       pickupQuantities: romaneioPickupQuantities,
       driverDiscountPlans: driverClosingDiscountPlans,
+      retainedHistory,
     }),
     [
       driverClosingDiscountPlans,
@@ -2225,6 +2259,7 @@ export default function Home() {
       romaneioImportInfo,
       romaneioPickupQuantities,
       romaneioRouteLabels,
+      retainedHistory,
     ],
   );
   const markCloudSaveStart = useCallback(() => {
@@ -2234,6 +2269,7 @@ export default function Home() {
   }, []);
   const markCloudChangeQueued = useCallback(() => {
     lastLocalChangeRef.current = Date.now();
+    setCloudStatus("saving");
   }, []);
   const getExpectedCloudVersion = useCallback(
     (key: CloudStateKey) => cloudVersionsRef.current[key] || "",
@@ -2281,6 +2317,7 @@ export default function Home() {
     setManualRomaneioFreights(value.manualFreights || {});
     setRomaneioPickupQuantities(value.pickupQuantities || {});
     setDriverClosingDiscountPlans(value.driverDiscountPlans || {});
+    setRetainedHistory(value.retainedHistory || []);
   }, []);
   const markCloudSaveFinish = useCallback(
     (stateKey: CloudStateKey, succeeded: boolean, version?: string, error?: Error) => {
@@ -2381,6 +2418,15 @@ export default function Home() {
       window.removeEventListener("input", markInteraction, { capture: true });
     };
   }, [cloudHosted, cloudReady]);
+  useEffect(() => {
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      if (cloudStatus !== "saving" && !cloudSaveFailedRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [cloudStatus]);
   const refreshCloudData = useCallback(async () => {
     const hasUnsavedRomaneioDrafts = Object.values(romaneioDocumentDrafts).some(
       (drafts) => Object.values(drafts).some((draft) => draft.situation),
@@ -2391,6 +2437,7 @@ export default function Home() {
       cloudSaveFailedRef.current ||
       hasUnsavedRomaneioDrafts ||
       Date.now() - lastLocalChangeRef.current < 2_000 ||
+      Date.now() - lastUserInteractionRef.current < 3_000 ||
       document.visibilityState !== "visible"
     )
       return;
@@ -2409,7 +2456,8 @@ export default function Home() {
         Object.values(romaneioDocumentDrafts).some((drafts) =>
           Object.values(drafts).some((draft) => draft.situation),
         ) ||
-        Date.now() - lastLocalChangeRef.current < 2_000
+        Date.now() - lastLocalChangeRef.current < 2_000 ||
+        Date.now() - lastUserInteractionRef.current < 3_000
       )
         return;
       const changedKeys = keys.filter(
@@ -2506,6 +2554,7 @@ export default function Home() {
             manualFreights?: Record<string, ManualRomaneioFreight[]>;
             pickupQuantities?: Record<string, number>;
             driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
+            retainedHistory?: RetainedHistoryEvent[];
           }>(key);
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
@@ -2518,6 +2567,7 @@ export default function Home() {
           setManualRomaneioFreights(record.value.manualFreights || {});
           setRomaneioPickupQuantities(record.value.pickupQuantities || {});
           setDriverClosingDiscountPlans(record.value.driverDiscountPlans || {});
+          setRetainedHistory(record.value.retainedHistory || []);
         }
       }
       setCloudStatus("ready");
@@ -2532,7 +2582,7 @@ export default function Home() {
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refreshCloudData();
     };
-    const interval = window.setInterval(refreshWhenVisible, 5_000);
+    const interval = window.setInterval(refreshWhenVisible, 60_000);
     window.addEventListener("focus", refreshWhenVisible);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
@@ -2997,6 +3047,19 @@ export default function Home() {
       .map((item) => ({ driver: item.driver, count: item.ctes.size }))
       .sort((a, b) => b.count - a.count || a.driver.localeCompare(b.driver, "pt-BR"));
   }, [retainedRomaneioDocuments]);
+  const retainedDocumentsByDriver = useMemo(() => {
+    const groups = new Map<string, { driver: string; records: RomaneioDocumentStatusRecord[] }>();
+    visibleRetainedRomaneioDocuments.forEach((record) => {
+      const driver = record.driver?.trim() || "Motorista não informado";
+      const key = normalized(driver) || "motorista-nao-informado";
+      const group = groups.get(key) || { driver, records: [] };
+      group.records.push(record);
+      groups.set(key, group);
+    });
+    return Array.from(groups.values()).sort((left, right) =>
+      left.driver.localeCompare(right.driver, "pt-BR"),
+    );
+  }, [visibleRetainedRomaneioDocuments]);
   const missingDocumentsByDriver = useMemo(() => {
     const records = new Map<string, RomaneioDocumentStatusRecord[]>();
     Object.values(romaneioDocumentStatuses)
@@ -4213,35 +4276,9 @@ export default function Home() {
         showPendingRomaneioAlert();
         return;
       }
-      const savedAt = new Date().toISOString();
-      setRomaneioDocumentStatuses((current) => ({
-        ...current,
-        [retained.key]: {
-          ...retained,
-          situation: "delivered",
-          operationalStatus: "ET",
-          reason: "",
-          savedAt,
-          savedBy: activeOperator,
-        },
-      }));
-      releaseRomaneioDocumentToClosing(
-        retained.key,
-        "delivered",
-        retained.day,
-        savedAt,
-      );
-      setRetainedResolutionDrafts((current) => {
-        const next = { ...current };
-        delete next[retained.key];
-        return next;
-      });
       clearRomaneioSearch();
-      setMessageIsError(false);
-      setMessage(
-        `Documento retido localizado: ${retained.referenceType} ${retained.referenceNumber} já foi retirado do relatório de Retidos e gravado como Entregue.`,
-      );
-      playRomaneioSuccessSound();
+      setRetainedReleaseConfirmation({ record: retained });
+      playRomaneioAttentionSound();
       return;
     }
 
@@ -4429,6 +4466,31 @@ export default function Home() {
         });
         return next;
       });
+    const newlyRetained = selectedDrafts.flatMap(([documentKey, draft]) => {
+      if (draft.situation !== "retained") return [];
+      const document = groupDocumentsByKey.get(documentKey);
+      if (!document) return [];
+      return [{
+        id: newId(),
+        documentKey: `${group.key}|${document.key}`,
+        action: "retained" as const,
+        occurredAt: savedAt,
+        operator: activeOperator,
+        source: "checking" as const,
+        referenceType: document.referenceType,
+        referenceNumber: document.referenceNumber,
+        invoice: document.invoice,
+        cte: document.cte,
+        driver: group.driver,
+        day: group.day,
+        romaneios: [...group.romaneios],
+        sender: document.sender,
+        recipient: document.recipient,
+        city: document.city,
+      }];
+    });
+    if (newlyRetained.length)
+      setRetainedHistory((current) => [...current, ...newlyRetained]);
     if (!selectedDrafts.length && noteChanged)
       setRomaneioDocumentStatuses((current) => {
         const next = { ...current };
@@ -4472,12 +4534,72 @@ export default function Home() {
     setMessageIsError(false);
   }
 
+  function releaseRetainedRecords(
+    records: RomaneioDocumentStatusRecord[],
+    source: RetainedHistoryEvent["source"],
+  ) {
+    if (!records.length) return;
+    const savedAt = new Date().toISOString();
+    const keys = new Set(records.map((record) => record.key));
+    setRomaneioDocumentStatuses((current) => {
+      const next = { ...current };
+      records.forEach((record) => {
+        const currentRecord = next[record.key];
+        if (!currentRecord) return;
+        next[record.key] = {
+          ...currentRecord,
+          situation: "delivered",
+          operationalStatus: "ET",
+          reason: "",
+          savedAt,
+          savedBy: activeOperator,
+        };
+      });
+      return next;
+    });
+    releaseRomaneioDocumentsToClosing(records.flatMap((record) => {
+      const group = romaneioDailyGroups.find((item) =>
+        item.day === record.day &&
+        item.romaneios.some((number) => record.romaneios.includes(number)),
+      );
+      const document = group?.documents.find((item) =>
+        item.referenceType === record.referenceType &&
+        item.referenceNumber === record.referenceNumber,
+      );
+      return document ? [{ documentKey: document.key, situation: "delivered" as const, day: record.day, savedAt }] : [];
+    }));
+    setRetainedHistory((current) => [
+      ...current,
+      ...records.map((record): RetainedHistoryEvent => ({
+        id: newId(),
+        documentKey: record.key,
+        action: "released",
+        occurredAt: savedAt,
+        operator: activeOperator,
+        source,
+        referenceType: record.referenceType,
+        referenceNumber: record.referenceNumber,
+        invoice: record.invoice,
+        cte: record.cte,
+        driver: record.driver,
+        day: record.day,
+        romaneios: [...record.romaneios],
+        sender: record.sender,
+        recipient: record.recipient,
+        city: record.city,
+      })),
+    ]);
+    setRetainedResolutionDrafts((current) =>
+      Object.fromEntries(Object.entries(current).filter(([key]) => !keys.has(key))),
+    );
+  }
+
   function scanRetainedDocument() {
     const raw = retainedScanInputRef.current?.value.trim() || "";
     const typedIdentifiers = operationalIdentifiers(raw);
     if (!typedIdentifiers.length) {
       setMessageIsError(true);
-      setMessage("Digite ou bipe um MD-e ou CT-e Parceiro válido.");
+      setMessage("Digite ou bipe uma NF, CT-e, MD-e/minuta ou chave de acesso válida.");
       playRomaneioAttentionSound();
       return;
     }
@@ -4517,39 +4639,43 @@ export default function Home() {
       playRomaneioAttentionSound();
       return;
     }
-    const savedAt = new Date().toISOString();
-    setRomaneioDocumentStatuses((current) => {
-      const next = { ...current };
-      selectedKeys.forEach((key) => {
-        if (next[key])
-          next[key] = {
-            ...next[key],
-            situation: "delivered",
-            operationalStatus: "ET",
-            reason: "",
-            savedAt,
-            savedBy: activeOperator,
-          };
-      });
-      return next;
-    });
-    releaseRomaneioDocumentsToClosing(selectedKeys.flatMap((key) => {
-      const record = romaneioDocumentStatuses[key];
-      if (!record) return [];
-      const group = romaneioDailyGroups.find((item) =>
-        item.day === record.day &&
-        item.romaneios.some((number) => record.romaneios.includes(number)),
-      );
-      const document = group?.documents.find((item) =>
-        item.referenceType === record.referenceType &&
-        item.referenceNumber === record.referenceNumber,
-      );
-      return document ? [{ documentKey: document.key, situation: "delivered" as const, day: record.day, savedAt }] : [];
-    }));
-    setRetainedResolutionDrafts({});
+    const records = selectedKeys.flatMap((key) => romaneioDocumentStatuses[key] ? [romaneioDocumentStatuses[key]] : []);
+    releaseRetainedRecords(records, "retained-report");
     setMessage(
       `${selectedKeys.length} documento(s) retirado(s) dos retidos e gravado(s) como Entregue.`,
     );
+  }
+
+  async function exportRetainedHistory() {
+    const registered = new Set(
+      retainedHistory
+        .filter((event) => event.action === "retained")
+        .map((event) => event.documentKey),
+    );
+    const currentRetained: RetainedHistoryEvent[] = retainedRomaneioDocuments
+      .filter((record) => !registered.has(record.key))
+      .map((record) => ({
+        id: `current-${record.key}`,
+        documentKey: record.key,
+        action: "retained",
+        occurredAt: record.savedAt,
+        operator: record.savedBy,
+        source: "checking",
+        referenceType: record.referenceType,
+        referenceNumber: record.referenceNumber,
+        invoice: record.invoice,
+        cte: record.cte,
+        driver: record.driver,
+        day: record.day,
+        romaneios: [...record.romaneios],
+        sender: record.sender,
+        recipient: record.recipient,
+        city: record.city,
+      }));
+    await (await loadExcelModule()).exportRetainedHistoryXlsx([
+      ...retainedHistory,
+      ...currentRetained,
+    ]);
   }
 
   const isMaexAdditional = (entry: Entry) => {
@@ -4883,6 +5009,7 @@ export default function Home() {
         manualFreights: manualRomaneioFreights,
         pickupQuantities: romaneioPickupQuantities,
         driverDiscountPlans: driverClosingDiscountPlans,
+        retainedHistory,
       },
     };
     const url = URL.createObjectURL(
@@ -4938,6 +5065,7 @@ export default function Home() {
           manualFreights?: Record<string, ManualRomaneioFreight[]>;
           pickupQuantities?: Record<string, number>;
           driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
+          retainedHistory?: RetainedHistoryEvent[];
         };
       };
       if (
@@ -4957,6 +5085,7 @@ export default function Home() {
           manualFreights: backup.romaneios?.manualFreights || {},
           pickupQuantities: backup.romaneios?.pickupQuantities || {},
           driverDiscountPlans: backup.romaneios?.driverDiscountPlans || {},
+          retainedHistory: backup.romaneios?.retainedHistory || [],
         });
       }
 
@@ -5003,6 +5132,7 @@ export default function Home() {
       setDriverClosingDiscountPlans(
         backup.romaneios?.driverDiscountPlans || {},
       );
+      setRetainedHistory(backup.romaneios?.retainedHistory || []);
       setSelectedExports([]);
       setMessage(
         cloudHosted
@@ -5600,6 +5730,15 @@ export default function Home() {
     };
     coverDraftsRef.current = nextDrafts;
     setCoverDrafts(nextDrafts);
+    const retainedMatches = new Map<string, RomaneioDocumentStatusRecord>();
+    candidates.forEach((entry) => {
+      entryOperationalIdentifiers(entry).forEach((identifier) => {
+        const retained = retainedRomaneioByIdentifier.get(identifier);
+        if (retained) retainedMatches.set(retained.key, retained);
+      });
+    });
+    if (retainedMatches.size)
+      releaseRetainedRecords(Array.from(retainedMatches.values()), "covers");
     setScannedCtes((current) => {
       const next = { ...current };
       candidates.forEach((entry) => {
@@ -5614,7 +5753,7 @@ export default function Home() {
     });
     if (coverScanInputRef.current) coverScanInputRef.current.value = "";
     setMessageIsError(false);
-    setMessage(`${additions.length} registro(s) incluído(s) na capa e disponibilizado(s) para o fechamento por bipagem.`);
+    setMessage(`${additions.length} registro(s) incluído(s) na capa e disponibilizado(s) para o fechamento por bipagem.${retainedMatches.size ? ` ${retainedMatches.size} retido(s) também recebeu/receberam baixa.` : ""}`);
     playRomaneioSuccessSound();
   }
 
@@ -7448,7 +7587,10 @@ export default function Home() {
               <div className="retained-view">
                 <div className="retained-heading">
                   <div><small>RELATÓRIO SEPARADO</small><h3>Documentos Retidos</h3><p>Ao bipar ou digitar um documento retido, ele será preparado para baixa como Entregue.</p></div>
-                  <b>{visibleRetainedRomaneioDocuments.length} de {retainedRomaneioDocuments.length} retido(s)</b>
+                  <div className="retained-heading-actions">
+                    <b>{visibleRetainedRomaneioDocuments.length} de {retainedRomaneioDocuments.length} retido(s)</b>
+                    <button type="button" onClick={exportRetainedHistory} disabled={!retainedHistory.length && !retainedRomaneioDocuments.length}>Baixar histórico em Excel</button>
+                  </div>
                 </div>
                 <div className="retained-view-tabs" role="tablist" aria-label="Visualização dos retidos">
                   <button type="button" role="tab" aria-selected={retainedSection === "documents"} className={retainedSection === "documents" ? "active" : ""} onClick={() => setRetainedSection("documents")}>Documentos retidos</button>
@@ -7473,7 +7615,7 @@ export default function Home() {
                 ) : (
                   <>
                 <form className="retained-scan" onSubmit={(event) => {event.preventDefault(); scanRetainedDocument();}}>
-                  <input ref={retainedScanInputRef} placeholder="Bipe ou digite o MD-e ou CT-e Parceiro" inputMode="numeric" />
+                  <input ref={retainedScanInputRef} placeholder="NF, CT-e, MD-e/minuta ou chave de acesso" inputMode="numeric" />
                   <button className="primary">Localizar retido</button>
                 </form>
                 <div className="retained-filters">
@@ -7482,7 +7624,10 @@ export default function Home() {
                 </div>
                 {visibleRetainedRomaneioDocuments.length ? (
                   <div className="retained-list">
-                    {visibleRetainedRomaneioDocuments.map((record) => {
+                    {retainedDocumentsByDriver.map((driverGroup) => (
+                      <section className="retained-driver-group" key={normalized(driverGroup.driver)}>
+                        <header><strong>{driverGroup.driver}</strong><b>{driverGroup.records.length} retido(s)</b></header>
+                        {driverGroup.records.map((record) => {
                       const currentDocument = currentRomaneioDocumentsByKey.get(record.key);
                       const grossFreight = currentDocument?.grossFreight || record.grossFreight;
                       const sender =
@@ -7508,7 +7653,9 @@ export default function Home() {
                           <b>{retainedResolutionDrafts[record.key] ? "Baixar como entregue" : romaneioSituationLabel[record.situation]}</b>
                         </label>
                       );
-                    })}
+                        })}
+                      </section>
+                    ))}
                     <div className="romaneio-save-bar retained-save"><span><strong>{Object.values(retainedResolutionDrafts).filter(Boolean).length} baixa(s) selecionada(s)</strong><small>É obrigatório gravar para retirar do relatório de Retidos.</small></span></div>
                   </div>
                 ) : (
@@ -8948,6 +9095,31 @@ export default function Home() {
               </div>
             )}
           </>
+        )}
+        {retainedReleaseConfirmation && (
+          <div className="romaneio-alert-overlay">
+            <div className="romaneio-alert-dialog situation-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="retained-release-title">
+              <span className="romaneio-alert-icon" aria-hidden="true">!</span>
+              <div className="romaneio-alert-copy">
+                <small>DOCUMENTO RETIDO</small>
+                <h2 id="retained-release-title">Deseja dar baixa neste retido?</h2>
+                <p>
+                  <strong>{retainedReleaseConfirmation.record.referenceType} {retainedReleaseConfirmation.record.referenceNumber}</strong> está retido com {retainedReleaseConfirmation.record.driver || "motorista não informado"}. Confirme para gravar como Entregue.
+                </p>
+              </div>
+              <div className="romaneio-alert-actions">
+                <button type="button" className="secondary" onClick={() => setRetainedReleaseConfirmation(null)}>Cancelar</button>
+                <button type="button" className="primary" onClick={() => {
+                  const record = retainedReleaseConfirmation.record;
+                  releaseRetainedRecords([record], "checking");
+                  setRetainedReleaseConfirmation(null);
+                  setMessageIsError(false);
+                  setMessage(`${record.referenceType} ${record.referenceNumber} foi retirado dos retidos e gravado como Entregue.`);
+                  playRomaneioSuccessSound();
+                }}>Sim, dar baixa</button>
+              </div>
+            </div>
+          </div>
         )}
         {romaneioSituationConfirmation && (
           <div className="romaneio-alert-overlay">

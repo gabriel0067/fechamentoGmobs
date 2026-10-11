@@ -2714,7 +2714,7 @@ button {
 .progressive-list-control button { padding: 7px 10px; white-space: nowrap; }
 .tabs.switching { cursor: progress; }
 .tabs.switching button { pointer-events: none; opacity: .72; }
-.retained-list > label, .cover-report-card, .billing-list > article, .financial-list > article, .pickup-cards > article, .dedicated-list > article { content-visibility: auto; contain-intrinsic-size: auto 78px; }
+.retained-driver-group > label, .cover-report-card, .billing-list > article, .financial-list > article, .pickup-cards > article, .dedicated-list > article { content-visibility: auto; contain-intrinsic-size: auto 78px; }
 .billing-view { display: grid; gap: 20px; }
 .billing-access-card { width: min(440px, 100%); margin: 42px auto; display: grid; gap: 10px; padding: 30px; border: 1px solid #d9e3dd; border-radius: 18px; background: #fff; box-shadow: 0 16px 45px rgba(26, 50, 37, .1); text-align: center; }
 .billing-lock { width: 54px; height: 54px; margin: 0 auto 4px; display: grid; place-items: center; border-radius: 16px; background: #e7f3ec; color: #087447; font-size: 25px; }
@@ -2916,13 +2916,16 @@ button {
   margin: 0;
   color: #766b58;
 }
-.retained-heading > b {
+.retained-heading-actions { display: flex; align-items: center; gap: 9px; }
+.retained-heading-actions > b {
   padding: 8px 11px;
   border-radius: 999px;
   background: #ad6d27;
   color: white;
   white-space: nowrap;
 }
+.retained-heading-actions button { border: 1px solid #b9874d; border-radius: 9px; background: #fff; color: #80501b; padding: 8px 11px; font-weight: 800; cursor: pointer; }
+.retained-heading-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .retained-scan {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -2954,7 +2957,10 @@ button {
   display: grid;
   gap: 7px;
 }
-.retained-list > label {
+.retained-driver-group { display: grid; gap: 7px; }
+.retained-driver-group > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-radius: 9px; background: #edf3ef; color: #385044; padding: 9px 12px; }
+.retained-driver-group > header > b { color: #087447; font-size: 12px; }
+.retained-driver-group > label {
   display: grid;
   grid-template-columns: auto minmax(130px, 0.8fr) minmax(150px, 1fr) minmax(180px, 1.3fr) 135px 125px;
   gap: 12px;
@@ -2965,34 +2971,34 @@ button {
   background: #fffdf9;
   cursor: pointer;
 }
-.retained-list > label.selected {
+.retained-driver-group > label.selected {
   border-color: #77ad91;
   background: #f0f8f4;
 }
-.retained-list > label > input {
+.retained-driver-group > label > input {
   width: 18px;
   height: 18px;
   accent-color: #146c43;
 }
-.retained-list > label > span {
+.retained-driver-group > label > span {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
-.retained-list > label strong,
-.retained-list > label small {
+.retained-driver-group > label strong,
+.retained-driver-group > label small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.retained-list > label strong {
+.retained-driver-group > label strong {
   font-size: 11px;
 }
-.retained-list > label small {
+.retained-driver-group > label small {
   color: #786f60;
   font-size: 9px;
 }
-.retained-list > label > b {
+.retained-driver-group > label > b {
   padding: 6px 8px;
   border-radius: 999px;
   background: #e7d6bb;
@@ -3000,7 +3006,7 @@ button {
   text-align: center;
   font-size: 10px;
 }
-.retained-list > label.selected > b {
+.retained-driver-group > label.selected > b {
   background: #197649;
   color: white;
 }
@@ -3288,11 +3294,11 @@ button {
   .daily-document-row .document-situation {
     grid-column: 1 / -1;
   }
-  .retained-list > label {
+  .retained-driver-group > label {
     grid-template-columns: auto repeat(2, minmax(0, 1fr));
   }
-  .retained-list > label > span:nth-of-type(3),
-  .retained-list > label > span:nth-of-type(4) {
+  .retained-driver-group > label > span:nth-of-type(3),
+  .retained-driver-group > label > span:nth-of-type(4) {
     grid-column: 2 / -1;
   }
   .romaneio-documents > div {
@@ -3507,13 +3513,13 @@ button {
     align-items: stretch;
     flex-direction: column;
   }
-  .retained-list > label {
+  .retained-driver-group > label {
     grid-template-columns: auto minmax(0, 1fr);
   }
-  .retained-list > label > span,
-  .retained-list > label > span:nth-of-type(3),
-  .retained-list > label > span:nth-of-type(4),
-  .retained-list > label > b {
+  .retained-driver-group > label > span,
+  .retained-driver-group > label > span:nth-of-type(3),
+  .retained-driver-group > label > span:nth-of-type(4),
+  .retained-driver-group > label > b {
     grid-column: 2;
   }
   .preview-layout {
