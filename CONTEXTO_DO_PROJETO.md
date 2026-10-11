@@ -460,6 +460,7 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 # Atualização de retidos e sincronização — 11/10/2026
 
 - A busca da lista de Retidos aceita NF, CT-e, MD-e/minuta e chave de acesso; localizar apenas seleciona o documento, e a baixa só ocorre ao gravar.
+- Se a busca localizar um documento já baixado, informa a data, a hora, o operador, o motorista e o romaneio da baixa registrada no histórico.
 - Os retidos são exibidos em grupos por motorista e mantêm o botão flutuante de gravação.
 - Ao bipar um retido na Ticagem, o sistema pede confirmação antes de gravá-lo como Entregue.
 - Ao bipar um documento retido em Capas, a baixa do retido é vinculada automaticamente.

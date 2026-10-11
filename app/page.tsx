@@ -4610,6 +4610,32 @@ export default function Home() {
       undefined,
     );
     if (!matching) {
+      const released = retainedHistory
+        .filter((event) => event.action === "released")
+        .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+        .find((event) => {
+          const eventIdentifiers = new Set(
+            [event.referenceNumber, event.invoice, event.cte]
+              .flatMap((value) => operationalIdentifiers(value || "")),
+          );
+          return typedIdentifiers.some((identifier) => eventIdentifiers.has(identifier));
+        });
+      if (released) {
+        const releasedAt = new Date(released.occurredAt);
+        const releasedWhen = Number.isNaN(releasedAt.getTime())
+          ? released.occurredAt
+          : releasedAt.toLocaleString("pt-BR", {
+              dateStyle: "short",
+              timeStyle: "medium",
+            });
+        if (retainedScanInputRef.current) retainedScanInputRef.current.value = "";
+        setMessageIsError(false);
+        setMessage(
+          `${released.referenceType} ${released.referenceNumber} já foi baixado em ${releasedWhen} por ${released.operator || "operador não informado"}. Motorista: ${released.driver || "não informado"}; romaneio(s): ${released.romaneios.join(" · ") || "não informado"}.`,
+        );
+        playRomaneioSuccessSound();
+        return;
+      }
       setMessageIsError(true);
       setMessage(
         `${raw} não foi encontrado no relatório de retidos.`,
