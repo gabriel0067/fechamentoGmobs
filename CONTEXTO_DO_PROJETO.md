@@ -4,6 +4,8 @@
 
 > Atualização de 20/09/2026: o backup consolidado foi validado no Neon e a branch de migração foi promovida manualmente à produção em `https://fechamento-gmobs.vercel.app/`. O site antigo continua intacto. A configuração de acompanhamento automático da produção na Vercel ainda aponta para `main`; futuras publicações desta branch exigem promoção manual. Os dados da cópia consolidada são de 20/09 às 12h20 BRT, sem sincronização automática posterior com o site antigo.
 
+> Otimização de transferência em 11/10/2026: os estados grandes `closing` e `romaneios` foram mantidos como cópias legadas intactas, mas a sincronização ativa passou a separar dados importados (`closing-data` e `romaneio-data`) das alterações operacionais menores (`closing-ops` e `romaneio-ops`). Assim, uma baixa, capa, observação ou ticagem não reenvia nem força outros computadores a baixar novamente todos os relatórios importados. A primeira abertura após a atualização migra os blocos de forma aditiva, sem apagar os registros antigos; os backups completos passaram a incluir tanto os blocos atuais quanto os legados.
+
 ## Objetivo
 
 Este projeto transforma o processo de fechamento de transportadoras/parceiras em um fluxo web simples. O usuário importa um relatório geral em Excel ou CSV, confere os registros separados por parceira e exporta um arquivo Excel separado para cada transportadora escolhida.

@@ -23,7 +23,11 @@ if (!login.ok) throw new Error(`Não foi possível entrar na origem (${login.sta
 const cookie = login.headers.get("set-cookie")?.split(";")[0];
 if (!cookie) throw new Error("A origem não retornou a sessão.");
 
-const keys = ["closing", "scans", "tde", "maex", "billed", "romaneios"];
+const keys = [
+  "closing", "closing-data", "closing-ops",
+  "scans", "tde", "maex", "billed",
+  "romaneios", "romaneio-data", "romaneio-ops",
+];
 const states = {};
 for (const key of keys) {
   const response = await fetch(`${origin}/api/cloud-state?key=${key}`, {

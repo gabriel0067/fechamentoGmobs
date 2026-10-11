@@ -8,9 +8,13 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!file || !databaseUrl)
   throw new Error("Informe o arquivo .json.gz e configure DATABASE_URL no ambiente.");
 const backup = JSON.parse(gunzipSync(await readFile(file)).toString("utf8"));
-const keys = ["closing", "scans", "tde", "maex", "billed", "romaneios"];
+const legacyKeys = ["closing", "scans", "tde", "maex", "billed", "romaneios"];
+const keys = [
+  ...legacyKeys,
+  "closing-data", "closing-ops", "romaneio-data", "romaneio-ops",
+].filter((key) => backup.states?.[key]);
 if (backup.product !== "Fechamentos GMOBS - banco completo" || backup.version !== 1 ||
-    !keys.every((key) => backup.states?.[key]))
+    !legacyKeys.every((key) => backup.states?.[key]))
   throw new Error("Backup incompleto ou não reconhecido.");
 
 for (const key of keys) {

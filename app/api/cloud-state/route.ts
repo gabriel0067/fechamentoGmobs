@@ -6,7 +6,11 @@ export const runtime = "nodejs";
 const OWNER = "shared:fechamentos-gmobs";
 const CHUNK_SIZE = 700_000;
 const MAX_CHUNKS = 100;
-const ALL_KEYS = ["closing", "scans", "tde", "maex", "billed", "romaneios"];
+const ALL_KEYS = [
+  "closing", "closing-data", "closing-ops",
+  "scans", "tde", "maex", "billed",
+  "romaneios", "romaneio-data", "romaneio-ops",
+];
 const KEYS = new Set(ALL_KEYS);
 const ENCODINGS = new Set(["gzip-base64", "json"]);
 let client: ReturnType<typeof neon> | undefined;
@@ -145,8 +149,8 @@ export async function GET(request: Request) {
       await ensureUploadSchema();
       await discardExpiredUploads();
       const rows = await sql().query(
-        "SELECT state_key, version FROM cloud_state_records WHERE owner_id = $1 AND state_key IN ('closing', 'scans', 'tde', 'maex', 'billed', 'romaneios')",
-        [OWNER],
+        "SELECT state_key, version FROM cloud_state_records WHERE owner_id = $1 AND state_key = ANY($2::text[])",
+        [OWNER, ALL_KEYS],
       ) as { state_key: string; version: string }[];
       return Response.json(Object.fromEntries(rows.map((row) => [row.state_key, row.version])),
         { headers: { "cache-control": "no-store" } });

@@ -7,8 +7,12 @@ import { join, resolve } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { test } from "node:test";
 
-test("backup inclui os seis conjuntos sem modificar a origem", async () => {
-  const keys = ["closing", "scans", "tde", "maex", "billed", "romaneios"];
+test("backup inclui os conjuntos atuais e legados sem modificar a origem", async () => {
+  const keys = [
+    "closing", "closing-data", "closing-ops",
+    "scans", "tde", "maex", "billed",
+    "romaneios", "romaneio-data", "romaneio-ops",
+  ];
   const seen = [];
   const server = createServer((request, response) => {
     if (request.url === "/api/auth/login") {
@@ -33,8 +37,10 @@ test("backup inclui os seis conjuntos sem modificar a origem", async () => {
         GMOBS_LOGIN_USER: "teste", GMOBS_LOGIN_PASSWORD: "teste" },
       cwd: resolve("."),
     });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
     const exit = await new Promise((done) => child.on("exit", done));
-    assert.equal(exit, 0);
+    assert.equal(exit, 0, stderr);
     assert.deepEqual(seen, [...keys.map((key) => `GET:${key}`), ...keys.map((key) => `HEAD:${key}`)]);
     const backup = JSON.parse(gunzipSync(await readFile(file)).toString("utf8"));
     assert.deepEqual(Object.keys(backup.states), keys);

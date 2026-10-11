@@ -1,10 +1,14 @@
 export type CloudStateKey =
   | "closing"
+  | "closing-data"
+  | "closing-ops"
   | "scans"
   | "tde"
   | "maex"
   | "billed"
-  | "romaneios";
+  | "romaneios"
+  | "romaneio-data"
+  | "romaneio-ops";
 export type CloudStateRecord<T> = { value: T; version: string };
 export type CloudSaveResult<T> = { value: T; version: string; reconciled: boolean };
 

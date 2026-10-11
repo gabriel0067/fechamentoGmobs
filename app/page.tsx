@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import {
+  CloudStateConflictError,
   getCloudStateVersion,
   getCloudStateVersions,
   isHostedSite,
@@ -1074,7 +1075,8 @@ function useCloudStateSync<T>(
     let started = false;
     let cancelled = false;
     const saveDelay =
-      stateKey === "closing" || stateKey === "romaneios" || stateKey === "billed"
+      stateKey === "closing-data" || stateKey === "closing-ops" ||
+      stateKey === "romaneio-data" || stateKey === "romaneio-ops" || stateKey === "billed"
         ? 350
         : 250;
     const timer = window.setTimeout(() => {
@@ -1298,6 +1300,17 @@ async function loadCachedCloudStateRecord<T>(stateKey: CloudStateKey) {
   if (record)
     void writeCloudStateCache(stateKey, record.version, record.value).catch(() => undefined);
   return record;
+}
+
+async function initializeCloudState(stateKey: CloudStateKey, value: unknown) {
+  try {
+    return await saveCloudState(stateKey, value, "");
+  } catch (error) {
+    if (!(error instanceof CloudStateConflictError)) throw error;
+    const version = await getCloudStateVersion(stateKey);
+    if (!version) throw error;
+    return version;
+  }
 }
 
 export default function Home() {
@@ -1909,17 +1922,21 @@ export default function Home() {
         setAuthStatus("signedIn");
 
         const [
-          closingRecord,
+          closingDataRecord,
+          closingOpsRecord,
           scansRecord,
           tdeRecord,
           maexRecord,
           billedRecord,
-          romaneiosRecord,
+          romaneioDataRecord,
+          romaneioOpsRecord,
         ] = await Promise.all([
             loadCachedCloudStateRecord<{
               entries: Entry[];
               referenceEntries?: RomaneioReferenceEntry[];
               importInfo: ImportInfo | null;
+            }>("closing-data"),
+            loadCachedCloudStateRecord<{
               covers?: CoverExport[];
               coverGenerators?: string[];
               closingAdditionals?: ClosingAdditional[];
@@ -1928,7 +1945,7 @@ export default function Home() {
               dedicatedRecords?: DedicatedRecord[];
               financialEntries?: FinancialEntry[];
               financialAccountNames?: string[];
-            }>("closing"),
+            }>("closing-ops"),
             loadCachedCloudStateRecord<Record<string, Record<string, ScanRecord>>>(
               "scans",
             ),
@@ -1941,6 +1958,8 @@ export default function Home() {
             loadCachedCloudStateRecord<{
               entries: RomaneioEntry[];
               importInfo: RomaneioImportInfo | null;
+            }>("romaneio-data"),
+            loadCachedCloudStateRecord<{
               documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
               routeLabels: Record<string, string>;
               groupNotes?: Record<string, string>;
@@ -1948,53 +1967,71 @@ export default function Home() {
               pickupQuantities?: Record<string, number>;
               driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
               retainedHistory?: RetainedHistoryEvent[];
-            }>("romaneios"),
+            }>("romaneio-ops"),
           ]);
         if (cancelled) return;
 
-        const closing = closingRecord?.value;
-        if (closing?.entries && Array.isArray(closing.entries)) {
-          const normalizedEntries = normalizeSavedEntries(closing.entries);
+        const legacyClosingRecord = !closingDataRecord || !closingOpsRecord
+          ? await loadCachedCloudStateRecord<{
+              entries: Entry[];
+              referenceEntries?: RomaneioReferenceEntry[];
+              importInfo: ImportInfo | null;
+              covers?: CoverExport[];
+              coverGenerators?: string[];
+              closingAdditionals?: ClosingAdditional[];
+              billingInvoices?: BillingInvoice[];
+              pickupRecords?: PickupRecord[];
+              dedicatedRecords?: DedicatedRecord[];
+              financialEntries?: FinancialEntry[];
+              financialAccountNames?: string[];
+            }>("closing")
+          : undefined;
+        const closingData = closingDataRecord?.value || legacyClosingRecord?.value;
+        const closingOps = closingOpsRecord?.value || legacyClosingRecord?.value;
+        if (closingData?.entries && Array.isArray(closingData.entries)) {
+          const normalizedEntries = normalizeSavedEntries(closingData.entries);
           const normalizedReferences = normalizeRomaneioReferenceEntries(
-            closing.referenceEntries,
+            closingData.referenceEntries,
             normalizedEntries,
           );
           setEntries(restoreEligibleSpecialEntries(normalizedEntries, normalizedReferences));
           setRomaneioReferenceEntries(normalizedReferences);
-          setImportInfo(closing.importInfo || null);
-          setCovers(Array.isArray(closing.covers) ? closing.covers : []);
-          setCoverGenerators(
-            Array.isArray(closing.coverGenerators)
-              ? closing.coverGenerators
-              : [...new Set((closing.covers || []).map((cover) => cover.generatedBy).filter(Boolean) as string[])],
-          );
-          setClosingAdditionals(Array.isArray(closing.closingAdditionals) ? closing.closingAdditionals : []);
-          setBillingInvoices(Array.isArray(closing.billingInvoices) ? closing.billingInvoices : []);
-          setPickupRecords(Array.isArray(closing.pickupRecords) ? closing.pickupRecords : []);
-          setDedicatedRecords(Array.isArray(closing.dedicatedRecords) ? closing.dedicatedRecords : []);
-          setFinancialEntries(Array.isArray(closing.financialEntries) ? closing.financialEntries : []);
-          setFinancialAccountNames(Array.isArray(closing.financialAccountNames) ? closing.financialAccountNames : []);
-          cloudVersionsRef.current.closing = closingRecord?.version || "";
-        } else {
-          cloudVersionsRef.current.closing = await saveCloudState("closing", {
-            entries: [],
-            referenceEntries: [],
-            importInfo: null,
-            covers: [],
-            coverGenerators: [],
-            closingAdditionals: [],
-            billingInvoices: [],
-            pickupRecords: [],
-            dedicatedRecords: [],
-            financialEntries: [],
-            financialAccountNames: [],
-          }, "");
+          setImportInfo(closingData.importInfo || null);
         }
+        if (closingOps) {
+          setCovers(Array.isArray(closingOps.covers) ? closingOps.covers : []);
+          setCoverGenerators(
+            Array.isArray(closingOps.coverGenerators)
+              ? closingOps.coverGenerators
+              : [...new Set((closingOps.covers || []).map((cover) => cover.generatedBy).filter(Boolean) as string[])],
+          );
+          setClosingAdditionals(Array.isArray(closingOps.closingAdditionals) ? closingOps.closingAdditionals : []);
+          setBillingInvoices(Array.isArray(closingOps.billingInvoices) ? closingOps.billingInvoices : []);
+          setPickupRecords(Array.isArray(closingOps.pickupRecords) ? closingOps.pickupRecords : []);
+          setDedicatedRecords(Array.isArray(closingOps.dedicatedRecords) ? closingOps.dedicatedRecords : []);
+          setFinancialEntries(Array.isArray(closingOps.financialEntries) ? closingOps.financialEntries : []);
+          setFinancialAccountNames(Array.isArray(closingOps.financialAccountNames) ? closingOps.financialAccountNames : []);
+        }
+        const closingDataValue = {
+          entries: closingData?.entries || [],
+          referenceEntries: closingData?.referenceEntries || [],
+          importInfo: closingData?.importInfo || null,
+        };
+        const closingOpsValue = {
+          covers: closingOps?.covers || [], coverGenerators: closingOps?.coverGenerators || [],
+          closingAdditionals: closingOps?.closingAdditionals || [], billingInvoices: closingOps?.billingInvoices || [],
+          pickupRecords: closingOps?.pickupRecords || [], dedicatedRecords: closingOps?.dedicatedRecords || [],
+          financialEntries: closingOps?.financialEntries || [], financialAccountNames: closingOps?.financialAccountNames || [],
+        };
+        cloudVersionsRef.current["closing-data"] = closingDataRecord?.version ||
+          (await initializeCloudState("closing-data", closingDataValue));
+        cloudVersionsRef.current["closing-ops"] = closingOpsRecord?.version ||
+          (await initializeCloudState("closing-ops", closingOpsValue));
         const scans = scansRecord?.value;
         if (scans && typeof scans === "object") setScannedCtes(scans);
         else setScannedCtes({});
         cloudVersionsRef.current.scans =
-          scansRecord?.version || (await saveCloudState("scans", {}, ""));
+          scansRecord?.version || (await initializeCloudState("scans", {}));
 
         const tde = tdeRecord?.value;
         if (tde?.rates && Array.isArray(tde.rates)) {
@@ -2011,56 +2048,52 @@ export default function Home() {
         }
         cloudVersionsRef.current.tde =
           tdeRecord?.version ||
-          (await saveCloudState("tde", { rates: [], importInfo: null }, ""));
+          (await initializeCloudState("tde", { rates: [], importInfo: null }));
 
         const maex = maexRecord?.value;
         if (maex && typeof maex === "object") setMaexAdditionalSenders(maex);
         else setMaexAdditionalSenders({});
         cloudVersionsRef.current.maex =
-          maexRecord?.version || (await saveCloudState("maex", {}, ""));
+          maexRecord?.version || (await initializeCloudState("maex", {}));
 
         const billed = billedRecord?.value;
         if (billed && typeof billed === "object")
           setBilledDocuments(normalizeBilledDocuments(billed));
         else setBilledDocuments({});
         cloudVersionsRef.current.billed =
-          billedRecord?.version || (await saveCloudState("billed", {}, ""));
+          billedRecord?.version || (await initializeCloudState("billed", {}));
 
-        const romaneios = romaneiosRecord?.value;
-        if (Array.isArray(romaneios?.entries)) {
-          setRomaneioEntries(romaneios.entries);
-          setRomaneioImportInfo(romaneios.importInfo || null);
-          setRomaneioDocumentStatuses(romaneios.documentStatuses || {});
-          setRomaneioRouteLabels(romaneios.routeLabels || {});
-          setRomaneioGroupNotes(romaneios.groupNotes || {});
-          setManualRomaneioFreights(romaneios.manualFreights || {});
-          setRomaneioPickupQuantities(romaneios.pickupQuantities || {});
-          setDriverClosingDiscountPlans(romaneios.driverDiscountPlans || {});
-          setRetainedHistory(romaneios.retainedHistory || []);
-        } else {
-          setRomaneioEntries([]);
-          setRomaneioImportInfo(null);
-          setRomaneioDocumentStatuses({});
-          setRomaneioRouteLabels({});
-          setRomaneioGroupNotes({});
-          setManualRomaneioFreights({});
-          setRomaneioPickupQuantities({});
-          setDriverClosingDiscountPlans({});
-          setRetainedHistory([]);
-        }
-        cloudVersionsRef.current.romaneios =
-          romaneiosRecord?.version ||
-          (await saveCloudState("romaneios", {
-            entries: [],
-            importInfo: null,
-            documentStatuses: {},
-            routeLabels: {},
-            groupNotes: {},
-            manualFreights: {},
-            pickupQuantities: {},
-            driverDiscountPlans: {},
-            retainedHistory: [],
-          }, ""));
+        const legacyRomaneiosRecord = !romaneioDataRecord || !romaneioOpsRecord
+          ? await loadCachedCloudStateRecord<{
+              entries: RomaneioEntry[]; importInfo: RomaneioImportInfo | null;
+              documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
+              routeLabels: Record<string, string>; groupNotes?: Record<string, string>;
+              manualFreights?: Record<string, ManualRomaneioFreight[]>; pickupQuantities?: Record<string, number>;
+              driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>; retainedHistory?: RetainedHistoryEvent[];
+            }>("romaneios")
+          : undefined;
+        const romaneioData = romaneioDataRecord?.value || legacyRomaneiosRecord?.value;
+        const romaneioOps = romaneioOpsRecord?.value || legacyRomaneiosRecord?.value;
+        setRomaneioEntries(Array.isArray(romaneioData?.entries) ? romaneioData.entries : []);
+        setRomaneioImportInfo(romaneioData?.importInfo || null);
+        setRomaneioDocumentStatuses(romaneioOps?.documentStatuses || {});
+        setRomaneioRouteLabels(romaneioOps?.routeLabels || {});
+        setRomaneioGroupNotes(romaneioOps?.groupNotes || {});
+        setManualRomaneioFreights(romaneioOps?.manualFreights || {});
+        setRomaneioPickupQuantities(romaneioOps?.pickupQuantities || {});
+        setDriverClosingDiscountPlans(romaneioOps?.driverDiscountPlans || {});
+        setRetainedHistory(romaneioOps?.retainedHistory || []);
+        const romaneioDataValue = { entries: romaneioData?.entries || [], importInfo: romaneioData?.importInfo || null };
+        const romaneioOpsValue = {
+          documentStatuses: romaneioOps?.documentStatuses || {}, routeLabels: romaneioOps?.routeLabels || {},
+          groupNotes: romaneioOps?.groupNotes || {}, manualFreights: romaneioOps?.manualFreights || {},
+          pickupQuantities: romaneioOps?.pickupQuantities || {}, driverDiscountPlans: romaneioOps?.driverDiscountPlans || {},
+          retainedHistory: romaneioOps?.retainedHistory || [],
+        };
+        cloudVersionsRef.current["romaneio-data"] = romaneioDataRecord?.version ||
+          (await initializeCloudState("romaneio-data", romaneioDataValue));
+        cloudVersionsRef.current["romaneio-ops"] = romaneioOpsRecord?.version ||
+          (await initializeCloudState("romaneio-ops", romaneioOpsValue));
 
         if (!cancelled) {
           cloudSaveFailedRef.current = false;
@@ -2231,18 +2264,24 @@ export default function Home() {
     romaneioRouteLabels,
     retainedHistory,
   ]);
-  const closingCloudState = useMemo(
-    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo, covers, coverGenerators, closingAdditionals, billingInvoices, pickupRecords, dedicatedRecords, financialEntries, financialAccountNames }),
-    [billingInvoices, closingAdditionals, coverGenerators, covers, dedicatedRecords, entries, financialAccountNames, financialEntries, importInfo, pickupRecords, romaneioReferenceEntries],
+  const closingDataCloudState = useMemo(
+    () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo }),
+    [entries, importInfo, romaneioReferenceEntries],
+  );
+  const closingOpsCloudState = useMemo(
+    () => ({ covers, coverGenerators, closingAdditionals, billingInvoices, pickupRecords, dedicatedRecords, financialEntries, financialAccountNames }),
+    [billingInvoices, closingAdditionals, coverGenerators, covers, dedicatedRecords, financialAccountNames, financialEntries, pickupRecords],
   );
   const tdeCloudState = useMemo(
     () => ({ rates: tdeRates, importInfo: tdeImportInfo }),
     [tdeImportInfo, tdeRates],
   );
-  const romaneiosCloudState = useMemo(
+  const romaneioDataCloudState = useMemo(
+    () => ({ entries: romaneioEntries, importInfo: romaneioImportInfo }),
+    [romaneioEntries, romaneioImportInfo],
+  );
+  const romaneioOpsCloudState = useMemo(
     () => ({
-      entries: romaneioEntries,
-      importInfo: romaneioImportInfo,
       documentStatuses: romaneioDocumentStatuses,
       routeLabels: romaneioRouteLabels,
       groupNotes: romaneioGroupNotes,
@@ -2255,9 +2294,7 @@ export default function Home() {
       driverClosingDiscountPlans,
       manualRomaneioFreights,
       romaneioDocumentStatuses,
-      romaneioEntries,
       romaneioGroupNotes,
-      romaneioImportInfo,
       romaneioPickupQuantities,
       romaneioRouteLabels,
       retainedHistory,
@@ -2276,12 +2313,15 @@ export default function Home() {
     (key: CloudStateKey) => cloudVersionsRef.current[key] || "",
     [],
   );
-  const reconcileClosing = useCallback((value: typeof closingCloudState) => {
-    skipCloudSaveRef.current.add("closing");
+  const reconcileClosingData = useCallback((value: typeof closingDataCloudState) => {
+    skipCloudSaveRef.current.add("closing-data");
     const normalizedEntries = normalizeSavedEntries(value.entries || []);
     setEntries(normalizedEntries);
     setRomaneioReferenceEntries(normalizeRomaneioReferenceEntries(value.referenceEntries, normalizedEntries));
     setImportInfo(value.importInfo || null);
+  }, []);
+  const reconcileClosingOps = useCallback((value: typeof closingOpsCloudState) => {
+    skipCloudSaveRef.current.add("closing-ops");
     setCovers(Array.isArray(value.covers) ? value.covers : []);
     setCoverGenerators(Array.isArray(value.coverGenerators) ? value.coverGenerators : []);
     setClosingAdditionals(Array.isArray(value.closingAdditionals) ? value.closingAdditionals : []);
@@ -2308,10 +2348,13 @@ export default function Home() {
     skipCloudSaveRef.current.add("billed");
     setBilledDocuments(normalizeBilledDocuments(value || {}));
   }, []);
-  const reconcileRomaneios = useCallback((value: typeof romaneiosCloudState) => {
-    skipCloudSaveRef.current.add("romaneios");
+  const reconcileRomaneioData = useCallback((value: typeof romaneioDataCloudState) => {
+    skipCloudSaveRef.current.add("romaneio-data");
     setRomaneioEntries(value.entries || []);
     setRomaneioImportInfo(value.importInfo || null);
+  }, []);
+  const reconcileRomaneioOps = useCallback((value: typeof romaneioOpsCloudState) => {
+    skipCloudSaveRef.current.add("romaneio-ops");
     setRomaneioDocumentStatuses(value.documentStatuses || {});
     setRomaneioRouteLabels(value.routeLabels || {});
     setRomaneioGroupNotes(value.groupNotes || {});
@@ -2340,14 +2383,25 @@ export default function Home() {
     [],
   );
   useCloudStateSync(
-    "closing",
-    closingCloudState,
+    "closing-data",
+    closingDataCloudState,
     cloudReady,
     skipCloudSaveRef,
     markCloudChangeQueued,
     markCloudSaveStart,
     getExpectedCloudVersion,
-    reconcileClosing,
+    reconcileClosingData,
+    markCloudSaveFinish,
+  );
+  useCloudStateSync(
+    "closing-ops",
+    closingOpsCloudState,
+    cloudReady,
+    skipCloudSaveRef,
+    markCloudChangeQueued,
+    markCloudSaveStart,
+    getExpectedCloudVersion,
+    reconcileClosingOps,
     markCloudSaveFinish,
   );
   useCloudStateSync(
@@ -2395,14 +2449,25 @@ export default function Home() {
     markCloudSaveFinish,
   );
   useCloudStateSync(
-    "romaneios",
-    romaneiosCloudState,
+    "romaneio-data",
+    romaneioDataCloudState,
     cloudReady,
     skipCloudSaveRef,
     markCloudChangeQueued,
     markCloudSaveStart,
     getExpectedCloudVersion,
-    reconcileRomaneios,
+    reconcileRomaneioData,
+    markCloudSaveFinish,
+  );
+  useCloudStateSync(
+    "romaneio-ops",
+    romaneioOpsCloudState,
+    cloudReady,
+    skipCloudSaveRef,
+    markCloudChangeQueued,
+    markCloudSaveStart,
+    getExpectedCloudVersion,
+    reconcileRomaneioOps,
     markCloudSaveFinish,
   );
   useEffect(() => {
@@ -2443,12 +2508,14 @@ export default function Home() {
     )
       return;
     const keys: CloudStateKey[] = [
-      "closing",
+      "closing-data",
+      "closing-ops",
       "scans",
       "tde",
       "maex",
       "billed",
-      "romaneios",
+      "romaneio-data",
+      "romaneio-ops",
     ];
     try {
       const currentVersions = await getCloudStateVersions();
@@ -2467,11 +2534,22 @@ export default function Home() {
       if (!changedKeys.length) return;
 
       for (const key of changedKeys) {
-        if (key === "closing") {
+        if (key === "closing-data") {
           const record = await loadCachedCloudStateRecord<{
             entries: Entry[];
             referenceEntries?: RomaneioReferenceEntry[];
             importInfo: ImportInfo | null;
+          }>(key);
+          if (!record) continue;
+          skipCloudSaveRef.current.add(key);
+          cloudVersionsRef.current[key] = record.version;
+          const normalizedEntries = normalizeSavedEntries(record.value.entries || []);
+          const normalizedReferences = normalizeRomaneioReferenceEntries(record.value.referenceEntries, normalizedEntries);
+          setEntries(restoreEligibleSpecialEntries(normalizedEntries, normalizedReferences));
+          setRomaneioReferenceEntries(normalizedReferences);
+          setImportInfo(record.value.importInfo || null);
+        } else if (key === "closing-ops") {
+          const record = await loadCachedCloudStateRecord<{
             covers?: CoverExport[];
             coverGenerators?: string[];
             closingAdditionals?: ClosingAdditional[];
@@ -2484,16 +2562,6 @@ export default function Home() {
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
           cloudVersionsRef.current[key] = record.version;
-          const normalizedEntries = normalizeSavedEntries(
-            record.value.entries || [],
-          );
-          const normalizedReferences = normalizeRomaneioReferenceEntries(
-            record.value.referenceEntries,
-            normalizedEntries,
-          );
-          setEntries(restoreEligibleSpecialEntries(normalizedEntries, normalizedReferences));
-          setRomaneioReferenceEntries(normalizedReferences);
-          setImportInfo(record.value.importInfo || null);
           setCovers(Array.isArray(record.value.covers) ? record.value.covers : []);
           setCoverGenerators(
             Array.isArray(record.value.coverGenerators)
@@ -2545,10 +2613,18 @@ export default function Home() {
           skipCloudSaveRef.current.add(key);
           cloudVersionsRef.current[key] = record.version;
           setBilledDocuments(normalizeBilledDocuments(record.value || {}));
-        } else if (key === "romaneios") {
+        } else if (key === "romaneio-data") {
           const record = await loadCachedCloudStateRecord<{
             entries: RomaneioEntry[];
             importInfo: RomaneioImportInfo | null;
+          }>(key);
+          if (!record) continue;
+          skipCloudSaveRef.current.add(key);
+          cloudVersionsRef.current[key] = record.version;
+          setRomaneioEntries(record.value.entries || []);
+          setRomaneioImportInfo(record.value.importInfo || null);
+        } else if (key === "romaneio-ops") {
+          const record = await loadCachedCloudStateRecord<{
             documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
             routeLabels: Record<string, string>;
             groupNotes?: Record<string, string>;
@@ -2560,8 +2636,6 @@ export default function Home() {
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
           cloudVersionsRef.current[key] = record.version;
-          setRomaneioEntries(record.value.entries || []);
-          setRomaneioImportInfo(record.value.importInfo || null);
           setRomaneioDocumentStatuses(record.value.documentStatuses || {});
           setRomaneioRouteLabels(record.value.routeLabels || {});
           setRomaneioGroupNotes(record.value.groupNotes || {});
@@ -6635,9 +6709,9 @@ export default function Home() {
     setCloudStatus("loading");
     try {
       const pending: [CloudStateKey, unknown][] = [
-        ["closing", closingCloudState], ["scans", scannedCtes],
+        ["closing-data", closingDataCloudState], ["closing-ops", closingOpsCloudState], ["scans", scannedCtes],
         ["tde", tdeCloudState], ["maex", maexAdditionalSenders],
-        ["billed", billedDocuments], ["romaneios", romaneiosCloudState],
+        ["billed", billedDocuments], ["romaneio-data", romaneioDataCloudState], ["romaneio-ops", romaneioOpsCloudState],
       ];
       for (const [key, value] of pending) {
         cloudVersionsRef.current[key] = await saveCloudState(key, value, getExpectedCloudVersion(key));
