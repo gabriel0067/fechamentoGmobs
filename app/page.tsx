@@ -233,6 +233,30 @@ type ManualRomaneioFreight = {
   invoice: string;
   grossFreight: number;
 };
+type ManualRomaneioDocument = {
+  key: string;
+  mde: string;
+  cte: string;
+  cteKey: string;
+  invoice: string;
+  sender: string;
+  recipient: string;
+  city: string;
+  freight: number;
+  weight: number;
+  volumes: number;
+};
+type ManualRomaneio = {
+  id: string;
+  number: string;
+  createdAt: string;
+  createdBy: string;
+  driver: string;
+  cpf: string;
+  plate: string;
+  route: string;
+  documents: ManualRomaneioDocument[];
+};
 type RomaneioSituationConfirmation = {
   groupKey: string;
   documentKey: string;
@@ -469,6 +493,10 @@ const coverDocumentsOverlap = (
   const leftCover = scanKey(left.manualCoverNumber);
   const rightCover = scanKey(right.manualCoverNumber);
   if (leftCover && rightCover) return leftCover === rightCover;
+  const leftMde = scanKey(left.mde);
+  const rightMde = scanKey(right.mde);
+  // A minuta identifica a entrega sem confundir NFs ou CT-es de números iguais.
+  if (leftMde || rightMde) return Boolean(leftMde && rightMde && leftMde === rightMde);
   const leftKey = scanKey(left.cteKey);
   const rightKey = scanKey(right.cteKey);
   if (leftKey && rightKey && leftKey === rightKey) return true;
@@ -1508,8 +1536,13 @@ export default function Home() {
   const [retainedReleaseConfirmation, setRetainedReleaseConfirmation] =
     useState<RetainedReleaseConfirmation | null>(null);
   const [romaneioSection, setRomaneioSection] = useState<
-    "checking" | "closing" | "full"
+    "checking" | "closing" | "full" | "manual"
   >("checking");
+  const [manualRomaneios, setManualRomaneios] = useState<ManualRomaneio[]>([]);
+  const [manualRomaneioDriverKey, setManualRomaneioDriverKey] = useState("");
+  const [manualRomaneioRoute, setManualRomaneioRoute] = useState("");
+  const [manualRomaneioDraft, setManualRomaneioDraft] = useState<ManualRomaneioDocument[]>([]);
+  const manualRomaneioScanRef = useRef<HTMLInputElement>(null);
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
   const [driverClosingTo, setDriverClosingTo] = useState("");
   const [driverClosingMode, setDriverClosingMode] = useState<"driver" | "vehicle">("driver");
@@ -1782,6 +1815,7 @@ export default function Home() {
           pickupQuantities?: Record<string, number>;
           driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
           retainedHistory?: RetainedHistoryEvent[];
+          manualRomaneios?: ManualRomaneio[];
         };
         let parsedRomaneios: SavedRomaneios | null = null;
         try {
@@ -1887,6 +1921,8 @@ export default function Home() {
           setDriverClosingDiscountPlans(parsedRomaneios.driverDiscountPlans);
         if (Array.isArray(parsedRomaneios?.retainedHistory))
           setRetainedHistory(parsedRomaneios.retainedHistory);
+        if (Array.isArray(parsedRomaneios?.manualRomaneios))
+          setManualRomaneios(parsedRomaneios.manualRomaneios);
       } catch {
         /* começa vazio se o armazenamento estiver inválido */
       } finally {
@@ -1967,6 +2003,7 @@ export default function Home() {
               pickupQuantities?: Record<string, number>;
               driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
               retainedHistory?: RetainedHistoryEvent[];
+              manualRomaneios?: ManualRomaneio[];
             }>("romaneio-ops"),
           ]);
         if (cancelled) return;
@@ -2070,6 +2107,7 @@ export default function Home() {
               routeLabels: Record<string, string>; groupNotes?: Record<string, string>;
               manualFreights?: Record<string, ManualRomaneioFreight[]>; pickupQuantities?: Record<string, number>;
               driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>; retainedHistory?: RetainedHistoryEvent[];
+              manualRomaneios?: ManualRomaneio[];
             }>("romaneios")
           : undefined;
         const romaneioData = romaneioDataRecord?.value || legacyRomaneiosRecord?.value;
@@ -2083,12 +2121,14 @@ export default function Home() {
         setRomaneioPickupQuantities(romaneioOps?.pickupQuantities || {});
         setDriverClosingDiscountPlans(romaneioOps?.driverDiscountPlans || {});
         setRetainedHistory(romaneioOps?.retainedHistory || []);
+        setManualRomaneios(romaneioOps?.manualRomaneios || []);
         const romaneioDataValue = { entries: romaneioData?.entries || [], importInfo: romaneioData?.importInfo || null };
         const romaneioOpsValue = {
           documentStatuses: romaneioOps?.documentStatuses || {}, routeLabels: romaneioOps?.routeLabels || {},
           groupNotes: romaneioOps?.groupNotes || {}, manualFreights: romaneioOps?.manualFreights || {},
           pickupQuantities: romaneioOps?.pickupQuantities || {}, driverDiscountPlans: romaneioOps?.driverDiscountPlans || {},
           retainedHistory: romaneioOps?.retainedHistory || [],
+          manualRomaneios: romaneioOps?.manualRomaneios || [],
         };
         cloudVersionsRef.current["romaneio-data"] = romaneioDataRecord?.version ||
           (await initializeCloudState("romaneio-data", romaneioDataValue));
@@ -2248,6 +2288,7 @@ export default function Home() {
         pickupQuantities: romaneioPickupQuantities,
         driverDiscountPlans: driverClosingDiscountPlans,
         retainedHistory,
+        manualRomaneios,
       })
       .then(() => { try { localStorage.removeItem(ROMANEIO_STORAGE_KEY); } catch { /* IndexedDB já confirmou a gravação */ } })
       .catch(() => { if (!cancelled) setMessage("Não foi possível salvar os romaneios neste computador. Não recarregue a página; exporte um backup."); });
@@ -2263,6 +2304,7 @@ export default function Home() {
     romaneioPickupQuantities,
     romaneioRouteLabels,
     retainedHistory,
+    manualRomaneios,
   ]);
   const closingDataCloudState = useMemo(
     () => ({ entries, referenceEntries: romaneioReferenceEntries, importInfo }),
@@ -2289,6 +2331,7 @@ export default function Home() {
       pickupQuantities: romaneioPickupQuantities,
       driverDiscountPlans: driverClosingDiscountPlans,
       retainedHistory,
+      manualRomaneios,
     }),
     [
       driverClosingDiscountPlans,
@@ -2298,6 +2341,7 @@ export default function Home() {
       romaneioPickupQuantities,
       romaneioRouteLabels,
       retainedHistory,
+      manualRomaneios,
     ],
   );
   const markCloudSaveStart = useCallback(() => {
@@ -2362,6 +2406,7 @@ export default function Home() {
     setRomaneioPickupQuantities(value.pickupQuantities || {});
     setDriverClosingDiscountPlans(value.driverDiscountPlans || {});
     setRetainedHistory(value.retainedHistory || []);
+    setManualRomaneios(value.manualRomaneios || []);
   }, []);
   const markCloudSaveFinish = useCallback(
     (stateKey: CloudStateKey, succeeded: boolean, version?: string, error?: Error) => {
@@ -2632,6 +2677,7 @@ export default function Home() {
             pickupQuantities?: Record<string, number>;
             driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
             retainedHistory?: RetainedHistoryEvent[];
+            manualRomaneios?: ManualRomaneio[];
           }>(key);
           if (!record) continue;
           skipCloudSaveRef.current.add(key);
@@ -2643,6 +2689,7 @@ export default function Home() {
           setRomaneioPickupQuantities(record.value.pickupQuantities || {});
           setDriverClosingDiscountPlans(record.value.driverDiscountPlans || {});
           setRetainedHistory(record.value.retainedHistory || []);
+          setManualRomaneios(record.value.manualRomaneios || []);
         }
       }
       setCloudStatus("ready");
@@ -2928,6 +2975,15 @@ export default function Home() {
         a.driver.localeCompare(b.driver, "pt-BR"),
     );
   }, [romaneioDocumentMatches, romaneioEntries]);
+  const manualRomaneioDrivers = useMemo(() => {
+    const drivers = new Map<string, { key: string; driver: string; cpf: string; plate: string }>();
+    romaneioDailyGroups.forEach((group) => {
+      const key = normalizeCnpj(group.cpf) || normalized(group.driver);
+      if (!key || drivers.has(key)) return;
+      drivers.set(key, { key, driver: group.driver, cpf: group.cpf, plate: group.plates[0] || "" });
+    });
+    return [...drivers.values()].sort((a, b) => a.driver.localeCompare(b.driver, "pt-BR"));
+  }, [romaneioDailyGroups]);
   const romaneioScanIndex = useMemo(() => {
     const index = new Map<string, { group: RomaneioDailyGroup; document: RomaneioDailyDocument; order: number }[]>();
     let order = 0;
@@ -4669,8 +4725,82 @@ export default function Home() {
     );
   }
 
+  function scanManualRomaneioDocument() {
+    const raw = manualRomaneioScanRef.current?.value.trim() || "";
+    if (manualRomaneioScanRef.current) manualRomaneioScanRef.current.value = "";
+    window.requestAnimationFrame(() => manualRomaneioScanRef.current?.focus());
+    if (!manualRomaneioDriverKey) {
+      setMessageIsError(true);
+      setMessage("Escolha o motorista antes de bipar os documentos.");
+      return;
+    }
+    if (!raw) return;
+    const source = [...new Map([...entriesWithTde, ...romaneioReferenceEntries].map((entry) => [entry.id, entry] as const)).values()];
+    const matches = source.filter((entry) => entryMatchesGlobalDocumentScan(entry, raw));
+    if (!matches.length) {
+      setMessageIsError(true);
+      setMessage(`${raw} não foi encontrado nos relatórios importados.`);
+      playRomaneioAttentionSound();
+      return;
+    }
+    const exact = matches.filter((entry) => [entry.mde, entry.cte, entry.cteKey].some((value) => scanKey(value) === scanKey(raw)));
+    const candidates = exact.length ? exact : matches;
+    const uniqueMinutas = [...new Set(candidates.map((entry) => operationalIdentifier(entry.mde)).filter(Boolean))];
+    if (!exact.length && uniqueMinutas.length > 1) {
+      setMessageIsError(true);
+      setMessage(`O número ${raw} aparece em mais de um documento (minutas ${uniqueMinutas.join(" · ")}). Bipe a minuta ou a chave completa para escolher corretamente.`);
+      playRomaneioAttentionSound();
+      return;
+    }
+    const entry = candidates[0];
+    const key = operationalIdentifier(entry.mde) || scanKey(entry.cteKey) || operationalIdentifier(entry.cte) || `${normalizeInvoiceKey(entry.invoice)}|${normalized(entry.sender)}|${normalized(entry.recipient)}`;
+    if (manualRomaneioDraft.some((item) => item.key === key)) {
+      setMessageIsError(true);
+      setMessage(`O documento ${raw} já está neste romaneio manual.`);
+      return;
+    }
+    setManualRomaneioDraft((current) => [{ key, mde: entry.mde, cte: entry.cte, cteKey: entry.cteKey, invoice: entry.invoice, sender: entry.sender, recipient: entry.recipient, city: entry.city, freight: entry.reportedTotal ?? entry.freight ?? 0, weight: entry.weight || 0, volumes: entry.volumes || 0 }, ...current]);
+    setMessageIsError(false);
+    setMessage(`Documento ${entry.mde || entry.cte || entry.invoice} incluído no romaneio manual.`);
+    playRomaneioSuccessSound();
+  }
+
+  async function printManualRomaneio(romaneio: ManualRomaneio) {
+    const { exportManualRomaneioPdf } = await loadExcelModule();
+    exportManualRomaneioPdf(romaneio);
+  }
+
+  async function saveManualRomaneio() {
+    const driver = manualRomaneioDrivers.find((item) => item.key === manualRomaneioDriverKey);
+    if (!driver || !manualRomaneioDraft.length) {
+      setMessageIsError(true);
+      setMessage("Escolha o motorista e bipe ao menos um documento.");
+      return;
+    }
+    const createdAt = new Date().toISOString();
+    const romaneio: ManualRomaneio = {
+      id: newId(),
+      number: `MAN-${createdAt.slice(0, 10).replaceAll("-", "")}-${createdAt.slice(11, 19).replaceAll(":", "")}`,
+      createdAt,
+      createdBy: activeOperator,
+      driver: driver.driver,
+      cpf: driver.cpf,
+      plate: driver.plate,
+      route: manualRomaneioRoute.trim(),
+      documents: manualRomaneioDraft,
+    };
+    setManualRomaneios((current) => [romaneio, ...current]);
+    setManualRomaneioDraft([]);
+    setManualRomaneioRoute("");
+    setMessageIsError(false);
+    setMessage(`${romaneio.number} gravado com ${romaneio.documents.length} documento(s).`);
+    await printManualRomaneio(romaneio);
+  }
+
   function scanRetainedDocument() {
     const raw = retainedScanInputRef.current?.value.trim() || "";
+    if (retainedScanInputRef.current) retainedScanInputRef.current.value = "";
+    window.requestAnimationFrame(() => retainedScanInputRef.current?.focus());
     const typedIdentifiers = operationalIdentifiers(raw);
     if (!typedIdentifiers.length) {
       setMessageIsError(true);
@@ -4703,7 +4833,6 @@ export default function Home() {
               dateStyle: "short",
               timeStyle: "medium",
             });
-        if (retainedScanInputRef.current) retainedScanInputRef.current.value = "";
         setMessageIsError(false);
         setMessage(
           `${released.referenceType} ${released.referenceNumber} já foi baixado em ${releasedWhen} por ${released.operator || "operador não informado"}. Motorista: ${released.driver || "não informado"}; romaneio(s): ${released.romaneios.join(" · ") || "não informado"}.`,
@@ -4732,7 +4861,6 @@ export default function Home() {
         }),
       ),
     );
-    if (retainedScanInputRef.current) retainedScanInputRef.current.value = "";
     setMessageIsError(false);
     setMessage(
       `${matching.referenceType} ${matching.referenceNumber} localizado. Clique em Gravar baixas para confirmar a entrega.`,
@@ -5121,6 +5249,7 @@ export default function Home() {
         pickupQuantities: romaneioPickupQuantities,
         driverDiscountPlans: driverClosingDiscountPlans,
         retainedHistory,
+        manualRomaneios,
       },
     };
     const url = URL.createObjectURL(
@@ -5177,6 +5306,7 @@ export default function Home() {
           pickupQuantities?: Record<string, number>;
           driverDiscountPlans?: Record<string, DriverClosingDiscountPlan[]>;
           retainedHistory?: RetainedHistoryEvent[];
+          manualRomaneios?: ManualRomaneio[];
         };
       };
       if (
@@ -5197,6 +5327,7 @@ export default function Home() {
           pickupQuantities: backup.romaneios?.pickupQuantities || {},
           driverDiscountPlans: backup.romaneios?.driverDiscountPlans || {},
           retainedHistory: backup.romaneios?.retainedHistory || [],
+          manualRomaneios: backup.romaneios?.manualRomaneios || [],
         });
       }
 
@@ -5244,6 +5375,7 @@ export default function Home() {
         backup.romaneios?.driverDiscountPlans || {},
       );
       setRetainedHistory(backup.romaneios?.retainedHistory || []);
+      setManualRomaneios(backup.romaneios?.manualRomaneios || []);
       setSelectedExports([]);
       setMessage(
         cloudHosted
@@ -5806,6 +5938,17 @@ export default function Home() {
     );
     const partnerMatches = matches.filter((entry) => entry.partnerId === effectiveCoverPartnerId);
     const candidates = exactCteMatches.length ? exactCteMatches : partnerMatches.length ? partnerMatches : matches;
+    const candidateMinutas = [...new Set(candidates.map((entry) => operationalIdentifier(entry.mde)).filter(Boolean))];
+    const exactDocumentMatch = candidates.some((entry) =>
+      [entry.mde, entry.cteKey, entry.cte].some((value) => scanKey(value) === key),
+    );
+    if (!exactDocumentMatch && candidateMinutas.length > 1) {
+      if (coverScanInputRef.current) coverScanInputRef.current.value = "";
+      setMessageIsError(true);
+      setMessage(`O número ${raw} pertence a mais de um documento (minutas ${candidateMinutas.join(" · ")}). Bipe a minuta ou a chave completa para não incluir a nota errada.`);
+      playRomaneioAttentionSound();
+      return;
+    }
     const candidateDocuments = candidates.map((entry): CoverDocumentExport => ({
           scannedAt,
           invoice: entry.invoice,
@@ -5837,7 +5980,7 @@ export default function Home() {
     }
     const nextDrafts = {
       ...coverDraftsRef.current,
-      [coverDraftKey]: [...existing, ...additions],
+      [coverDraftKey]: [...additions.reverse(), ...existing],
     };
     coverDraftsRef.current = nextDrafts;
     setCoverDrafts(nextDrafts);
@@ -5924,7 +6067,7 @@ export default function Home() {
     }
     const next = {
       ...coverDraftsRef.current,
-      [coverDraftKey]: [...existing, manualDocument],
+      [coverDraftKey]: [manualDocument, ...existing],
     };
     coverDraftsRef.current = next;
     setCoverDrafts(next);
@@ -5978,7 +6121,7 @@ export default function Home() {
     }
     const next = {
       ...coverDraftsRef.current,
-      [coverDraftKey]: [...existing, document],
+      [coverDraftKey]: [document, ...existing],
     };
     coverDraftsRef.current = next;
     setCoverDrafts(next);
@@ -7311,6 +7454,13 @@ export default function Home() {
               >
                 Romaneio completo
               </button>
+              <button
+                type="button"
+                className={romaneioSection === "manual" ? "active" : ""}
+                onClick={() => setRomaneioSection("manual")}
+              >
+                Romaneio manual
+              </button>
             </div>
 
             {romaneioSection === "checking" ? (
@@ -7795,6 +7945,30 @@ export default function Home() {
               </div>
             )}
               </>
+            ) : romaneioSection === "manual" ? (
+              <div className="manual-romaneio-view">
+                <div className="intro">
+                  <div><small>NOVO ROMANEIO</small><h2>Romaneio manual</h2><p>Escolha o motorista, bipe os documentos e grave. O PDF segue o modelo operacional de romaneio.</p></div>
+                </div>
+                <section className="manual-romaneio-builder">
+                  <div className="manual-romaneio-fields">
+                    <label>Motorista<select value={manualRomaneioDriverKey} onChange={(event) => setManualRomaneioDriverKey(event.target.value)}><option value="">Selecione...</option>{manualRomaneioDrivers.map((driver) => <option key={driver.key} value={driver.key}>{driver.driver}{driver.plate ? ` · ${driver.plate}` : ""}</option>)}</select></label>
+                    <label>Rota / cidade<input value={manualRomaneioRoute} onChange={(event) => setManualRomaneioRoute(event.target.value)} placeholder="Ex.: Taubaté" /></label>
+                  </div>
+                  <form className="retained-scan" onSubmit={(event) => { event.preventDefault(); scanManualRomaneioDocument(); }}>
+                    <input ref={manualRomaneioScanRef} placeholder="NF, CT-e, MD-e/minuta ou chave de acesso" inputMode="numeric" />
+                    <button className="primary">Adicionar documento</button>
+                  </form>
+                  <div className="manual-romaneio-documents">
+                    {manualRomaneioDraft.length ? manualRomaneioDraft.map((document, index) => <article key={document.key}><b>{index + 1}</b><span><strong>{document.mde ? `MD-e ${document.mde}` : document.cte ? `CT-e ${document.cte}` : `NF ${document.invoice}`}</strong><small>{document.invoice ? `NF ${document.invoice} · ` : ""}{document.sender || "Sem remetente"} → {document.recipient || "Sem destinatário"}</small></span><button type="button" onClick={() => setManualRomaneioDraft((current) => current.filter((item) => item.key !== document.key))}>Remover</button></article>) : <div className="empty romaneio-empty"><span>▤</span><h3>Nenhum documento bipado</h3><p>Os últimos documentos bipados aparecerão primeiro.</p></div>}
+                  </div>
+                  <button type="button" className="primary manual-romaneio-save" disabled={!manualRomaneioDriverKey || !manualRomaneioDraft.length} onClick={saveManualRomaneio}>Gravar e imprimir ({manualRomaneioDraft.length})</button>
+                </section>
+                <section className="manual-romaneio-history">
+                  <div><small>ROMANEIOS GRAVADOS</small><h3>Histórico manual</h3></div>
+                  {manualRomaneios.length ? manualRomaneios.map((romaneio) => <article key={romaneio.id}><span><strong>{romaneio.number}</strong><small>{new Date(romaneio.createdAt).toLocaleString("pt-BR")} · {romaneio.createdBy}</small></span><span><strong>{romaneio.driver}</strong><small>{romaneio.plate || "Sem placa"} · {romaneio.documents.length} documento(s)</small></span><button type="button" onClick={() => printManualRomaneio(romaneio)}>Imprimir</button></article>) : <p>Nenhum romaneio manual gravado.</p>}
+                </section>
+              </div>
             ) : romaneioSection === "full" ? (
               <div className="romaneio-full-view">
                 <div className="toolbar driver-closing-toolbar">

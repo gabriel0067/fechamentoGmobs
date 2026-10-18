@@ -2361,6 +2361,24 @@ button {
   font-weight: 900;
   letter-spacing: 0.06em;
 }
+.manual-romaneio-view { display: grid; gap: 18px; }
+.manual-romaneio-builder, .manual-romaneio-history { display: grid; gap: 14px; padding: 20px; border: 1px solid #dce5df; border-radius: 18px; background: #fff; }
+.manual-romaneio-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.manual-romaneio-fields label { display: grid; gap: 6px; font-size: 12px; font-weight: 850; color: #52615a; }
+.manual-romaneio-fields input, .manual-romaneio-fields select { width: 100%; border: 1px solid #cbd5cf; border-radius: 10px; padding: 11px 12px; background: #fff; }
+.manual-romaneio-documents { display: grid; gap: 7px; }
+.manual-romaneio-documents article, .manual-romaneio-history article { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border: 1px solid #e2e9e5; border-radius: 12px; background: #f8faf9; }
+.manual-romaneio-documents article > b { display: grid; place-items: center; min-width: 30px; height: 30px; border-radius: 9px; background: #176f48; color: #fff; }
+.manual-romaneio-documents span, .manual-romaneio-history span { min-width: 0; flex: 1; display: grid; gap: 3px; }
+.manual-romaneio-documents small, .manual-romaneio-history small { color: #708078; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manual-romaneio-documents button, .manual-romaneio-history button { border: 0; border-radius: 9px; padding: 8px 11px; font-weight: 800; }
+.manual-romaneio-documents button { color: #a13d3d; background: #f9ecec; }
+.manual-romaneio-history button { color: #176f48; background: #e5f2eb; }
+.manual-romaneio-save { justify-self: end; }
+@media (max-width: 760px) {
+  .manual-romaneio-fields { grid-template-columns: 1fr; }
+  .manual-romaneio-documents article, .manual-romaneio-history article { align-items: flex-start; flex-wrap: wrap; }
+}
 .romaneio-group-note textarea {
   min-height: 78px;
   width: 100%;

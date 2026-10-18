@@ -470,3 +470,12 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - Foi criado histórico persistente de lançamentos e baixas de retidos, com exportação em Excel.
 - A atualização automática entre computadores passou de 5 para 60 segundos, continua ocorrendo ao voltar para a janela e é adiada enquanto o usuário está operando.
 - Ao tentar fechar/recarregar a página durante uma gravação pendente ou com falha, o navegador avisa antes de sair.
+
+# Romaneio manual e identificação segura de capas — 18/10/2026
+
+- A busca de Retidos limpa e devolve o foco ao campo depois de toda tentativa, inclusive quando não encontra o documento, para permitir a próxima bipagem imediatamente.
+- A guia Romaneios ganhou `Romaneio manual`: o operador escolhe um motorista existente, informa a rota, bipa NF, CT-e, MD-e/minuta ou chave e grava uma lista própria. O registro fica em `romaneio-ops`, separado dos romaneios importados, e pode ser impresso novamente pelo histórico.
+- O PDF do romaneio manual usa A4 horizontal, cabeçalho de motorista/CPF/placa/rota, tabela de documentos, totais e campos de assinatura, seguindo a organização visual do modelo operacional fornecido em 18/10/2026.
+- Em Capas, a minuta passou a ser a identidade prioritária para distinguir documentos com NF ou CT-e iguais. Uma busca curta que encontra mais de uma minuta não escolhe silenciosamente: informa as minutas e exige a leitura da minuta ou da chave completa.
+- Os itens recém-bipados ou incluídos manualmente aparecem no topo da prévia da capa. Inclusões manuais recebem `*` nos campos CT-e/NF do PDF.
+- Nenhum registro existente é regravado, removido ou migrado por essas mudanças; os novos romaneios manuais usam um campo opcional e retrocompatível.
