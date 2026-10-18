@@ -474,7 +474,8 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 # Romaneio manual e identificação segura de capas — 18/10/2026
 
 - A busca de Retidos limpa e devolve o foco ao campo depois de toda tentativa, inclusive quando não encontra o documento, para permitir a próxima bipagem imediatamente.
-- A guia Romaneios ganhou `Romaneio manual`: o operador escolhe um motorista existente, informa a rota, bipa NF, CT-e, MD-e/minuta ou chave e grava uma lista própria. O registro fica em `romaneio-ops`, separado dos romaneios importados, e pode ser impresso novamente pelo histórico.
+- A guia Romaneios ganhou `Romaneio manual`: o operador escolhe um motorista existente, bipa NF, CT-e, MD-e/minuta ou chave e grava uma lista própria. O histórico manual fica em `romaneio-ops` e pode ser impresso novamente.
+- Ao gravar um romaneio manual, ele também cria sua entrada operacional em `romaneio-data` e grava todos os documentos diretamente como `Entregue`, com operador e horário; não exige nova ticagem. Cidade e rota são reunidas automaticamente das cidades dos documentos localizados nos relatórios, sem digitação manual.
 - O PDF do romaneio manual usa A4 horizontal, cabeçalho de motorista/CPF/placa/rota, tabela de documentos, totais e campos de assinatura, seguindo a organização visual do modelo operacional fornecido em 18/10/2026.
 - Em Capas, a minuta passou a ser a identidade prioritária para distinguir documentos com NF ou CT-e iguais. Uma busca curta que encontra mais de uma minuta não escolhe silenciosamente: informa as minutas e exige a leitura da minuta ou da chave completa.
 - Os itens recém-bipados ou incluídos manualmente aparecem no topo da prévia da capa. Inclusões manuais recebem `*` nos campos CT-e/NF do PDF.

@@ -1540,7 +1540,6 @@ export default function Home() {
   >("checking");
   const [manualRomaneios, setManualRomaneios] = useState<ManualRomaneio[]>([]);
   const [manualRomaneioDriverKey, setManualRomaneioDriverKey] = useState("");
-  const [manualRomaneioRoute, setManualRomaneioRoute] = useState("");
   const [manualRomaneioDraft, setManualRomaneioDraft] = useState<ManualRomaneioDocument[]>([]);
   const manualRomaneioScanRef = useRef<HTMLInputElement>(null);
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
@@ -4778,22 +4777,92 @@ export default function Home() {
       return;
     }
     const createdAt = new Date().toISOString();
+    const day = createdAt.slice(0, 10);
+    const route = [...new Set(manualRomaneioDraft.map((document) => document.city.trim()).filter(Boolean))].join(" · ");
+    const number = `MAN-${createdAt.slice(0, 10).replaceAll("-", "")}-${createdAt.slice(11, 19).replaceAll(":", "")}`;
     const romaneio: ManualRomaneio = {
       id: newId(),
-      number: `MAN-${createdAt.slice(0, 10).replaceAll("-", "")}-${createdAt.slice(11, 19).replaceAll(":", "")}`,
+      number,
       createdAt,
       createdBy: activeOperator,
       driver: driver.driver,
       cpf: driver.cpf,
       plate: driver.plate,
-      route: manualRomaneioRoute.trim(),
+      route,
       documents: manualRomaneioDraft,
     };
+    const documentLabels = manualRomaneioDraft.map((document) =>
+      document.mde
+        ? `M-${operationalIdentifier(document.mde)}`
+        : document.cte
+          ? `C-${operationalIdentifier(document.cte)}`
+          : `NF ${document.invoice}`,
+    );
+    const entryId = newId();
+    const syntheticEntry: RomaneioEntry = {
+      id: entryId,
+      sourceFile: "Romaneio manual",
+      filial: "MANUAL",
+      romaneio: number,
+      tabela: "MANUAL",
+      status: "CONFERIDO",
+      emissionDate: day,
+      deliveryPartner: "",
+      freightLetter: "",
+      freightLetterDate: "",
+      cpf: driver.cpf,
+      driver: driver.driver,
+      plate: driver.plate,
+      vehicleType: "",
+      trailer: "",
+      freight: roundMoney(manualRomaneioDraft.reduce((sum, document) => sum + document.freight, 0)),
+      weight: roundMoney(manualRomaneioDraft.reduce((sum, document) => sum + document.weight, 0)),
+      deliveries: manualRomaneioDraft.length,
+      volumes: manualRomaneioDraft.reduce((sum, document) => sum + document.volumes, 0),
+      route,
+      documents: documentLabels,
+      helpers: "",
+      checkers: activeOperator,
+    };
+    const driverIdentity = normalizeCnpj(driver.cpf) || normalized(driver.driver);
+    const groupKey = `${day}|${driverIdentity || "sem-motorista"}|${normalized(number)}`;
+    const statuses: Record<string, RomaneioDocumentStatusRecord> = {};
+    manualRomaneioDraft.forEach((document, index) => {
+      const label = documentLabels[index];
+      const reference = romaneioDocumentReference(label);
+      const documentKey = romaneioDocumentKey(label);
+      const statusKey = `${groupKey}|${documentKey}`;
+      statuses[statusKey] = {
+        key: statusKey,
+        document: label,
+        referenceType: reference?.type || "Documento",
+        referenceNumber: reference?.number || document.invoice || label,
+        situation: "delivered",
+        sourceStatus: "MANUAL",
+        operationalStatus: "ET",
+        reason: "",
+        savedAt: createdAt,
+        savedBy: activeOperator,
+        day,
+        driver: driver.driver,
+        romaneios: [number],
+        routes: route ? route.split(" · ") : [],
+        sender: document.sender,
+        recipient: document.recipient,
+        city: document.city,
+        mde: document.mde,
+        cte: document.cte,
+        invoice: document.invoice,
+        grossFreight: document.freight,
+        identifiers: [...new Set([document.mde, document.cte, document.cteKey, document.invoice].flatMap((value) => entryOperationalIdentifiers({ mde: value, cte: value, cteKey: value, invoice: value })))],
+      };
+    });
+    setRomaneioEntries((current) => [syntheticEntry, ...current]);
+    setRomaneioDocumentStatuses((current) => ({ ...current, ...statuses }));
     setManualRomaneios((current) => [romaneio, ...current]);
     setManualRomaneioDraft([]);
-    setManualRomaneioRoute("");
     setMessageIsError(false);
-    setMessage(`${romaneio.number} gravado com ${romaneio.documents.length} documento(s).`);
+    setMessage(`${romaneio.number} gravado como concluído, com ${romaneio.documents.length} documento(s) entregues e cidades preenchidas pelos relatórios.`);
     await printManualRomaneio(romaneio);
   }
 
@@ -7953,7 +8022,7 @@ export default function Home() {
                 <section className="manual-romaneio-builder">
                   <div className="manual-romaneio-fields">
                     <label>Motorista<select value={manualRomaneioDriverKey} onChange={(event) => setManualRomaneioDriverKey(event.target.value)}><option value="">Selecione...</option>{manualRomaneioDrivers.map((driver) => <option key={driver.key} value={driver.key}>{driver.driver}{driver.plate ? ` · ${driver.plate}` : ""}</option>)}</select></label>
-                    <label>Rota / cidade<input value={manualRomaneioRoute} onChange={(event) => setManualRomaneioRoute(event.target.value)} placeholder="Ex.: Taubaté" /></label>
+                    <div className="manual-romaneio-auto-city"><small>CIDADES / ROTA</small><strong>{[...new Set(manualRomaneioDraft.map((document) => document.city).filter(Boolean))].join(" · ") || "Preenchidas automaticamente conforme os documentos"}</strong></div>
                   </div>
                   <form className="retained-scan" onSubmit={(event) => { event.preventDefault(); scanManualRomaneioDocument(); }}>
                     <input ref={manualRomaneioScanRef} placeholder="NF, CT-e, MD-e/minuta ou chave de acesso" inputMode="numeric" />
