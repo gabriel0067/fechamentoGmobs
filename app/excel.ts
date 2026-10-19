@@ -2022,10 +2022,6 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
     0,
   );
   const totalFreight = report.days.reduce((sum, day) => sum + day.freight, 0);
-  const totalDiscount = (report.discounts || []).reduce(
-    (sum, discount) => sum + discount.amount,
-    0,
-  );
   const period =
     [report.periodFrom, report.periodTo]
       .filter(Boolean)
@@ -2196,9 +2192,6 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
     align: "right",
   });
   pdf.text("PAGAR:", margin + tableWidth - 36, y + 5.8, { align: "right" });
-  pdf.text(moneyText(Math.max(0, totalFreight - totalDiscount)), margin + tableWidth - 4, y + 5.8, {
-    align: "right",
-  });
   y += 13;
 
   pdf.rect(margin, y, tableWidth, 7);
