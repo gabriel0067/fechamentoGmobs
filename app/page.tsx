@@ -1540,6 +1540,9 @@ export default function Home() {
   >("checking");
   const [manualRomaneios, setManualRomaneios] = useState<ManualRomaneio[]>([]);
   const [manualRomaneioDriverKey, setManualRomaneioDriverKey] = useState("");
+  const [manualRomaneioDate, setManualRomaneioDate] = useState(() =>
+    new Date().toLocaleDateString("en-CA"),
+  );
   const [manualRomaneioDraft, setManualRomaneioDraft] = useState<ManualRomaneioDocument[]>([]);
   const manualRomaneioScanRef = useRef<HTMLInputElement>(null);
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
@@ -3448,7 +3451,12 @@ export default function Home() {
                     : day.cities.join(" · "),
                 observation: edit?.observation || "",
               };
-            }),
+            }).sort((left, right) =>
+              left.date.localeCompare(right.date) ||
+              String("manualId" in left ? left.manualId : "").localeCompare(
+                String("manualId" in right ? right.manualId : ""),
+              ),
+            ),
           }),
         ),
     [
@@ -4771,15 +4779,23 @@ export default function Home() {
 
   async function saveManualRomaneio() {
     const driver = manualRomaneioDrivers.find((item) => item.key === manualRomaneioDriverKey);
-    if (!driver || !manualRomaneioDraft.length) {
+    if (!driver || !manualRomaneioDate || !manualRomaneioDraft.length) {
       setMessageIsError(true);
-      setMessage("Escolha o motorista e bipe ao menos um documento.");
+      setMessage("Escolha a data, o motorista e bipe ao menos um documento.");
       return;
     }
-    const createdAt = new Date().toISOString();
-    const day = createdAt.slice(0, 10);
+    const savedAt = new Date().toISOString();
+    const createdAt = new Date(`${manualRomaneioDate}T12:00:00`).toISOString();
+    const day = manualRomaneioDate;
     const route = [...new Set(manualRomaneioDraft.map((document) => document.city.trim()).filter(Boolean))].join(" · ");
-    const number = `MAN-${createdAt.slice(0, 10).replaceAll("-", "")}-${createdAt.slice(11, 19).replaceAll(":", "")}`;
+    const lastManualNumber = [...manualRomaneios.map((item) => item.number), ...romaneioEntries
+      .filter((item) => item.sourceFile === "Romaneio manual")
+      .map((item) => item.romaneio)]
+      .reduce((highest, value) => {
+        const sequence = /^RM-?(\d+)$/i.exec(value.trim())?.[1];
+        return sequence ? Math.max(highest, Number(sequence)) : highest;
+      }, 999);
+    const number = `RM-${lastManualNumber + 1}`;
     const romaneio: ManualRomaneio = {
       id: newId(),
       number,
@@ -4841,7 +4857,7 @@ export default function Home() {
         sourceStatus: "MANUAL",
         operationalStatus: "ET",
         reason: "",
-        savedAt: createdAt,
+        savedAt,
         savedBy: activeOperator,
         day,
         driver: driver.driver,
@@ -8021,6 +8037,7 @@ export default function Home() {
                 </div>
                 <section className="manual-romaneio-builder">
                   <div className="manual-romaneio-fields">
+                    <label>Data do romaneio<input type="date" value={manualRomaneioDate} onChange={(event) => setManualRomaneioDate(event.target.value)} /></label>
                     <label>Motorista<select value={manualRomaneioDriverKey} onChange={(event) => setManualRomaneioDriverKey(event.target.value)}><option value="">Selecione...</option>{manualRomaneioDrivers.map((driver) => <option key={driver.key} value={driver.key}>{driver.driver}{driver.plate ? ` · ${driver.plate}` : ""}</option>)}</select></label>
                     <div className="manual-romaneio-auto-city"><small>CIDADES / ROTA</small><strong>{[...new Set(manualRomaneioDraft.map((document) => document.city).filter(Boolean))].join(" · ") || "Preenchidas automaticamente conforme os documentos"}</strong></div>
                   </div>
@@ -8031,7 +8048,7 @@ export default function Home() {
                   <div className="manual-romaneio-documents">
                     {manualRomaneioDraft.length ? manualRomaneioDraft.map((document, index) => <article key={document.key}><b>{index + 1}</b><span><strong>{document.mde ? `MD-e ${document.mde}` : document.cte ? `CT-e ${document.cte}` : `NF ${document.invoice}`}</strong><small>{document.invoice ? `NF ${document.invoice} · ` : ""}{document.sender || "Sem remetente"} → {document.recipient || "Sem destinatário"}</small></span><button type="button" onClick={() => setManualRomaneioDraft((current) => current.filter((item) => item.key !== document.key))}>Remover</button></article>) : <div className="empty romaneio-empty"><span>▤</span><h3>Nenhum documento bipado</h3><p>Os últimos documentos bipados aparecerão primeiro.</p></div>}
                   </div>
-                  <button type="button" className="primary manual-romaneio-save" disabled={!manualRomaneioDriverKey || !manualRomaneioDraft.length} onClick={saveManualRomaneio}>Gravar e imprimir ({manualRomaneioDraft.length})</button>
+                  <button type="button" className="primary manual-romaneio-save" disabled={!manualRomaneioDate || !manualRomaneioDriverKey || !manualRomaneioDraft.length} onClick={saveManualRomaneio}>Gravar e imprimir ({manualRomaneioDraft.length})</button>
                 </section>
                 <section className="manual-romaneio-history">
                   <div><small>ROMANEIOS GRAVADOS</small><h3>Histórico manual</h3></div>
