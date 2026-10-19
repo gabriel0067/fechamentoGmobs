@@ -8145,9 +8145,13 @@ export default function Home() {
                               <small>Nº ROMANEIO</small>
                               <strong>{group.romaneios.join(" · ")}</strong>
                             </span>
-                            <span className={retainedCount ? "romaneio-summary-retained" : pendingCount ? "romaneio-summary-open" : "romaneio-summary-closed"}>
+                            <span className={pendingCount ? "romaneio-summary-open" : "romaneio-summary-closed"}>
                               <small>SITUAÇÃO</small>
-                              <strong>{retainedCount ? `Possui retido (${retainedCount})` : pendingCount ? `${pendingCount} aberto(s)` : "Conferido"}</strong>
+                              <strong>{pendingCount ? `${pendingCount} aberto(s)` : "Conferido"}</strong>
+                            </span>
+                            <span className={retainedCount ? "romaneio-summary-retained" : "romaneio-summary-no-retained"}>
+                              <small>RETIDOS</small>
+                              <strong>{retainedCount ? `Possui retido (${retainedCount})` : "—"}</strong>
                             </span>
                             <span>
                               <small>TICADO POR</small>

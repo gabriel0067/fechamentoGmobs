@@ -2415,7 +2415,7 @@ button {
 }
 .romaneio-full-card summary {
   grid-template-columns:
-    100px minmax(180px, 1.2fr) minmax(140px, 1fr) 105px minmax(110px, 0.8fr) 115px 22px;
+    90px minmax(165px, 1.15fr) minmax(125px, 0.9fr) 95px minmax(115px, 0.85fr) minmax(100px, 0.75fr) 105px 22px;
 }
 .romaneio-full-card.has-retained {
   border-color: #8fc4df;
@@ -2427,6 +2427,9 @@ button {
 }
 .romaneio-summary-retained strong {
   color: #17658d !important;
+}
+.romaneio-summary-no-retained strong {
+  color: #9aa6a0;
 }
 .romaneio-full-note {
   display: grid;
