@@ -207,6 +207,7 @@ export type ImportedRomaneioRow = {
 export type DriverClosingDay = {
   date: string;
   romaneios?: string[];
+  hasRetained?: boolean;
   cities: string[];
   cityText?: string;
   observation?: string;

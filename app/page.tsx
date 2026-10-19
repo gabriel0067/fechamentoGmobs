@@ -3275,6 +3275,7 @@ export default function Home() {
             cities: Set<string>;
             invoices: Set<string>;
             backDocuments: Set<string>;
+            hasRetained: boolean;
             freight: number;
             romaneios: Set<string>;
             observations: Set<string>;
@@ -3316,7 +3317,10 @@ export default function Home() {
         const backDocuments = group.documents.filter((document) =>
           getRomaneioStatus(group, document)?.situation === "back"
         );
-        if (!countedDocuments.length && !manualCount && !pickupCount && !backDocuments.length) return;
+        const retainedDocuments = group.documents.filter((document) =>
+          getRomaneioStatus(group, document)?.situation === "retained"
+        );
+        if (!countedDocuments.length && !manualCount && !pickupCount && !backDocuments.length && !retainedDocuments.length) return;
         const plate = group.plates.find(Boolean) || "Sem placa";
         const driverKey = mode === "vehicle"
           ? `placa:${scanKey(plate) || "sem-placa"}`
@@ -3327,6 +3331,7 @@ export default function Home() {
           cities: new Set<string>(),
           invoices: new Set<string>(),
           backDocuments: new Set<string>(),
+          hasRetained: false,
           freight: 0,
           romaneios: new Set<string>(),
           observations: new Set<string>(),
@@ -3336,6 +3341,7 @@ export default function Home() {
         const groupNote = (romaneioGroupNotes[group.key] || "").trim();
         group.romaneios.forEach((romaneio) => day.romaneios.add(romaneio));
         if (groupNote) day.observations.add(groupNote);
+        if (retainedDocuments.length) day.hasRetained = true;
         countedDocuments.forEach((document) => {
           if (document.city) day.cities.add(document.city);
           day.invoices.add(
@@ -3368,6 +3374,7 @@ export default function Home() {
                 a.localeCompare(b, "pt-BR"),
               ),
               romaneios: [...day.romaneios].sort(),
+              hasRetained: day.hasRetained,
               observation: [...day.observations].join(" · "),
               invoiceCount: romaneioClosingInvoiceCount(
                 day.invoices.size,
@@ -8107,9 +8114,12 @@ export default function Home() {
                             .filter((name): name is string => Boolean(name)),
                         ),
                       ).join(" · ");
+                      const retainedCount = group.documents.filter(
+                        (document) => getRomaneioStatus(group, document)?.situation === "retained",
+                      ).length;
                       return (
                         <details
-                          className="romaneio-card romaneio-full-card"
+                          className={`romaneio-card romaneio-full-card${retainedCount ? " has-retained" : ""}`}
                           key={group.key}
                           open={Boolean(openFullRomaneios[group.key])}
                           onToggle={(event) => {
@@ -8135,9 +8145,9 @@ export default function Home() {
                               <small>Nº ROMANEIO</small>
                               <strong>{group.romaneios.join(" · ")}</strong>
                             </span>
-                            <span className={pendingCount ? "romaneio-summary-open" : "romaneio-summary-closed"}>
+                            <span className={retainedCount ? "romaneio-summary-retained" : pendingCount ? "romaneio-summary-open" : "romaneio-summary-closed"}>
                               <small>SITUAÇÃO</small>
-                              <strong>{pendingCount ? `${pendingCount} aberto(s)` : "Conferido"}</strong>
+                              <strong>{retainedCount ? `Possui retido (${retainedCount})` : pendingCount ? `${pendingCount} aberto(s)` : "Conferido"}</strong>
                             </span>
                             <span>
                               <small>TICADO POR</small>
@@ -8352,8 +8362,8 @@ export default function Home() {
                                 );
                                 const edit = driverClosingDayEdits[editKey];
                                 return (
-                                  <div className="driver-pdf-day-row" key={manualId || day.date}>
-                                    <span><strong>{formatRomaneioDay(day.date)}</strong></span>
+                                  <div className={`driver-pdf-day-row${day.hasRetained ? " has-retained" : ""}`} key={manualId || day.date}>
+                                    <span><strong>{formatRomaneioDay(day.date)}</strong>{day.hasRetained && <em>Possui retido</em>}</span>
                                     <input
                                       key={`city-${editKey}-${edit?.cityText ?? day.cityText ?? day.cities.join(" · ")}`}
                                       defaultValue={edit?.cityText ?? day.cityText ?? day.cities.join(" · ")}

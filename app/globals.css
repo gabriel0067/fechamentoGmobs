@@ -2117,6 +2117,21 @@ button {
 .driver-pdf-day-row:nth-child(odd) {
   background: #f7faf8;
 }
+.driver-pdf-day-row.has-retained,
+.driver-pdf-day-row.has-retained:nth-child(odd) {
+  background: #e8f5fb;
+  box-shadow: inset 4px 0 0 #4096bd;
+}
+.driver-pdf-day-row span em {
+  display: block;
+  margin-top: 3px;
+  color: #17658d;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
 .driver-pdf-day-row input {
   min-width: 0;
   width: 100%;
@@ -2401,6 +2416,17 @@ button {
 .romaneio-full-card summary {
   grid-template-columns:
     100px minmax(180px, 1.2fr) minmax(140px, 1fr) 105px minmax(110px, 0.8fr) 115px 22px;
+}
+.romaneio-full-card.has-retained {
+  border-color: #8fc4df;
+  background: #eef8fd;
+}
+.romaneio-full-card.has-retained > summary,
+.romaneio-full-card.has-retained[open] > summary {
+  background: #eef8fd;
+}
+.romaneio-summary-retained strong {
+  color: #17658d !important;
 }
 .romaneio-full-note {
   display: grid;
