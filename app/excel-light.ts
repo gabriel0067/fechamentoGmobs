@@ -25,7 +25,7 @@ export const commissionTotal = (row: {
   tde: number;
 }) => Math.max(0, (row.reportedTotal ?? row.freight) + row.tde);
 
-export const uniqueFitlogExportRows = <T extends {
+export const uniqueClosingExportRows = <T extends {
   cte: unknown;
   cteKey?: unknown;
   invoice: unknown;
@@ -57,7 +57,7 @@ export const uniqueFitlogExportRows = <T extends {
       .replace(/[\u0300-\u036f]/g, "")
       .trim()
       .toLowerCase();
-    const isSeparateEvent = status === "re" || status === "cf";
+    const isSeparateEvent = status === "re" || status === "cf" || status.startsWith("ad-");
     const eventDetails = isSeparateEvent
       ? [
           row.date,
@@ -81,3 +81,7 @@ export const uniqueFitlogExportRows = <T extends {
     return true;
   });
 };
+
+// Nome antigo mantido para compatibilidade. A deduplicação agora vale para
+// todas as parceiras, não somente para a Fitlog.
+export const uniqueFitlogExportRows = uniqueClosingExportRows;

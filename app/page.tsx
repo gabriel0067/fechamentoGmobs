@@ -33,7 +33,7 @@ import {
   commissionTotal,
   normalizeCnpj,
   normalizeInvoiceKey,
-  uniqueFitlogExportRows,
+  uniqueClosingExportRows,
 } from "./excel-light";
 import {
   romaneioClosingInvoiceCount,
@@ -3952,12 +3952,7 @@ export default function Home() {
       const eligibleRows = usesScanForPartner(partner.id)
         ? partner.rows.filter(isScanned)
         : partner.rows;
-      rows.set(
-        partner.id,
-        partner.id === "fitlog"
-          ? uniqueFitlogExportRows(eligibleRows)
-          : eligibleRows,
-      );
+      rows.set(partner.id, uniqueClosingExportRows(eligibleRows));
     });
     return rows;
   }, [isScanned, partners, usesScanForPartner]);

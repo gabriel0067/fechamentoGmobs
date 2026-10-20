@@ -3,7 +3,7 @@ import { jsPDF } from "jspdf";
 import {
   normalizeCnpj,
   normalizeInvoiceKey,
-  uniqueFitlogExportRows,
+  uniqueClosingExportRows,
 } from "./excel-light";
 export { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
 
@@ -2580,13 +2580,13 @@ export function exportClosingXlsx(
 ) {
   const isArgius = normalize(partnerName) === "argius";
   const isFitlog = normalize(partnerName) === "fitlog";
-  const outputRows = isFitlog ? uniqueFitlogExportRows(rows) : rows;
+  const outputRows = uniqueClosingExportRows(rows);
   const safePeriod = period.replace(/[^a-zA-Z0-9À-ÿ]+/g, " ").trim();
   if (isArgius) {
     const normalWorkbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
       normalWorkbook,
-      buildArgiusSheet(rows, "normal"),
+      buildArgiusSheet(outputRows, "normal"),
       "DadosExcel",
     );
     XLSX.writeFile(
@@ -2598,7 +2598,7 @@ export function exportClosingXlsx(
     const extrasWorkbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
       extrasWorkbook,
-      buildArgiusSheet(rows, "extras"),
+      buildArgiusSheet(outputRows, "extras"),
       "TDA TDE Dedicado",
     );
     XLSX.writeFile(
@@ -2644,6 +2644,7 @@ export function exportMultipleClosingsXlsx(
   const used = new Set<string>();
   groups.forEach(({ partnerName, rows }, index) => {
     const isFitlog = normalize(partnerName) === "fitlog";
+    const outputRows = uniqueClosingExportRows(rows);
     const base =
       partnerName
         .replace(/[\\/?*:[\]]/g, " ")
@@ -2658,7 +2659,7 @@ export function exportMultipleClosingsXlsx(
     used.add(name.toLowerCase());
     XLSX.utils.book_append_sheet(
       workbook,
-      buildClosingSheet(rows, partnerName, period, {
+      buildClosingSheet(outputRows, partnerName, period, {
         showTde: true,
         showDedicated: !isFitlog,
       }),
@@ -2666,7 +2667,7 @@ export function exportMultipleClosingsXlsx(
     );
   });
   const freightComplements = groups
-    .flatMap(({ rows }) => rows)
+    .flatMap(({ rows }) => uniqueClosingExportRows(rows))
     .filter((row) => normalize(row.status) === "cf");
   if (freightComplements.length) {
     XLSX.utils.book_append_sheet(

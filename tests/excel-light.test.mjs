@@ -4,6 +4,7 @@ import {
   commissionTotal,
   normalizeCnpj,
   normalizeInvoiceKey,
+  uniqueClosingExportRows,
   uniqueFitlogExportRows,
 } from "../app/excel-light.ts";
 
@@ -37,4 +38,23 @@ test("Fitlog preserva reentrega e complemento do mesmo CT-e e NF", () => {
     { cte: "501067", invoice: "3326215 - 2", status: "CF", freight: 400 },
   ];
   assert.deepEqual(uniqueFitlogExportRows(rows), rows.slice(0, 3));
+});
+
+test("todas as parceiras removem repetição do mesmo CT-e e NF", () => {
+  const rows = [
+    { cte: "700100", invoice: "12345 - 1", status: "ET", freight: 100 },
+    { cte: "700100", invoice: "12345 - 1", status: "ET", freight: 100 },
+    { cte: "700101", invoice: "12345 - 1", status: "ET", freight: 100 },
+  ];
+  assert.deepEqual(uniqueClosingExportRows(rows), [rows[0], rows[2]]);
+});
+
+test("regra geral preserva reentrega, complemento e adicional legítimos", () => {
+  const rows = [
+    { cte: "700100", invoice: "12345 - 1", status: "ET", freight: 100 },
+    { cte: "700100", invoice: "12345 - 1", status: "RE", freight: 100 },
+    { cte: "700100", invoice: "12345 - 1", status: "CF", freight: 300 },
+    { cte: "700100", invoice: "12345 - 1", status: "AD-TDE", freight: 0, tde: 45 },
+  ];
+  assert.deepEqual(uniqueClosingExportRows(rows), rows);
 });
