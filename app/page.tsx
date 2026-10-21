@@ -3485,6 +3485,27 @@ export default function Home() {
     );
     return documents;
   }, [romaneioDailyGroups]);
+  const currentRomaneioDocumentsByStatusKey = useMemo(() => {
+    const documents = new Map<string, RomaneioDailyDocument>();
+    romaneioDailyGroups.forEach((group) =>
+      group.documents.forEach((document) =>
+        documents.set(`${group.key}|${document.key}`, document),
+      ),
+    );
+    return documents;
+  }, [romaneioDailyGroups]);
+  const resolveCurrentRetainedDocument = useCallback(
+    (record: RomaneioDocumentStatusRecord) => {
+      const exact = currentRomaneioDocumentsByStatusKey.get(record.key);
+      if (exact) return exact;
+      return findRomaneioScanMatches(record.identifiers)
+        .filter(({ group }) =>
+          group.day === record.day &&
+          group.romaneios.some((romaneio) => record.romaneios.includes(romaneio)),
+        )[0]?.document;
+    },
+    [currentRomaneioDocumentsByStatusKey, romaneioScanIndex],
+  );
   const reportFallbackIdentifiersByIdentifier = useMemo(() => {
     const matches = new Map<string, Set<string>>();
     [...entriesWithTde, ...romaneioReferenceEntries].forEach((entry) => {
@@ -7988,7 +8009,7 @@ export default function Home() {
                         <summary><strong>{driverGroup.driver}</strong><span><b>{driverGroup.records.length} retido(s)</b><i aria-hidden="true">⌄</i></span></summary>
                         <div className="retained-driver-documents">
                         {driverGroup.records.map((record) => {
-                      const currentDocument = currentRomaneioDocumentsByKey.get(record.key);
+                      const currentDocument = resolveCurrentRetainedDocument(record);
                       const grossFreight = currentDocument?.grossFreight || record.grossFreight;
                       const sender =
                         currentDocument?.sender ||
@@ -8003,12 +8024,19 @@ export default function Home() {
                         record.city ||
                         record.routes.join(" · ") ||
                         "Sem cidade";
+                      const invoice = currentDocument?.invoice || record.invoice || "Não informada";
+                      const cte = currentDocument?.cte || record.cte || "Não informado";
+                      const carriers = [...new Set(
+                        (currentDocument?.linkedEntries || [])
+                          .map((entry) => entry.partnerName?.trim())
+                          .filter(Boolean),
+                      )].join(" · ") || "Transportadora não identificada";
                       return (
                         <label id={`retained-${record.key}`} className={retainedResolutionDrafts[record.key] ? "selected" : ""} key={record.key}>
                           <input type="checkbox" checked={Boolean(retainedResolutionDrafts[record.key])} onChange={(event) => setRetainedResolutionDrafts((current) => ({...current, [record.key]: event.target.checked}))} />
-                          <span className="document-id"><strong>{record.referenceType} {record.referenceNumber}</strong><small>{record.romaneios.join(" · ")} · {formatRomaneioDay(record.day)}</small></span>
-                          <span><strong>{record.driver}</strong><small>{record.routes.join(" · ") || "Sem rota"}</small></span>
-                          <span><strong>{sender}</strong><small>{recipient} · {city}</small></span>
+                          <span className="document-id"><strong>{record.referenceType} {record.referenceNumber}</strong><small>NF {invoice} · CT-e {cte}</small></span>
+                          <span><strong>{record.driver}</strong><small>{record.romaneios.join(" · ")} · {formatRomaneioDay(record.day)}</small></span>
+                          <span><strong>{carriers}</strong><small>{sender} → {recipient} · {city}</small></span>
                           <span className="document-values"><strong>{grossFreight ? money(grossFreight) : "Sem frete"}</strong><small>{grossFreight ? `${money(roundMoney(grossFreight * ROMANEIO_PRODUCTION_FACTOR))} após -13%` : "PROCV pendente"}</small></span>
                           <b>{retainedResolutionDrafts[record.key] ? "Baixar como entregue" : romaneioSituationLabel[record.situation]}</b>
                         </label>
