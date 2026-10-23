@@ -8010,7 +8010,6 @@ export default function Home() {
                         <div className="retained-driver-documents">
                         {driverGroup.records.map((record) => {
                       const currentDocument = resolveCurrentRetainedDocument(record);
-                      const grossFreight = currentDocument?.grossFreight || record.grossFreight;
                       const sender =
                         currentDocument?.sender ||
                         record.sender ||
@@ -8036,8 +8035,8 @@ export default function Home() {
                           <input type="checkbox" checked={Boolean(retainedResolutionDrafts[record.key])} onChange={(event) => setRetainedResolutionDrafts((current) => ({...current, [record.key]: event.target.checked}))} />
                           <span className="document-id"><strong>{record.referenceType} {record.referenceNumber}</strong><small>NF {invoice} · CT-e {cte}</small></span>
                           <span><strong>{record.driver}</strong><small>{record.romaneios.join(" · ")} · {formatRomaneioDay(record.day)}</small></span>
-                          <span><strong>{carriers}</strong><small>{sender} → {recipient} · {city}</small></span>
-                          <span className="document-values"><strong>{grossFreight ? money(grossFreight) : "Sem frete"}</strong><small>{grossFreight ? `${money(roundMoney(grossFreight * ROMANEIO_PRODUCTION_FACTOR))} após -13%` : "PROCV pendente"}</small></span>
+                          <span className="retained-address"><strong>{sender}</strong><small>{recipient} · {city}</small></span>
+                          <span className="retained-carrier"><small>PARCEIRA</small><strong>{carriers}</strong></span>
                           <b>{retainedResolutionDrafts[record.key] ? "Baixar como entregue" : romaneioSituationLabel[record.situation]}</b>
                         </label>
                       );
