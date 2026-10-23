@@ -3057,6 +3057,15 @@ button {
 .retained-driver-documents .retained-address strong,
 .retained-driver-documents .retained-address small {
   color: #26342c;
+  font-weight: 700;
+}
+.retained-driver-documents time {
+  color: #3f4f46;
+  font-weight: 700;
+}
+.retained-driver-documents .retained-address em {
+  color: #087447;
+  font-style: normal;
   font-weight: 800;
 }
 .retained-driver-documents .retained-carrier small {
