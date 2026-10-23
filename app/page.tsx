@@ -386,6 +386,16 @@ const normalized = (text: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+const correctedOperatorName = (name: string) =>
+  normalized(name) === "giselli" ? "Giselli" : name.trim();
+const correctedOperatorNames = (names: string[]) => {
+  const unique = new Map<string, string>();
+  names.forEach((name) => {
+    const corrected = correctedOperatorName(name);
+    if (corrected) unique.set(normalized(corrected), corrected);
+  });
+  return [...unique.values()].sort((a, b) => a.localeCompare(b, "pt-BR"));
+};
 const partnerAliases: Array<[string, string, string[]]> = [
   ["argius", "Argius", ["argius"]],
   ["fitlog", "Fitlog", ["fitlog"]],
@@ -1662,15 +1672,15 @@ export default function Home() {
   useEffect(() => {
     if (!activeOperator) return;
     setCoverGenerators((current) => {
-      const names = current.some((name) => normalized(name) === normalized(activeOperator))
-        ? current
-        : [...current, activeOperator].sort((a, b) => a.localeCompare(b, "pt-BR"));
+      const names = correctedOperatorNames([...current, activeOperator]);
       try {
         localStorage.setItem("mvflog-operator-names", JSON.stringify(names));
       } catch {
         /* o nome continua válido durante a sessão */
       }
-      return names;
+      return current.length === names.length && current.every((name, index) => name === names[index])
+        ? current
+        : names;
     });
   }, [activeOperator, coverGenerators]);
   useEffect(() => {
@@ -1683,7 +1693,9 @@ export default function Home() {
           );
           if (Array.isArray(savedOperatorNames))
             setCoverGenerators(
-              savedOperatorNames.filter((name): name is string => typeof name === "string" && Boolean(name.trim())),
+              correctedOperatorNames(
+                savedOperatorNames.filter((name): name is string => typeof name === "string" && Boolean(name.trim())),
+              ),
             );
         } catch {
           /* começa sem nomes sugeridos se o navegador não tiver cadastro */
@@ -6886,7 +6898,7 @@ export default function Home() {
     setLoggingIn(true);
     setLoginError("");
     try {
-      const operatorName = operator.trim();
+      const operatorName = correctedOperatorName(operator);
       if (!operatorName) throw new Error("Informe o nome de quem está entrando.");
       if (cloudHosted && authStatus === "signedOut") {
         const response = await fetch("/api/auth/login", {
