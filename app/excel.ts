@@ -2044,7 +2044,7 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
   const widths = [18, 22, 14, 66, 16, 24, 14];
   const startY = 24;
   const minRows = 18;
-  const rowHeight = 4.8;
+  const rowHeight = 5.4;
   let y = startY;
 
   const moneyText = (value: number) =>
@@ -2067,19 +2067,19 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
   y += 2;
 
   pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(8);
+  pdf.setFontSize(9);
   pdf.text("Recibo referente ao mês de", margin + tableWidth * 0.38, y + 4.5, {
     align: "center",
   });
   pdf.text(monthLabel || period, margin + tableWidth * 0.7, y + 4.5, {
     align: "center",
   });
-  pdf.setFontSize(6);
+  pdf.setFontSize(7);
   pdf.text(new Date().toLocaleDateString("pt-BR"), margin + tableWidth - 2, y + 1.2, {
     align: "right",
   });
   y += 7;
-  pdf.setFontSize(6.5);
+  pdf.setFontSize(7.5);
   pdf.text("Motorista:", pageWidth / 2, y - 0.5, { align: "center" });
   pdf.setFontSize(11);
   pdf.text(report.driver || "Motorista não informado", pageWidth / 2, y + 4, {
@@ -2100,7 +2100,7 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
     "Produção",
     "Fechado",
   ];
-  pdf.setFontSize(6);
+  pdf.setFontSize(7);
   let x = margin;
   headers.forEach((header, index) => {
     pdf.text(header, x + widths[index] / 2, y + 4.2, { align: "center" });
@@ -2130,7 +2130,7 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
         .join(" - ");
       pdf.setTextColor(0, 0, 0);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(5.2);
+      pdf.setFontSize(6.2);
       x = margin;
       pdf.text(pdfDate(day.date), x + widths[0] / 2, rowY + 3.3, {
         align: "center",
@@ -2171,7 +2171,7 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
   pdf.setFillColor(239, 248, 241);
   pdf.rect(margin, y, tableWidth, 9, "F");
   pdf.rect(margin, y, tableWidth, 9);
-  pdf.setFontSize(6.5);
+  pdf.setFontSize(7.5);
   pdf.setFont("helvetica", "bold");
   pdf.text("DIÁRIAS:", margin + 2, y + 4.2);
   pdf.text(String(report.days.length), margin + 7, y + 8);
