@@ -3234,6 +3234,9 @@ button {
   color: #6d514a;
   line-height: 1.5;
 }
+.romaneio-alert-copy p + p {
+  margin-top: 8px;
+}
 .romaneio-alert-actions {
   grid-column: 1 / -1;
   display: flex;

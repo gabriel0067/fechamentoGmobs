@@ -8636,12 +8636,15 @@ export default function Home() {
               </div>
             )}
             {coverSection !== "report" && !coverChoiceOpen && <button type="button" className="primary cover-floating-generate" disabled={!currentCoverDraft.length || savingCover} onClick={generateCover}>{savingCover ? "Salvando capa..." : editingCoverId ? `Salvar ${editingCoverId}` : "Gerar capa"} ({currentCoverDraft.length})</button>}
-            {coverBlockedDocument && <div className="confirmation-backdrop" role="presentation"><section className="confirmation-dialog cover-blocked-dialog" role="alertdialog" aria-modal="true" aria-labelledby="cover-blocked-title">
-              <small>DOCUMENTO NÃO BAIXADO</small>
-              <h3 id="cover-blocked-title">Separe este documento</h3>
-              <p>O documento <strong>{coverBlockedDocument}</strong> ainda não consta como entregue (ET) no relatório mais recente do sistema MVF. Ele não foi incluído na capa.</p>
-              <p>Efetue a baixa no MVF, importe o relatório atualizado e depois bipe o documento novamente.</p>
-              <div className="confirmation-actions"><button type="button" className="primary" autoFocus onClick={() => { setCoverBlockedDocument(""); window.setTimeout(() => coverScanInputRef.current?.focus(), 0); }}>OK</button></div>
+            {coverBlockedDocument && <div className="romaneio-alert-overlay"><section className="romaneio-alert-dialog" role="alertdialog" aria-modal="true" aria-labelledby="cover-blocked-title">
+              <span className="romaneio-alert-icon" aria-hidden="true">!</span>
+              <div className="romaneio-alert-copy">
+                <small>DOCUMENTO NÃO BAIXADO</small>
+                <h2 id="cover-blocked-title">Separe este documento</h2>
+                <p>O documento <strong>{coverBlockedDocument}</strong> ainda não consta como entregue (ET) no relatório mais recente e não foi incluído na capa.</p>
+                <p>Separe-o para que seja efetuada a baixa no sistema MVF. Após importar o relatório atualizado, bipe o documento novamente.</p>
+              </div>
+              <div className="romaneio-alert-actions"><button type="button" className="primary" autoFocus onClick={() => { setCoverBlockedDocument(""); window.setTimeout(() => coverScanInputRef.current?.focus(), 0); }}>OK, continuar</button></div>
             </section></div>}
             {coverChoiceOpen && <div className="confirmation-backdrop"><section className="confirmation-dialog cover-choice-dialog" role="dialog" aria-modal="true" aria-labelledby="cover-choice-title">
               <small>ANTES DE COMEÇAR</small><h3 id="cover-choice-title">Qual capa você vai preparar?</h3><p>Escolha o tipo e a parceira. Confira os dois antes de começar a bipar.</p>
