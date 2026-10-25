@@ -1433,6 +1433,8 @@ export default function Home() {
   const [coverReportTo, setCoverReportTo] = useState("");
   const [coverReportSearch, setCoverReportSearch] = useState("");
   const [selectedCoverReportIds, setSelectedCoverReportIds] = useState<string[]>([]);
+  const [coverBlockedDocument, setCoverBlockedDocument] = useState("");
+  const [savingCover, setSavingCover] = useState(false);
   const [optionalScanPartnerIds, setOptionalScanPartnerIds] = useState<
     string[]
   >([]);
@@ -6069,6 +6071,15 @@ export default function Home() {
       playRomaneioAttentionSound();
       return;
     }
+    const latestReportMatch = [...candidates]
+      .reverse()
+      .find((entry): entry is RomaneioReferenceEntry => "sourceStatus" in entry);
+    if (!latestReportMatch || scanKey(latestReportMatch.sourceStatus) !== "et") {
+      if (coverScanInputRef.current) coverScanInputRef.current.value = "";
+      setCoverBlockedDocument(raw);
+      playRomaneioAttentionSound();
+      return;
+    }
     const candidateDocuments = candidates.map((entry): CoverDocumentExport => ({
           scannedAt,
           invoice: entry.invoice,
@@ -6726,7 +6737,7 @@ export default function Home() {
   }
 
   async function generateCover() {
-    if (coverChoiceOpen || !effectiveCoverPartnerId || coverSection === "report" || !currentCoverDraft.length) {
+    if (savingCover || coverChoiceOpen || !effectiveCoverPartnerId || coverSection === "report" || !currentCoverDraft.length) {
       setMessage("Bipe ao menos uma nota fiscal antes de gerar a capa.");
       return;
     }
@@ -6752,9 +6763,42 @@ export default function Home() {
       generatedBy: effectiveCoverGenerator,
       documents: currentCoverDraft,
     };
-    setCovers((current) => editing
-      ? current.map((savedCover) => savedCover.id === editing.id ? cover : savedCover)
-      : [cover, ...current]);
+    const nextCovers = editing
+      ? covers.map((savedCover) => savedCover.id === editing.id ? cover : savedCover)
+      : [cover, ...covers];
+    setSavingCover(true);
+    let cloudSaveStarted = false;
+    try {
+      if (cloudHosted) {
+        if (!cloudReady) throw new Error("O banco ainda não terminou de carregar. Aguarde e tente novamente.");
+        markCloudSaveStart();
+        cloudSaveStarted = true;
+        const expectedVersion = getExpectedCloudVersion("closing-ops");
+        const cached = await readCloudStateCache<typeof closingOpsCloudState>("closing-ops").catch(() => null);
+        const nextClosingOpsState = { ...closingOpsCloudState, covers: nextCovers };
+        const result = await saveCloudStateReconciled(
+          "closing-ops",
+          nextClosingOpsState,
+          expectedVersion,
+          cached?.version === expectedVersion ? cached.value : closingOpsCloudState,
+        );
+        await writeCloudStateCache("closing-ops", result.version, result.value).catch(() => undefined);
+        reconcileClosingOps(result.value);
+        markCloudSaveFinish("closing-ops", true, result.version);
+      } else {
+        setCovers(nextCovers);
+      }
+    } catch (error) {
+      if (cloudSaveStarted)
+        markCloudSaveFinish("closing-ops", false, undefined, error instanceof Error ? error : undefined);
+      setMessageIsError(true);
+      setMessage(error instanceof Error
+        ? `A capa não foi impressa porque ainda não foi salva: ${error.message}`
+        : "A capa não foi impressa porque o banco não confirmou o salvamento. Tente novamente.");
+      return;
+    } finally {
+      setSavingCover(false);
+    }
     const next = { ...coverDraftsRef.current, [coverDraftKey]: [] };
     coverDraftsRef.current = next;
     setCoverDrafts(next);
@@ -6762,7 +6806,7 @@ export default function Home() {
     openCoverChoice();
     setMessageIsError(false);
     const kindLabel = coverSection === "shipment" ? "embarque" : coverSection === "collection" ? "coleta" : "capas";
-    setMessage(`${cover.id} de ${kindLabel} ${editing ? "atualizada" : "gerada"} por ${effectiveCoverGenerator}. Aguarde a confirmação de salvamento no banco.`);
+    setMessage(`${cover.id} de ${kindLabel} ${editing ? "atualizada" : "gerada"} por ${effectiveCoverGenerator}. Salvamento confirmado no banco.`);
     playRomaneioSuccessSound();
     try {
       const { exportCoverPdf } = await loadExcelModule();
@@ -8591,7 +8635,14 @@ export default function Home() {
                 </div>
               </div>
             )}
-            {coverSection !== "report" && !coverChoiceOpen && <button type="button" className="primary cover-floating-generate" disabled={!currentCoverDraft.length} onClick={generateCover}>{editingCoverId ? `Salvar ${editingCoverId}` : "Gerar capa"} ({currentCoverDraft.length})</button>}
+            {coverSection !== "report" && !coverChoiceOpen && <button type="button" className="primary cover-floating-generate" disabled={!currentCoverDraft.length || savingCover} onClick={generateCover}>{savingCover ? "Salvando capa..." : editingCoverId ? `Salvar ${editingCoverId}` : "Gerar capa"} ({currentCoverDraft.length})</button>}
+            {coverBlockedDocument && <div className="confirmation-backdrop" role="presentation"><section className="confirmation-dialog cover-blocked-dialog" role="alertdialog" aria-modal="true" aria-labelledby="cover-blocked-title">
+              <small>DOCUMENTO NÃO BAIXADO</small>
+              <h3 id="cover-blocked-title">Separe este documento</h3>
+              <p>O documento <strong>{coverBlockedDocument}</strong> ainda não consta como entregue (ET) no relatório mais recente do sistema MVF. Ele não foi incluído na capa.</p>
+              <p>Efetue a baixa no MVF, importe o relatório atualizado e depois bipe o documento novamente.</p>
+              <div className="confirmation-actions"><button type="button" className="primary" autoFocus onClick={() => { setCoverBlockedDocument(""); window.setTimeout(() => coverScanInputRef.current?.focus(), 0); }}>OK</button></div>
+            </section></div>}
             {coverChoiceOpen && <div className="confirmation-backdrop"><section className="confirmation-dialog cover-choice-dialog" role="dialog" aria-modal="true" aria-labelledby="cover-choice-title">
               <small>ANTES DE COMEÇAR</small><h3 id="cover-choice-title">Qual capa você vai preparar?</h3><p>Escolha o tipo e a parceira. Confira os dois antes de começar a bipar.</p>
               <span className="cover-partner-label">Tipo de operação</span><div className="cover-choice-kinds" role="radiogroup" aria-label="Tipo de capa">
