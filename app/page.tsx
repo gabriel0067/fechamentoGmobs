@@ -508,13 +508,16 @@ const coverDocumentsOverlap = (
   const leftMde = scanKey(left.mde);
   const rightMde = scanKey(right.mde);
   // A minuta identifica a entrega sem confundir NFs ou CT-es de números iguais.
-  if (leftMde || rightMde) return Boolean(leftMde && rightMde && leftMde === rightMde);
+  if (leftMde && rightMde) return leftMde === rightMde;
   const leftKey = scanKey(left.cteKey);
   const rightKey = scanKey(right.cteKey);
   if (leftKey && rightKey && leftKey === rightKey) return true;
   const leftCte = scanKey(left.cte);
   const rightCte = scanKey(right.cte);
   if (leftCte && rightCte && leftCte === rightCte) return true;
+  // Se somente um registro possui minuta, ainda é possível confirmar a
+  // duplicidade pela chave ou pelo CT-e. Sem eles, a NF isolada não basta.
+  if (leftMde || rightMde) return false;
   // A NF pode se repetir em parceiros distintos. Com CT-es identificados,
   // somente o mesmo CT-e (ou a mesma chave) representa duplicidade.
   if (leftKey || rightKey || leftCte || rightCte) return false;
@@ -6110,23 +6113,23 @@ export default function Home() {
       playRomaneioAttentionSound();
       return;
     }
-    const candidateDocuments = candidates.map((entry): CoverDocumentExport => ({
+    const candidateDocuments: CoverDocumentExport[] = [{
           scannedAt,
-          invoice: entry.invoice,
-          invoiceKey: normalizeInvoiceKey(entry.invoice),
-          cte: cteNumberFromAccessKey(raw) || entry.cte,
-          cteKey: /^\d{44}$/.test(key) ? key : entry.cteKey,
-          mde: entry.mde,
-          sender: entry.sender,
-          recipient: entry.recipient,
-          city: entry.city,
-          date: entry.date,
-          deliveryDate: entry.deliveryDate,
-          status: entry.status,
-          volumes: entry.volumes,
-          weight: entry.weight,
-          merchandiseValue: entry.merchandiseValue,
-        }));
+          invoice: latestReportMatch.invoice,
+          invoiceKey: normalizeInvoiceKey(latestReportMatch.invoice),
+          cte: cteNumberFromAccessKey(raw) || latestReportMatch.cte,
+          cteKey: /^\d{44}$/.test(key) ? key : latestReportMatch.cteKey,
+          mde: latestReportMatch.mde,
+          sender: latestReportMatch.sender,
+          recipient: latestReportMatch.recipient,
+          city: latestReportMatch.city,
+          date: latestReportMatch.date,
+          deliveryDate: latestReportMatch.deliveryDate,
+          status: latestReportMatch.status,
+          volumes: latestReportMatch.volumes,
+          weight: latestReportMatch.weight,
+          merchandiseValue: latestReportMatch.merchandiseValue,
+        }];
     const additions: CoverDocumentExport[] = [];
     for (const document of candidateDocuments) {
       if ([...existing, ...savedDocuments, ...additions].some((item) => coverDocumentsOverlap(document, item))) continue;
