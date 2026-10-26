@@ -6138,34 +6138,44 @@ export default function Home() {
     );
     const partnerMatches = matches.filter((entry) => entry.partnerId === effectiveCoverPartnerId);
     const candidates = exactCteMatches.length ? exactCteMatches : partnerMatches.length ? partnerMatches : matches;
-    const candidateMinutas = [...new Set(candidates.map((entry) => operationalIdentifier(entry.mde)).filter(Boolean))];
-    if (candidateMinutas.length > 1) {
+    const referenceCandidates = candidates.filter(
+      (entry): entry is RomaneioReferenceEntry => "sourceStatus" in entry,
+    );
+    const latestImportTimestamp = referenceCandidates.reduce(
+      (latest, entry) => entry.sourceImportedAt > latest ? entry.sourceImportedAt : latest,
+      "",
+    );
+    const currentReportCandidates = latestImportTimestamp
+      ? referenceCandidates.filter((entry) => entry.sourceImportedAt === latestImportTimestamp)
+      : referenceCandidates;
+    const coverStatusKind = (entry: RomaneioReferenceEntry) => {
+      const code = normalized(entry.sourceStatus || "");
+      const description = normalized(entry.sourceStatusDescription || "");
+      if (code === "re" || description === "reentrega") return "re" as const;
+      if (code === "cf" || description === "complemento de frete") return "cf" as const;
+      if (["et", "entregue"].includes(code) || description === "entregue") return "et" as const;
+      return "blocked" as const;
+    };
+    const candidateMinutas = [...new Set(currentReportCandidates.map((entry) => operationalIdentifier(entry.mde)).filter(Boolean))];
+    const hasSeparateEvent = currentReportCandidates.some((entry) =>
+      ["re", "cf"].includes(coverStatusKind(entry)),
+    );
+    if (candidateMinutas.length > 1 && !hasSeparateEvent) {
       if (coverScanInputRef.current) coverScanInputRef.current.value = "";
       setMessageIsError(true);
       setMessage(`O número ${raw} pertence a mais de um documento (minutas ${candidateMinutas.join(" · ")}). Bipe a minuta ou a chave completa para não incluir a nota errada.`);
       playRomaneioAttentionSound();
       return;
     }
-    const latestReportMatch = candidates
-      .filter((entry): entry is RomaneioReferenceEntry => "sourceStatus" in entry)
+    const latestReportMatch = currentReportCandidates
       .reduce<RomaneioReferenceEntry | undefined>((latest, entry) => {
         if (!latest) return entry;
-        const entryImportedAt = entry.sourceImportedAt || "";
-        const latestImportedAt = latest.sourceImportedAt || "";
-        if (entryImportedAt !== latestImportedAt)
-          return entryImportedAt > latestImportedAt ? entry : latest;
-        const entryDelivered =
-          ["et", "entregue"].includes(normalized(entry.sourceStatus || "")) ||
-          normalized(entry.sourceStatusDescription || "") === "entregue";
-        return entryDelivered ? entry : latest;
+        const priority = { blocked: 0, et: 1, re: 2, cf: 2 };
+        return priority[coverStatusKind(entry)] >= priority[coverStatusKind(latest)]
+          ? entry
+          : latest;
       }, undefined);
-    const latestStatusCode = normalized(latestReportMatch?.sourceStatus || "");
-    const latestStatusDescription = normalized(latestReportMatch?.sourceStatusDescription || "");
-    const isDeliveredInLatestReport =
-      latestStatusCode === "et" ||
-      latestStatusCode === "entregue" ||
-      latestStatusDescription === "entregue";
-    if (!latestReportMatch || !isDeliveredInLatestReport) {
+    if (!latestReportMatch || coverStatusKind(latestReportMatch) === "blocked") {
       if (coverScanInputRef.current) coverScanInputRef.current.value = "";
       setCoverBlockedDocument(raw);
       playRomaneioAttentionSound();
