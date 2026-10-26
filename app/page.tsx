@@ -114,6 +114,7 @@ type Entry = {
 };
 type RomaneioReferenceEntry = Entry & {
   sourceStatus: string;
+  sourceStatusDescription: string;
   sourceEligible: boolean;
 };
 type ImportInfo = {
@@ -727,7 +728,7 @@ const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100)
 // outra cobrança por si só, mas a linha completa precisa continuar consultável.
 const romaneioReferenceIdentity = (entry: RomaneioReferenceEntry) =>
   JSON.stringify([
-    entry.partnerId, entry.status, entry.sourceStatus, entry.date,
+    entry.partnerId, entry.status, entry.sourceStatus, entry.sourceStatusDescription, entry.date,
     entry.deliveryDate, entry.mde, entry.cte, entry.cteKey, entry.invoice,
     entry.sender, entry.recipient, entry.city, entry.observation,
     entry.reportedTotal, entry.freight,
@@ -955,6 +956,7 @@ const asRomaneioReferenceEntry = (entry: Entry): RomaneioReferenceEntry => {
     ...entry,
     sourceStatus:
       saved.sourceStatus || entry.romaneioSourceStatus || entry.status,
+    sourceStatusDescription: saved.sourceStatusDescription || "",
     sourceEligible: saved.sourceEligible ?? true,
   };
 };
@@ -5683,6 +5685,7 @@ export default function Home() {
             ? savedOperation?.savedAt
             : undefined,
           sourceStatus,
+          sourceStatusDescription: String(row.statusDescription || "").trim(),
           sourceEligible: row.eligible && Boolean(row.cte || row.invoice),
         };
       },
@@ -6061,10 +6064,7 @@ export default function Home() {
     const partnerMatches = matches.filter((entry) => entry.partnerId === effectiveCoverPartnerId);
     const candidates = exactCteMatches.length ? exactCteMatches : partnerMatches.length ? partnerMatches : matches;
     const candidateMinutas = [...new Set(candidates.map((entry) => operationalIdentifier(entry.mde)).filter(Boolean))];
-    const exactDocumentMatch = candidates.some((entry) =>
-      [entry.mde, entry.cteKey, entry.cte].some((value) => scanKey(value) === key),
-    );
-    if (!exactDocumentMatch && candidateMinutas.length > 1) {
+    if (candidateMinutas.length > 1) {
       if (coverScanInputRef.current) coverScanInputRef.current.value = "";
       setMessageIsError(true);
       setMessage(`O número ${raw} pertence a mais de um documento (minutas ${candidateMinutas.join(" · ")}). Bipe a minuta ou a chave completa para não incluir a nota errada.`);
@@ -6074,7 +6074,13 @@ export default function Home() {
     const latestReportMatch = [...candidates]
       .reverse()
       .find((entry): entry is RomaneioReferenceEntry => "sourceStatus" in entry);
-    if (!latestReportMatch || scanKey(latestReportMatch.sourceStatus) !== "et") {
+    const latestStatusCode = normalized(latestReportMatch?.sourceStatus || "");
+    const latestStatusDescription = normalized(latestReportMatch?.sourceStatusDescription || "");
+    const isDeliveredInLatestReport =
+      latestStatusCode === "et" ||
+      latestStatusCode === "entregue" ||
+      latestStatusDescription === "entregue";
+    if (!latestReportMatch || !isDeliveredInLatestReport) {
       if (coverScanInputRef.current) coverScanInputRef.current.value = "";
       setCoverBlockedDocument(raw);
       playRomaneioAttentionSound();
