@@ -115,6 +115,7 @@ type Entry = {
 type RomaneioReferenceEntry = Entry & {
   sourceStatus: string;
   sourceStatusDescription: string;
+  sourceImportedAt: string;
   sourceEligible: boolean;
 };
 type ImportInfo = {
@@ -957,6 +958,7 @@ const asRomaneioReferenceEntry = (entry: Entry): RomaneioReferenceEntry => {
     sourceStatus:
       saved.sourceStatus || entry.romaneioSourceStatus || entry.status,
     sourceStatusDescription: saved.sourceStatusDescription || "",
+    sourceImportedAt: saved.sourceImportedAt || "",
     sourceEligible: saved.sourceEligible ?? true,
   };
 };
@@ -5605,6 +5607,7 @@ export default function Home() {
     setMessage("");
     try {
       const result = await (await loadExcelModule()).readClosingFile(file);
+      const sourceImportedAt = new Date().toISOString();
       const completeRows = new Set<string>();
       const tdeMap = effectiveTdeRates(tdeRates);
       let duplicates = 0;
@@ -5686,6 +5689,7 @@ export default function Home() {
             : undefined,
           sourceStatus,
           sourceStatusDescription: String(row.statusDescription || "").trim(),
+          sourceImportedAt,
           sourceEligible: row.eligible && Boolean(row.cte || row.invoice),
         };
       },
@@ -5726,7 +5730,17 @@ export default function Home() {
         referenceKeys.add(key);
         return true;
       });
-      setRomaneioReferenceEntries((current) => [...current, ...referenceAdditions]);
+      const refreshedReferenceKeys = new Set(
+        referenceEntries.map(romaneioReferenceIdentity),
+      );
+      setRomaneioReferenceEntries((current) => [
+        ...current.map((entry) =>
+          refreshedReferenceKeys.has(romaneioReferenceIdentity(entry))
+            ? { ...entry, sourceImportedAt }
+            : entry,
+        ),
+        ...referenceAdditions,
+      ]);
       setImportInfo({
         file: file.name,
         imported: additions.length,
@@ -6071,9 +6085,19 @@ export default function Home() {
       playRomaneioAttentionSound();
       return;
     }
-    const latestReportMatch = [...candidates]
-      .reverse()
-      .find((entry): entry is RomaneioReferenceEntry => "sourceStatus" in entry);
+    const latestReportMatch = candidates
+      .filter((entry): entry is RomaneioReferenceEntry => "sourceStatus" in entry)
+      .reduce<RomaneioReferenceEntry | undefined>((latest, entry) => {
+        if (!latest) return entry;
+        const entryImportedAt = entry.sourceImportedAt || "";
+        const latestImportedAt = latest.sourceImportedAt || "";
+        if (entryImportedAt !== latestImportedAt)
+          return entryImportedAt > latestImportedAt ? entry : latest;
+        const entryDelivered =
+          ["et", "entregue"].includes(normalized(entry.sourceStatus || "")) ||
+          normalized(entry.sourceStatusDescription || "") === "entregue";
+        return entryDelivered ? entry : latest;
+      }, undefined);
     const latestStatusCode = normalized(latestReportMatch?.sourceStatus || "");
     const latestStatusDescription = normalized(latestReportMatch?.sourceStatusDescription || "");
     const isDeliveredInLatestReport =
