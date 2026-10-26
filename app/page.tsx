@@ -693,6 +693,39 @@ const entryOperationalIdentifiers = (entry: {
       ...observationDocuments,
     ].filter(Boolean);
   };
+const documentLookupTokens = (entry: {
+  mde?: string;
+  cte?: string;
+  cteKey?: string;
+  invoice?: string;
+  observation?: string;
+}) => {
+  const fields = [entry.mde, entry.cte, entry.cteKey, entry.invoice, entry.observation];
+  const tokens = new Set<string>();
+  fields.forEach((value) => {
+    const exact = scanKey(value);
+    if (exact) tokens.add(`exact:${exact}`);
+    (String(value || "").match(/\d{3,44}/g) || []).forEach((part) => {
+      const identifier = operationalIdentifier(part);
+      if (identifier) tokens.add(`id:${identifier}`);
+    });
+  });
+  entryOperationalIdentifiers(entry).forEach((identifier) =>
+    tokens.add(`id:${identifier}`),
+  );
+  const invoice = normalizeInvoiceKey(entry.invoice);
+  if (invoice) tokens.add(`invoice:${invoice}`);
+  return tokens;
+};
+const scanLookupTokens = (raw: string) => {
+  const tokens = new Set<string>();
+  const exact = scanKey(raw);
+  if (exact) tokens.add(`exact:${exact}`);
+  operationalIdentifiers(raw).forEach((identifier) => tokens.add(`id:${identifier}`));
+  const invoice = normalizeInvoiceKey(raw);
+  if (invoice) tokens.add(`invoice:${invoice}`);
+  return tokens;
+};
 const entryMatchesGlobalDocumentScan = (
   entry: {
     mde?: string;
@@ -3739,6 +3772,35 @@ export default function Home() {
   const effectiveCoverGenerator = activeOperator;
   const coverDraftKey = `${coverSection}|${effectiveCoverPartnerId}`;
   const currentCoverDraft = coverDrafts[coverDraftKey] || [];
+  const coverReferenceLookup = useMemo(() => {
+    const uniqueEntries = new Map<string, Entry>();
+    [...entriesWithTde, ...romaneioReferenceEntries].forEach((entry) =>
+      uniqueEntries.set(entry.id, entry),
+    );
+    const lookup = new Map<string, Map<string, Entry>>();
+    uniqueEntries.forEach((entry) => {
+      documentLookupTokens(entry).forEach((token) => {
+        const bucket = lookup.get(token) || new Map<string, Entry>();
+        bucket.set(entry.id, entry);
+        lookup.set(token, bucket);
+      });
+    });
+    return lookup;
+  }, [entriesWithTde, romaneioReferenceEntries]);
+  const savedCoverDocumentLookup = useMemo(() => {
+    const lookup = new Map<string, CoverDocumentExport[]>();
+    covers
+      .filter((cover) => cover.id !== editingCoverId)
+      .flatMap((cover) => cover.documents)
+      .forEach((document) => {
+        documentLookupTokens(document).forEach((token) => {
+          const bucket = lookup.get(token) || [];
+          bucket.push(document);
+          if (!lookup.has(token)) lookup.set(token, bucket);
+        });
+      });
+    return lookup;
+  }, [covers, editingCoverId]);
   const reportCovers = useMemo(
     () => covers.filter((cover) => {
       const day = cover.createdAt.slice(0, 10);
@@ -6056,12 +6118,11 @@ export default function Home() {
       playRomaneioAttentionSound();
       return;
     }
-    const completeReferenceBase = [
-      ...new Map(
-        [...entriesWithTde, ...romaneioReferenceEntries].map((entry) => [entry.id, entry] as const),
-      ).values(),
-    ];
-    const matches = completeReferenceBase.filter((entry) =>
+    const indexedMatches = new Map<string, Entry>();
+    scanLookupTokens(raw).forEach((token) =>
+      coverReferenceLookup.get(token)?.forEach((entry) => indexedMatches.set(entry.id, entry)),
+    );
+    const matches = [...indexedMatches.values()].filter((entry) =>
       entryMatchesGlobalDocumentScan(entry, raw),
     );
     if (!matches.length) {
@@ -6072,9 +6133,6 @@ export default function Home() {
     }
     const scannedAt = new Date().toISOString();
     const existing = coverDraftsRef.current[coverDraftKey] || [];
-    const savedDocuments = covers
-      .filter((cover) => cover.id !== editingCoverId)
-      .flatMap((cover) => cover.documents);
     const exactCteMatches = matches.filter((entry) =>
       scanKey(entry.cte) === key || scanKey(entry.cteKey) === key,
     );
@@ -6132,7 +6190,11 @@ export default function Home() {
         }];
     const additions: CoverDocumentExport[] = [];
     for (const document of candidateDocuments) {
-      if ([...existing, ...savedDocuments, ...additions].some((item) => coverDocumentsOverlap(document, item))) continue;
+      const savedCandidates = new Set<CoverDocumentExport>();
+      documentLookupTokens(document).forEach((token) =>
+        savedCoverDocumentLookup.get(token)?.forEach((item) => savedCandidates.add(item)),
+      );
+      if ([...existing, ...savedCandidates, ...additions].some((item) => coverDocumentsOverlap(document, item))) continue;
       additions.push(document);
     }
     if (!additions.length) {
