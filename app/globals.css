@@ -2148,6 +2148,25 @@ button {
 .driver-pdf-day-row span {
   min-width: 0;
 }
+.driver-closing-subtabs {
+  margin-bottom: 14px;
+}
+.daily-report-days .driver-pdf-day-head,
+.daily-report-days .driver-pdf-day-row {
+  grid-template-columns: 110px minmax(260px, 1fr) 90px 160px;
+}
+.daily-report-days .driver-pdf-day-row > span:nth-child(2) {
+  color: #44564c;
+  font-size: 12px;
+}
+.daily-report-discount {
+  margin: 0;
+  padding: 12px 15px;
+  border-top: 1px solid #e5ebe7;
+  background: #fff8d7;
+  color: #695719;
+  font-weight: 800;
+}
 .driver-manual-subject {
   display: grid;
   grid-template-columns: minmax(220px, 1.3fr) repeat(3, minmax(150px, 1fr)) auto;

@@ -43,7 +43,7 @@ test("parcelas de documentos diferentes continuam sendo somadas", () => {
   );
 });
 
-test("desconta somente os documentos marcados como volta do total de notas", () => {
-  assert.equal(romaneioClosingInvoiceCount(8, 2), 6);
+test("não desconta volta duas vezes quando ela já ficou fora das notas contadas", () => {
+  assert.equal(romaneioClosingInvoiceCount(8, 2), 8);
   assert.equal(romaneioClosingInvoiceCount(8, 0), 8);
 });

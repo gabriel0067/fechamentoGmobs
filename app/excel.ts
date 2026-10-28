@@ -233,6 +233,20 @@ export type DriverClosingExport = {
   discounts?: DriverClosingDiscount[];
 };
 
+export type DriverDailyReportExport = {
+  driver: string;
+  cpf: string;
+  periodFrom: string;
+  periodTo: string;
+  days: Array<{
+    date: string;
+    cities: string[];
+    invoiceCount: number;
+    paidAmount: number;
+  }>;
+  discounts?: DriverClosingDiscount[];
+};
+
 export type CoverDocumentExport = {
   scannedAt: string;
   invoice: string;
@@ -2222,6 +2236,74 @@ export function exportDriverClosingPdf(report: DriverClosingExport) {
   const safeDriver = safePdfFilenamePart(report.driver) || "Sem nome";
   const safePeriod = safePdfFilenamePart(period) || "Todo periodo";
   pdf.save(`Fechamento Motorista - ${safeDriver} - ${safePeriod}.pdf`);
+}
+
+export function exportDriverDailyReportPdf(report: DriverDailyReportExport) {
+  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const margin = 16;
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const tableWidth = pageWidth - margin * 2;
+  const widths = [27, 90, 22, 34];
+  const moneyText = (value: number) =>
+    value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const period = [report.periodFrom, report.periodTo].filter(Boolean).map(pdfDate).join(" a ") || "Todo o período";
+  const discountTotal = (report.discounts || []).reduce((sum, item) => sum + item.amount, 0);
+  const grossTotal = report.days.reduce((sum, day) => sum + day.paidAmount, 0);
+  const netTotal = Math.max(0, grossTotal - discountTotal);
+  let y = 18;
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(15);
+  pdf.text("RELATÓRIO DE DIÁRIAS", pageWidth / 2, y, { align: "center" });
+  y += 8;
+  pdf.setFontSize(10);
+  pdf.text(report.driver || "Motorista não informado", pageWidth / 2, y, { align: "center" });
+  y += 5;
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(8);
+  pdf.text(`${report.cpf || "CPF não informado"} · ${period}`, pageWidth / 2, y, { align: "center" });
+  y += 8;
+  pdf.setFillColor(22, 46, 33);
+  pdf.rect(margin, y, tableWidth, 8, "F");
+  pdf.setTextColor(255, 255, 255);
+  pdf.setFont("helvetica", "bold");
+  const headers = ["DATA", "CIDADES", "DOCUMENTOS", "VALOR DA DIÁRIA"];
+  let x = margin;
+  headers.forEach((header, index) => {
+    pdf.text(header, x + widths[index] / 2, y + 5.2, { align: "center" });
+    x += widths[index];
+  });
+  y += 8;
+  pdf.setTextColor(0, 0, 0);
+  report.days.forEach((day, index) => {
+    if (y > 270) { pdf.addPage(); y = 18; }
+    if (index % 2 === 0) { pdf.setFillColor(239, 248, 241); pdf.rect(margin, y, tableWidth, 8, "F"); }
+    const values = [pdfDate(day.date), day.cities.join(" · ") || "Não informada", String(day.invoiceCount), moneyText(day.paidAmount)];
+    x = margin;
+    values.forEach((value, valueIndex) => {
+      pdf.rect(x, y, widths[valueIndex], 8);
+      pdf.setFontSize(valueIndex === 1 ? 7 : 8);
+      pdf.text(String(value).slice(0, 70), valueIndex === 1 ? x + 2 : x + widths[valueIndex] / 2, y + 5.2, { align: valueIndex === 1 ? "left" : "center", maxWidth: widths[valueIndex] - 4 });
+      x += widths[valueIndex];
+    });
+    y += 8;
+  });
+  y += 5;
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(9);
+  pdf.text(`TOTAL DAS DIÁRIAS: ${moneyText(grossTotal)}`, margin, y);
+  y += 6;
+  pdf.text(`DESCONTOS: ${moneyText(discountTotal)}`, margin, y);
+  y += 6;
+  pdf.setFontSize(11);
+  pdf.text(`TOTAL A PAGAR: ${moneyText(netTotal)}`, margin, y);
+  if (report.discounts?.length) {
+    y += 7;
+    pdf.setFontSize(8);
+    pdf.text(report.discounts.map((item) => `${item.description} ${item.installment}/${item.installments}: ${moneyText(item.amount)}`).join(" · "), margin, y, { maxWidth: tableWidth });
+  }
+  const safeDriver = safePdfFilenamePart(report.driver) || "Sem nome";
+  const safePeriod = safePdfFilenamePart(period) || "Todo periodo";
+  pdf.save(`Diarias - ${safeDriver} - ${safePeriod}.pdf`);
 }
 
 export function exportVehicleClosingSummaryPdf(reports: DriverClosingExport[]) {

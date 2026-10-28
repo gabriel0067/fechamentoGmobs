@@ -22,5 +22,5 @@ export const romaneioFreightPartsTotal = (
 
 export const romaneioClosingInvoiceCount = (
   countedInvoices: number,
-  backDocuments: number,
-) => countedInvoices - backDocuments;
+  _backDocuments: number,
+) => countedInvoices;

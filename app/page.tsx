@@ -348,6 +348,11 @@ type DriverClosingDiscountPrompt = {
   amount: string;
   installments: string;
 };
+type ManualRomaneioDriverDraft = {
+  driver: string;
+  cpf: string;
+  plate: string;
+};
 type MaexAdditionalSender = {
   name: string;
   cnpj: string;
@@ -1592,6 +1597,10 @@ export default function Home() {
   >("checking");
   const [manualRomaneios, setManualRomaneios] = useState<ManualRomaneio[]>([]);
   const [manualRomaneioDriverKey, setManualRomaneioDriverKey] = useState("");
+  const [manualRomaneioDriverDraft, setManualRomaneioDriverDraft] =
+    useState<ManualRomaneioDriverDraft>({ driver: "", cpf: "", plate: "" });
+  const [manualRomaneioCustomDriver, setManualRomaneioCustomDriver] =
+    useState<{ key: string; driver: string; cpf: string; plate: string } | null>(null);
   const [manualRomaneioDate, setManualRomaneioDate] = useState(() =>
     new Date().toLocaleDateString("en-CA"),
   );
@@ -1600,6 +1609,8 @@ export default function Home() {
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
   const [driverClosingTo, setDriverClosingTo] = useState("");
   const [driverClosingMode, setDriverClosingMode] = useState<"driver" | "vehicle">("driver");
+  const [driverClosingView, setDriverClosingView] = useState<"closing" | "daily">("closing");
+  const [driverDailyPayments, setDriverDailyPayments] = useState<Record<string, string>>({});
   const [driverClosingListLimit, setDriverClosingListLimit] = useState(40);
   const [selectedDriverClosings, setSelectedDriverClosings] = useState<
     string[]
@@ -3038,8 +3049,15 @@ export default function Home() {
       if (!key || drivers.has(key)) return;
       drivers.set(key, { key, driver: group.driver, cpf: group.cpf, plate: group.plates[0] || "" });
     });
+    manualRomaneios.forEach((romaneio) => {
+      const key = normalizeCnpj(romaneio.cpf) || normalized(romaneio.driver);
+      if (!key || drivers.has(key)) return;
+      drivers.set(key, { key, driver: romaneio.driver, cpf: romaneio.cpf, plate: romaneio.plate });
+    });
+    if (manualRomaneioCustomDriver)
+      drivers.set(manualRomaneioCustomDriver.key, manualRomaneioCustomDriver);
     return [...drivers.values()].sort((a, b) => a.driver.localeCompare(b.driver, "pt-BR"));
-  }, [romaneioDailyGroups]);
+  }, [manualRomaneioCustomDriver, manualRomaneios, romaneioDailyGroups]);
   const romaneioScanIndex = useMemo(() => {
     const index = new Map<string, { group: RomaneioDailyGroup; document: RomaneioDailyDocument; order: number }[]>();
     let order = 0;
@@ -3773,6 +3791,8 @@ export default function Home() {
   const coverDraftKey = `${coverSection}|${effectiveCoverPartnerId}`;
   const currentCoverDraft = coverDrafts[coverDraftKey] || [];
   const coverReferenceLookup = useMemo(() => {
+    if (tab !== "covers" || coverSection === "report")
+      return new Map<string, Map<string, Entry>>();
     const uniqueEntries = new Map<string, Entry>();
     [...entriesWithTde, ...romaneioReferenceEntries].forEach((entry) =>
       uniqueEntries.set(entry.id, entry),
@@ -3786,8 +3806,10 @@ export default function Home() {
       });
     });
     return lookup;
-  }, [entriesWithTde, romaneioReferenceEntries]);
+  }, [coverSection, entriesWithTde, romaneioReferenceEntries, tab]);
   const savedCoverDocumentLookup = useMemo(() => {
+    if (tab !== "covers" || coverSection === "report")
+      return new Map<string, CoverDocumentExport[]>();
     const lookup = new Map<string, CoverDocumentExport[]>();
     covers
       .filter((cover) => cover.id !== editingCoverId)
@@ -3800,17 +3822,21 @@ export default function Home() {
         });
       });
     return lookup;
-  }, [covers, editingCoverId]);
+  }, [coverSection, covers, editingCoverId, tab]);
   const reportCovers = useMemo(
-    () => covers.filter((cover) => {
+    () => {
+      if (tab !== "covers" || coverSection !== "report") return [];
+      return covers.filter((cover) => {
       const day = cover.createdAt.slice(0, 10);
       const dateMatches = (!coverReportFrom || day >= coverReportFrom) && (!coverReportTo || day <= coverReportTo);
       const search = scanKey(coverReportSearch);
+      if (!search) return dateMatches;
       const coverMatches = !search || scanKey(cover.id).includes(search) || String(cover.sequenceNumber || "").includes(search);
       const documentMatches = cover.documents.some((document) => matchesCoverDocumentSearch(document, coverReportSearch));
       return dateMatches && (coverMatches || documentMatches);
-    }),
-    [coverReportFrom, coverReportSearch, coverReportTo, covers],
+    });
+    },
+    [coverReportFrom, coverReportSearch, coverReportTo, coverSection, covers, tab],
   );
   const selectedReportCovers = reportCovers.filter((cover) =>
     selectedCoverReportIds.includes(cover.id),
@@ -4876,6 +4902,25 @@ export default function Home() {
     setMessageIsError(false);
     setMessage(`Documento ${entry.mde || entry.cte || entry.invoice} incluído no romaneio manual.`);
     playRomaneioSuccessSound();
+  }
+
+  function addManualRomaneioDriver(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const driver = manualRomaneioDriverDraft.driver.trim();
+    if (!driver) {
+      setMessageIsError(true);
+      setMessage("Informe o nome do novo motorista.");
+      return;
+    }
+    const cpf = manualRomaneioDriverDraft.cpf.trim();
+    const plate = manualRomaneioDriverDraft.plate.trim().toUpperCase();
+    const key = `manual:${normalizeCnpj(cpf) || normalized(driver)}`;
+    const customDriver = { key, driver, cpf, plate };
+    setManualRomaneioCustomDriver(customDriver);
+    setManualRomaneioDriverKey(key);
+    setManualRomaneioDriverDraft({ driver: "", cpf: "", plate: "" });
+    setMessageIsError(false);
+    setMessage(`${driver} foi selecionado para o novo romaneio manual.`);
   }
 
   async function printManualRomaneio(romaneio: ManualRomaneio) {
@@ -6014,6 +6059,32 @@ export default function Home() {
     playRomaneioAttentionSound();
   }
 
+  async function exportSelectedDriverDailyReports() {
+    if (!selectedDriverClosingReports.length) {
+      setMessageIsError(true);
+      setMessage("Selecione ao menos um motorista para gerar o relatório de diárias.");
+      return;
+    }
+    const { exportDriverDailyReportPdf } = await loadExcelModule();
+    selectedDriverClosingReports.forEach((report) =>
+      exportDriverDailyReportPdf({
+        driver: report.driver,
+        cpf: report.cpf,
+        periodFrom: report.periodFrom,
+        periodTo: report.periodTo,
+        discounts: report.discounts,
+        days: report.days.map((day) => ({
+          date: day.date,
+          cities: day.cities,
+          invoiceCount: day.invoiceCount,
+          paidAmount: parseMoney(driverDailyPayments[`${report.key}|${day.date}`] || "") ?? 0,
+        })),
+      }),
+    );
+    setMessageIsError(false);
+    setMessage(`${selectedDriverClosingReports.length} relatório(s) de diárias gerado(s).`);
+  }
+
   function addManualDriverClosingSubject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const driver = driverClosingManualSubjectDraft.driver.trim();
@@ -6156,8 +6227,11 @@ export default function Home() {
       if (["et", "entregue"].includes(code) || description === "entregue") return "et" as const;
       return "blocked" as const;
     };
-    const candidateMinutas = [...new Set(currentReportCandidates.map((entry) => operationalIdentifier(entry.mde)).filter(Boolean))];
-    const hasSeparateEvent = currentReportCandidates.some((entry) =>
+    const eligibleReportCandidates = currentReportCandidates.filter(
+      (entry) => coverStatusKind(entry) !== "blocked",
+    );
+    const candidateMinutas = [...new Set(eligibleReportCandidates.map((entry) => operationalIdentifier(entry.mde)).filter(Boolean))];
+    const hasSeparateEvent = eligibleReportCandidates.some((entry) =>
       ["re", "cf"].includes(coverStatusKind(entry)),
     );
     if (candidateMinutas.length > 1 && !hasSeparateEvent) {
@@ -6167,7 +6241,7 @@ export default function Home() {
       playRomaneioAttentionSound();
       return;
     }
-    const latestReportMatch = currentReportCandidates
+    const latestReportMatch = eligibleReportCandidates
       .reduce<RomaneioReferenceEntry | undefined>((latest, entry) => {
         if (!latest) return entry;
         const priority = { blocked: 0, et: 1, re: 2, cf: 2 };
@@ -6175,7 +6249,7 @@ export default function Home() {
           ? entry
           : latest;
       }, undefined);
-    if (!latestReportMatch || coverStatusKind(latestReportMatch) === "blocked") {
+    if (!latestReportMatch) {
       if (coverScanInputRef.current) coverScanInputRef.current.value = "";
       setCoverBlockedDocument(raw);
       playRomaneioAttentionSound();
@@ -8231,6 +8305,13 @@ export default function Home() {
                     <label>Motorista<select value={manualRomaneioDriverKey} onChange={(event) => setManualRomaneioDriverKey(event.target.value)}><option value="">Selecione...</option>{manualRomaneioDrivers.map((driver) => <option key={driver.key} value={driver.key}>{driver.driver}{driver.plate ? ` · ${driver.plate}` : ""}</option>)}</select></label>
                     <div className="manual-romaneio-auto-city"><small>CIDADES / ROTA</small><strong>{[...new Set(manualRomaneioDraft.map((document) => document.city).filter(Boolean))].join(" · ") || "Preenchidas automaticamente conforme os documentos"}</strong></div>
                   </div>
+                  <form className="driver-manual-subject manual-romaneio-new-driver" onSubmit={addManualRomaneioDriver}>
+                    <div><strong>Novo motorista</strong><small>Use quando ele ainda não estiver na lista.</small></div>
+                    <input value={manualRomaneioDriverDraft.driver} onChange={(event) => setManualRomaneioDriverDraft((current) => ({ ...current, driver: event.target.value }))} placeholder="Nome do motorista" aria-label="Nome do novo motorista" />
+                    <input value={manualRomaneioDriverDraft.cpf} onChange={(event) => setManualRomaneioDriverDraft((current) => ({ ...current, cpf: event.target.value }))} placeholder="CPF (opcional)" aria-label="CPF do novo motorista" />
+                    <input value={manualRomaneioDriverDraft.plate} onChange={(event) => setManualRomaneioDriverDraft((current) => ({ ...current, plate: event.target.value }))} placeholder="Placa (opcional)" aria-label="Placa do novo motorista" />
+                    <button type="submit">Adicionar e selecionar</button>
+                  </form>
                   <form className="retained-scan" onSubmit={(event) => { event.preventDefault(); scanManualRomaneioDocument(); }}>
                     <input ref={manualRomaneioScanRef} placeholder="NF, CT-e, MD-e/minuta ou chave de acesso" inputMode="numeric" />
                     <button className="primary">Adicionar documento</button>
@@ -8430,19 +8511,23 @@ export default function Home() {
               </div>
             ) : (
               <div className="driver-closing-view">
+                <div className="subtabs driver-closing-subtabs">
+                  <button type="button" className={driverClosingView === "closing" ? "active" : ""} onClick={() => setDriverClosingView("closing")}>Fechamento agregado</button>
+                  <button type="button" className={driverClosingView === "daily" ? "active" : ""} onClick={() => { setDriverClosingView("daily"); setDriverClosingMode("driver"); setSelectedDriverClosings([]); setDriverClosingPreviewOpen(false); }}>Relatório de diárias</button>
+                </div>
                 <div className="toolbar driver-closing-toolbar">
                   <div>
-                    <small>{driverClosingMode === "vehicle" ? "FECHAMENTO DOS VEÍCULOS" : "FECHAMENTO DOS MOTORISTAS"}</small>
-                    <h2>Produção entregue por período</h2>
-                    <p>{driverClosingMode === "vehicle" ? "Agrupe pela placa para conferir quanto cada carro da casa produziu, mesmo com motoristas diferentes." : "Escolha livremente as datas, confira os totais e exporte um arquivo separado para cada motorista selecionado."}</p>
+                    <small>{driverClosingView === "daily" ? "CONTABILIDADE / MOTORISTAS" : driverClosingMode === "vehicle" ? "FECHAMENTO DOS VEÍCULOS" : "FECHAMENTO DOS MOTORISTAS"}</small>
+                    <h2>{driverClosingView === "daily" ? "Diárias pagas por período" : "Produção entregue por período"}</h2>
+                    <p>{driverClosingView === "daily" ? "Confira dias, cidades e documentos e informe o valor pago em cada diária." : driverClosingMode === "vehicle" ? "Agrupe pela placa para conferir quanto cada carro da casa produziu, mesmo com motoristas diferentes." : "Escolha livremente as datas, confira os totais e exporte um arquivo separado para cada motorista selecionado."}</p>
                   </div>
-                  <label>
+                  {driverClosingView === "closing" && <label>
                     Fechar por
                     <select value={driverClosingMode} onChange={(event) => { setDriverClosingMode(event.target.value as "driver" | "vehicle"); setDriverClosingListLimit(40); setSelectedDriverClosings([]); setDriverClosingPreviewOpen(false); }}>
                       <option value="driver">Motorista</option>
                       <option value="vehicle">Placa do veículo</option>
                     </select>
-                  </label>
+                  </label>}
                   <label>
                     De
                     <input type="date" value={driverClosingFrom} onChange={(event) => setDriverClosingFrom(event.target.value)} />
@@ -8465,7 +8550,7 @@ export default function Home() {
                     <button type="button" onClick={() => setSelectedDriverClosings([])}>Limpar</button>
                   </div>
                 </div>
-                {driverClosingMode === "driver" && (
+                {driverClosingView === "closing" && driverClosingMode === "driver" && (
                   <form className="driver-manual-subject" onSubmit={addManualDriverClosingSubject}>
                     <div><strong>Adicionar motorista manual</strong><small>Use mesmo quando ele não aparece nos romaneios do período.</small></div>
                     <input value={driverClosingManualSubjectDraft.driver} onChange={(event) => setDriverClosingManualSubjectDraft((current) => ({ ...current, driver: event.target.value }))} placeholder="Nome do motorista" aria-label="Nome do motorista manual" />
@@ -8507,10 +8592,28 @@ export default function Home() {
                   <div className="empty romaneio-empty"><span>□</span><h3>Nenhum {driverClosingMode === "vehicle" ? "veículo" : "motorista"} no período</h3><p>Altere as datas ou importe os relatórios de romaneio correspondentes.</p></div>
                 )}
                 <div className="driver-closing-export">
-                  <div><strong>Prévia antes do PDF</strong><small>{driverClosingMode === "vehicle" ? "Selecione os carros para gerar um único relatório consolidado com placa, quantidade de NFs e produção." : "Confira os dias, ajuste cidades e inclua observações antes de gerar um arquivo PDF por motorista."}</small></div>
+                  <div><strong>Prévia antes do PDF</strong><small>{driverClosingView === "daily" ? "Preencha quanto foi pago em cada diária antes de gerar o relatório para a contabilidade." : driverClosingMode === "vehicle" ? "Selecione os carros para gerar um único relatório consolidado com placa, quantidade de NFs e produção." : "Confira os dias, ajuste cidades e inclua observações antes de gerar um arquivo PDF por motorista."}</small></div>
                   <button type="button" className="primary" onClick={openDriverClosingPreview}>Abrir prévia</button>
                 </div>
-                {driverClosingPreviewOpen && (
+                {driverClosingPreviewOpen && driverClosingView === "daily" && (
+                  <div className="driver-closing-preview daily-report-preview">
+                    <div className="driver-closing-preview-head">
+                      <div><small>PRÉVIA DAS DIÁRIAS</small><h3>Conferir valores pagos</h3><p>Os valores digitados servem somente para este relatório e não alteram a produção gravada.</p></div>
+                      <button type="button" className="primary" onClick={exportSelectedDriverDailyReports}>Gerar PDF(s)</button>
+                    </div>
+                    {selectedDriverClosingReports.map((report) => (
+                      <section key={report.key} className="driver-pdf-preview-card">
+                        <div className="driver-pdf-preview-title"><div><strong>{report.driver}</strong><small>{report.cpf || "CPF não informado"}</small></div><span><small>TOTAL INFORMADO</small><b>{money(report.days.reduce((sum, day) => sum + (parseMoney(driverDailyPayments[`${report.key}|${day.date}`] || "") ?? 0), 0))}</b></span></div>
+                        <div className="driver-pdf-days daily-report-days">
+                          <div className="driver-pdf-day-head"><span>Data</span><span>Cidades</span><span>Docs.</span><span>Valor pago</span></div>
+                          {report.days.map((day) => <div className="driver-pdf-day-row" key={day.date}><span><strong>{formatRomaneioDay(day.date)}</strong></span><span>{day.cities.join(" · ") || "Não informada"}</span><span><strong>{day.invoiceCount}</strong></span><input inputMode="decimal" value={driverDailyPayments[`${report.key}|${day.date}`] || ""} onChange={(event) => setDriverDailyPayments((current) => ({ ...current, [`${report.key}|${day.date}`]: event.target.value }))} placeholder="R$ 0,00" aria-label={`Valor da diária de ${report.driver} em ${formatRomaneioDay(day.date)}`} /></div>)}
+                        </div>
+                        {!!report.discounts?.length && <p className="daily-report-discount">Descontos já vinculados ao motorista: {money(report.discounts.reduce((sum, item) => sum + item.amount, 0))}</p>}
+                      </section>
+                    ))}
+                  </div>
+                )}
+                {driverClosingPreviewOpen && driverClosingView === "closing" && (
                   <div className="driver-closing-preview">
                     <div className="driver-closing-preview-head">
                       <div>

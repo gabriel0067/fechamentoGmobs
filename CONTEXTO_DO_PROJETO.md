@@ -488,3 +488,12 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - Em 21/10/2026, a lista de Retidos passou a resolver os dados atuais pela chave completa `romaneio + documento`, com alternativa segura por identificadores, data e número do romaneio. Antes ela consultava a chave composta no índice simples do documento e por isso algumas linhas exibiam `Aguardando relatório geral` e `Sem frete`, embora o relatório de romaneios estivesse correto. A linha de Retidos agora também mostra NF, CT-e e transportadora, reutilizando os dados já carregados sem nova consulta ao banco.
 - Em 22/10/2026, os textos principais e complementares da lista de Retidos foram ampliados para facilitar a leitura de NF, CT-e, transportadora, remetente e destinatário. O PDF de fechamento de agregados também recebeu fontes maiores no cabeçalho, nas colunas, nos valores e nos totais, com linhas ligeiramente mais altas para preservar o alinhamento na impressão.
 - Na lista de Retidos, frete e produção deixaram de ser exibidos. A parceira ocupa essa coluna; remetente aparece na linha superior e destinatário/cidade na inferior, ambos com peso visual reforçado.
+
+# Ajustes de Capas, romaneio manual e diárias — 28/10/2026
+
+- A validação de Capas ignora minutas canceladas ou sem baixa ao decidir se uma NF possui conflito. Quando duas minutas compartilham a NF e somente uma está elegível como ET, RE ou CF, o sistema inclui apenas a elegível; ambiguidades entre duas minutas elegíveis continuam bloqueadas por segurança.
+- Os índices de busca de Capas só são montados enquanto a tela correspondente está aberta. A consulta do relatório também deixa de percorrer documentos quando o campo está vazio, reduzindo trabalho ao apagar uma pesquisa e ao navegar por outras abas.
+- O romaneio manual permite cadastrar e selecionar um motorista novo com nome, CPF e placa. Depois da primeira gravação, o motorista continua disponível pelo histórico manual.
+- Dentro do fechamento de agregados foi adicionada a visão `Relatório de diárias`: filtra por período e motorista, mostra data, cidades e quantidade de documentos, permite informar o valor pago em cada diária e gera PDF com total das diárias e descontos já vinculados ao motorista.
+- A quantidade de notas no fechamento deixou de subtrair `Volta` duas vezes. Como as voltas já não entram no conjunto de notas entregues/retorno, a contagem agora preserva somente o total efetivamente elegível.
+- Essas alterações não removem, migram nem regravam dados existentes no banco.
