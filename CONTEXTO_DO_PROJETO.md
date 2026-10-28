@@ -497,3 +497,4 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - Dentro do fechamento de agregados foi adicionada a visão `Relatório de diárias`: filtra por período e motorista, mostra data, cidades e quantidade de documentos, permite informar o valor pago em cada diária e gera PDF com total das diárias e descontos já vinculados ao motorista.
 - A quantidade de notas no fechamento deixou de subtrair `Volta` duas vezes. Como as voltas já não entram no conjunto de notas entregues/retorno, a contagem agora preserva somente o total efetivamente elegível.
 - Essas alterações não removem, migram nem regravam dados existentes no banco.
+- No relatório de Capas, a lista é ordenada pela data e hora de criação mais recente, com o número sequencial como desempate. Assim, uma capa recém-gerada aparece sempre no topo, mesmo quando o banco devolve os registros em outra ordem.

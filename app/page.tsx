@@ -3834,7 +3834,11 @@ export default function Home() {
       const coverMatches = !search || scanKey(cover.id).includes(search) || String(cover.sequenceNumber || "").includes(search);
       const documentMatches = cover.documents.some((document) => matchesCoverDocumentSearch(document, coverReportSearch));
       return dateMatches && (coverMatches || documentMatches);
-    });
+    }).sort((left, right) =>
+      (Date.parse(right.createdAt) || 0) - (Date.parse(left.createdAt) || 0) ||
+      (right.sequenceNumber || 0) - (left.sequenceNumber || 0) ||
+      right.id.localeCompare(left.id, "pt-BR"),
+    );
     },
     [coverReportFrom, coverReportSearch, coverReportTo, coverSection, covers, tab],
   );
