@@ -498,3 +498,4 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - A quantidade de notas no fechamento deixou de subtrair `Volta` duas vezes. Como as voltas já não entram no conjunto de notas entregues/retorno, a contagem agora preserva somente o total efetivamente elegível.
 - Essas alterações não removem, migram nem regravam dados existentes no banco.
 - No relatório de Capas, a lista é ordenada pela data e hora de criação mais recente, com o número sequencial como desempate. Assim, uma capa recém-gerada aparece sempre no topo, mesmo quando o banco devolve os registros em outra ordem.
+- No fechamento agregado, `Retido` soma um documento e também soma sua produção/frete. A identificação visual `Possui retido` continua no dia para permitir conferência e exclusão manual da diária quando necessário. `Retorno` soma somente documento, e `Volta` não soma documento nem produção.

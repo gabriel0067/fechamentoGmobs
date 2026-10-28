@@ -3382,7 +3382,7 @@ export default function Home() {
       .forEach((group) => {
         const countedDocuments = group.documents.filter((document) => {
           const situation = getRomaneioStatus(group, document)?.situation;
-          return situation === "delivered" || situation === "return";
+          return situation === "delivered" || situation === "return" || situation === "retained";
         });
         const manualCount = manualRomaneioFreights[group.key]?.length || 0;
         const pickupCount = romaneioPickupQuantities[group.key] || 0;
