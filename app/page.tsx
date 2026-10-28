@@ -8515,7 +8515,7 @@ export default function Home() {
               </div>
             ) : (
               <div className="driver-closing-view">
-                <div className="subtabs driver-closing-subtabs">
+                <div className="romaneio-subtabs romaneio-inner-subtabs driver-closing-subtabs">
                   <button type="button" className={driverClosingView === "closing" ? "active" : ""} onClick={() => setDriverClosingView("closing")}>Fechamento agregado</button>
                   <button type="button" className={driverClosingView === "daily" ? "active" : ""} onClick={() => { setDriverClosingView("daily"); setDriverClosingMode("driver"); setSelectedDriverClosings([]); setDriverClosingPreviewOpen(false); }}>Relatório de diárias</button>
                 </div>

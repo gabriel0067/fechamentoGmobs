@@ -499,3 +499,4 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - Essas alterações não removem, migram nem regravam dados existentes no banco.
 - No relatório de Capas, a lista é ordenada pela data e hora de criação mais recente, com o número sequencial como desempate. Assim, uma capa recém-gerada aparece sempre no topo, mesmo quando o banco devolve os registros em outra ordem.
 - No fechamento agregado, `Retido` soma um documento e também soma sua produção/frete. A identificação visual `Possui retido` continua no dia para permitir conferência e exclusão manual da diária quando necessário. `Retorno` soma somente documento, e `Volta` não soma documento nem produção.
+- Os seletores `Fechamento agregado` e `Relatório de diárias` usam o mesmo componente visual das abas internas de Romaneios, preservando espaçamento, cores, bordas e estado ativo do restante do sistema.
