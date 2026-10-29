@@ -7198,15 +7198,41 @@ export default function Home() {
 
     setCloudStatus("loading");
     try {
-      const pending: [CloudStateKey, unknown][] = [
+      const pending = new Map<CloudStateKey, unknown>([
         ["closing-data", closingDataCloudState], ["closing-ops", closingOpsCloudState], ["scans", scannedCtes],
         ["tde", tdeCloudState], ["maex", maexAdditionalSenders],
         ["billed", billedDocuments], ["romaneio-data", romaneioDataCloudState], ["romaneio-ops", romaneioOpsCloudState],
-      ];
-      for (const [key, value] of pending) {
-        cloudVersionsRef.current[key] = await saveCloudState(key, value, getExpectedCloudVersion(key));
+      ]);
+      const failedKeys = [...cloudFailedKeysRef.current];
+      for (const key of failedKeys) {
+        const value = pending.get(key);
+        if (value === undefined) continue;
+        const expectedVersion = getExpectedCloudVersion(key);
+        const cached = await readCloudStateCache<unknown>(key).catch(() => null);
+        const result = await saveCloudStateReconciled(
+          key,
+          value,
+          expectedVersion,
+          cached?.version === expectedVersion ? cached.value : value,
+        );
+        await writeCloudStateCache(key, result.version, result.value).catch(() => undefined);
+        cloudVersionsRef.current[key] = result.version;
+        cloudFailedKeysRef.current.delete(key);
+        if (result.reconciled) {
+          if (key === "closing-data") reconcileClosingData(result.value as typeof closingDataCloudState);
+          else if (key === "closing-ops") reconcileClosingOps(result.value as typeof closingOpsCloudState);
+          else if (key === "romaneio-data") reconcileRomaneioData(result.value as typeof romaneioDataCloudState);
+          else if (key === "romaneio-ops") reconcileRomaneioOps(result.value as typeof romaneioOpsCloudState);
+          else if (key === "scans") setScannedCtes(result.value as typeof scannedCtes);
+          else if (key === "tde") {
+            const reconciled = result.value as typeof tdeCloudState;
+            setTdeRates(reconciled.rates);
+            setTdeImportInfo(reconciled.importInfo);
+          } else if (key === "maex") setMaexAdditionalSenders(result.value as typeof maexAdditionalSenders);
+          else if (key === "billed") setBilledDocuments(result.value as typeof billedDocuments);
+        }
       }
-      cloudSaveFailedRef.current = false;
+      cloudSaveFailedRef.current = cloudFailedKeysRef.current.size > 0;
       setCloudFailureMessage("");
       setCloudStatus("ready");
     } catch (error) {

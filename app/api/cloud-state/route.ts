@@ -15,6 +15,8 @@ const KEYS = new Set(ALL_KEYS);
 const ENCODINGS = new Set(["gzip-base64", "json"]);
 let client: ReturnType<typeof neon> | undefined;
 let uploadSchemaReady: Promise<void> | undefined;
+let lastUploadCleanup = 0;
+let uploadCleanupPromise: Promise<void> | undefined;
 
 function sql() {
   const url = process.env.DATABASE_URL;
@@ -53,18 +55,20 @@ async function check(request: Request) {
 }
 
 async function discardExpiredUploads() {
-  await sql().query(`DO $cleanup$
-    BEGIN
-      LOCK TABLE cloud_state_upload_chunks IN ACCESS EXCLUSIVE MODE;
-      DELETE FROM cloud_state_upload_chunks
-      WHERE created_at < now() - interval '5 minutes';
+  const now = Date.now();
+  if (now - lastUploadCleanup < 60_000) return;
+  if (uploadCleanupPromise) return uploadCleanupPromise;
 
-      IF NOT EXISTS (SELECT 1 FROM cloud_state_upload_chunks)
-         AND pg_total_relation_size('cloud_state_upload_chunks') > 8 * 1024 * 1024 THEN
-        TRUNCATE TABLE cloud_state_upload_chunks;
-      END IF;
-    END
-  $cleanup$`);
+  lastUploadCleanup = now;
+  uploadCleanupPromise = sql().query(
+    "DELETE FROM cloud_state_upload_chunks WHERE created_at < now() - interval '10 minutes'",
+  ).then(() => undefined).catch((error) => {
+    lastUploadCleanup = 0;
+    throw error;
+  }).finally(() => {
+    uploadCleanupPromise = undefined;
+  });
+  return uploadCleanupPromise;
 }
 
 async function discardUpload(stateKey: string, uploadId: string) {
@@ -113,7 +117,6 @@ export async function HEAD(request: Request) {
   if (access.response) return access.response;
   try {
     await ensureUploadSchema();
-    await discardExpiredUploads();
     const rows = await sql().query(
       "SELECT version, encoding, length(payload) AS size FROM cloud_state_records WHERE owner_id = $1 AND state_key = $2",
       [OWNER, access.key],
@@ -147,7 +150,6 @@ export async function GET(request: Request) {
       return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
     try {
       await ensureUploadSchema();
-      await discardExpiredUploads();
       const rows = await sql().query(
         "SELECT state_key, version FROM cloud_state_records WHERE owner_id = $1 AND state_key = ANY($2::text[])",
         [OWNER, ALL_KEYS],

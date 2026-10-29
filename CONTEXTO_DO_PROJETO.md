@@ -500,3 +500,10 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - No relatório de Capas, a lista é ordenada pela data e hora de criação mais recente, com o número sequencial como desempate. Assim, uma capa recém-gerada aparece sempre no topo, mesmo quando o banco devolve os registros em outra ordem.
 - No fechamento agregado, `Retido` soma um documento e também soma sua produção/frete. A identificação visual `Possui retido` continua no dia para permitir conferência e exclusão manual da diária quando necessário. `Retorno` soma somente documento, e `Volta` não soma documento nem produção.
 - Os seletores `Fechamento agregado` e `Relatório de diárias` usam o mesmo componente visual das abas internas de Romaneios, preservando espaçamento, cores, bordas e estado ativo do restante do sistema.
+
+# Estabilidade da sincronização simultânea — 29/10/2026
+
+- Foi removido um bloqueio exclusivo da tabela temporária de envios que era executado em toda leitura de versão e em cada parte de uma gravação. Com vários computadores, esse bloqueio fazia operadores aguardarem uns pelos outros e podia provocar lentidão, indisponibilidade e falhas de gravação.
+- A limpeza continua existindo, mas atua somente sobre partes temporárias abandonadas, sem `TRUNCATE` periódico nem bloqueio exclusivo, e no máximo uma vez por minuto por instância. Os registros oficiais em `cloud_state_records` não são removidos nem regravados por essa limpeza.
+- `Tentar sincronizar` deixou de reenviar os oito conjuntos do sistema. Agora reenvia somente os conjuntos que realmente falharam, preserva os que já foram gravados e usa a reconciliação com a versão mais recente para não substituir silenciosamente o trabalho de outro computador.
+- A mudança é compatível com o formato atual do banco e não exige restauração, migração ou interrupção da operação.
