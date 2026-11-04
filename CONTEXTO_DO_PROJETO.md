@@ -507,3 +507,10 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - A limpeza continua existindo, mas atua somente sobre partes temporárias abandonadas, sem `TRUNCATE` periódico nem bloqueio exclusivo, e no máximo uma vez por minuto por instância. Os registros oficiais em `cloud_state_records` não são removidos nem regravados por essa limpeza.
 - `Tentar sincronizar` deixou de reenviar os oito conjuntos do sistema. Agora reenvia somente os conjuntos que realmente falharam, preserva os que já foram gravados e usa a reconciliação com a versão mais recente para não substituir silenciosamente o trabalho de outro computador.
 - A mudança é compatível com o formato atual do banco e não exige restauração, migração ou interrupção da operação.
+
+# Novas ocorrências da ticagem — 03/11/2026
+
+- A Ticagem passou a oferecer `Carro quebrou (OC)`. A ocorrência segue exatamente a regra da Volta: fica registrada, mas não soma documento nem produção no fechamento.
+- Também foi incluído `Retido por falta de volume (OC)`. Ele permanece no Relatório de Retidos e mantém a mesma regra financeira do Retido, somando documento e produção/frete.
+- O Retido por falta de volume aparece em azul, com o aviso `Falta de volume · não atribuída ao motorista`, para distingui-lo dos retidos de responsabilidade operacional do motorista.
+- Os dois campos são opcionais e retrocompatíveis; nenhum registro antigo é alterado ou migrado.

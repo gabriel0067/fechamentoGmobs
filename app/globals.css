@@ -3049,6 +3049,15 @@ button {
   border-color: #77ad91;
   background: #f0f8f4;
 }
+.retained-driver-documents > label.missing-volume {
+  border-color: #78a9cf;
+  background: #eef7ff;
+  box-shadow: inset 4px 0 #2f7fb9;
+}
+.retained-driver-documents > label.missing-volume.selected {
+  border-color: #397faa;
+  background: #e4f3ff;
+}
 .retained-driver-documents > label > input {
   width: 18px;
   height: 18px;
@@ -3072,6 +3081,11 @@ button {
   color: #786f60;
   font-size: 11px;
   line-height: 1.3;
+}
+.retained-driver-documents .retained-volume-note {
+  color: #1d6599;
+  font-weight: 800;
+  white-space: normal;
 }
 .retained-driver-documents .retained-address strong,
 .retained-driver-documents .retained-address small {
@@ -3107,6 +3121,14 @@ button {
 }
 .retained-driver-documents > label.selected > b {
   background: #197649;
+  color: white;
+}
+.retained-driver-documents > label.missing-volume > b {
+  background: #d7ebfa;
+  color: #1d6599;
+}
+.retained-driver-documents > label.missing-volume.selected > b {
+  background: #2f7fb9;
   color: white;
 }
 .retained-save {

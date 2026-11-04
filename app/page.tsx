@@ -164,8 +164,10 @@ type RomaneioImportInfo = {
 type RomaneioSituation =
   | "delivered"
   | "back"
+  | "vehicle-breakdown"
   | "return"
   | "retained"
+  | "retained-missing-volume"
   | "not-followed"
   | "driver-missing";
 type RomaneioDocumentStatusRecord = {
@@ -820,11 +822,17 @@ const romaneioDaysElapsed = (day: string) => {
 const romaneioSituationLabel: Record<RomaneioSituation, string> = {
   delivered: "Entregue (ET)",
   back: "Volta (OC)",
+  "vehicle-breakdown": "Carro quebrou (OC)",
   return: "Retorno (OC)",
   retained: "Retido (OC)",
+  "retained-missing-volume": "Retido por falta de volume (OC)",
   "not-followed": "Não seguiu (OC)",
   "driver-missing": "Motorista não trouxe o documento",
 };
+const isRetainedRomaneioSituation = (situation?: RomaneioSituation) =>
+  situation === "retained" || situation === "retained-missing-volume";
+const isBackRomaneioSituation = (situation?: RomaneioSituation) =>
+  situation === "back" || situation === "vehicle-breakdown";
 const romaneioOperationalStatus = (
   situation: RomaneioSituation,
 ): "ET" | "OC" => (situation === "delivered" ? "ET" : "OC");
@@ -3200,7 +3208,7 @@ export default function Home() {
       Object.values(romaneioDocumentStatuses)
         .filter(
           (record) =>
-            record.situation === "retained" ||
+            isRetainedRomaneioSituation(record.situation) ||
             (record.situation === "driver-missing" &&
               romaneioDaysElapsed(record.day) >= 3),
         )
@@ -3285,7 +3293,7 @@ export default function Home() {
       );
       const payableDocuments = group.documents.filter((document) => {
         const situation = getRomaneioStatus(group, document)?.situation;
-        return situation === "delivered" || situation === "retained";
+        return situation === "delivered" || isRetainedRomaneioSituation(situation);
       });
       const documentProduction = payableDocuments.reduce(
         (sum, document) => sum + document.production,
@@ -3382,15 +3390,15 @@ export default function Home() {
       .forEach((group) => {
         const countedDocuments = group.documents.filter((document) => {
           const situation = getRomaneioStatus(group, document)?.situation;
-          return situation === "delivered" || situation === "return" || situation === "retained";
+          return situation === "delivered" || situation === "return" || isRetainedRomaneioSituation(situation);
         });
         const manualCount = manualRomaneioFreights[group.key]?.length || 0;
         const pickupCount = romaneioPickupQuantities[group.key] || 0;
         const backDocuments = group.documents.filter((document) =>
-          getRomaneioStatus(group, document)?.situation === "back"
+          isBackRomaneioSituation(getRomaneioStatus(group, document)?.situation)
         );
         const retainedDocuments = group.documents.filter((document) =>
-          getRomaneioStatus(group, document)?.situation === "retained"
+          isRetainedRomaneioSituation(getRomaneioStatus(group, document)?.situation)
         );
         if (!countedDocuments.length && !manualCount && !pickupCount && !backDocuments.length && !retainedDocuments.length) return;
         const plate = group.plates.find(Boolean) || "Sem placa";
@@ -4717,7 +4725,11 @@ export default function Home() {
             situation: draft.situation,
             sourceStatus: document.sourceStatus,
             operationalStatus: romaneioOperationalStatus(draft.situation),
-            reason: draft.situation === "return" ? draft.reason.trim() : "",
+            reason: draft.situation === "return"
+              ? draft.reason.trim()
+              : draft.situation === "retained-missing-volume"
+                ? "Falta de volume — ocorrência não atribuída ao motorista"
+                : "",
             savedAt,
             savedBy: activeOperator,
             day: group.day,
@@ -4741,7 +4753,7 @@ export default function Home() {
         return next;
       });
     const newlyRetained = selectedDrafts.flatMap(([documentKey, draft]) => {
-      if (draft.situation !== "retained") return [];
+      if (!isRetainedRomaneioSituation(draft.situation || undefined)) return [];
       const document = groupDocumentsByKey.get(documentKey);
       if (!document) return [];
       return [{
@@ -8064,8 +8076,10 @@ export default function Home() {
                                       <option value="">Lançar ocorrência nos selecionados...</option>
                                       <option value="delivered">Entregue (ET)</option>
                                       <option value="back">Volta (OC)</option>
+                                      <option value="vehicle-breakdown">Carro quebrou (OC)</option>
                                       <option value="return">Retorno (OC)</option>
                                       <option value="retained">Retido (OC)</option>
+                                      <option value="retained-missing-volume">Retido por falta de volume (OC)</option>
                                       <option value="not-followed">Não seguiu (OC)</option>
                                       <option value="driver-missing">Motorista não trouxe o documento</option>
                                     </select>
@@ -8109,8 +8123,10 @@ export default function Home() {
                                               <option value="">Selecione...</option>
                                               <option value="delivered">Entregue (ET)</option>
                                               <option value="back">Volta (OC)</option>
+                                              <option value="vehicle-breakdown">Carro quebrou (OC)</option>
                                               <option value="return">Retorno (OC)</option>
                                               <option value="retained">Retido (OC)</option>
+                                              <option value="retained-missing-volume">Retido por falta de volume (OC)</option>
                                               <option value="not-followed">Não seguiu (OC)</option>
                                               <option value="driver-missing">Motorista não trouxe o documento</option>
                                             </select>
@@ -8296,9 +8312,9 @@ export default function Home() {
                           .filter(Boolean),
                       )].join(" · ") || "Transportadora não identificada";
                       return (
-                        <label id={`retained-${record.key}`} className={retainedResolutionDrafts[record.key] ? "selected" : ""} key={record.key}>
+                        <label id={`retained-${record.key}`} className={`${retainedResolutionDrafts[record.key] ? "selected " : ""}${record.situation === "retained-missing-volume" ? "missing-volume" : ""}`.trim()} key={record.key}>
                           <input type="checkbox" checked={Boolean(retainedResolutionDrafts[record.key])} onChange={(event) => setRetainedResolutionDrafts((current) => ({...current, [record.key]: event.target.checked}))} />
-                          <span className="document-id"><strong>{record.referenceType} {record.referenceNumber}</strong><small>NF {invoice} · CT-e {cte}</small></span>
+                          <span className="document-id"><strong>{record.referenceType} {record.referenceNumber}</strong><small>NF {invoice} · CT-e {cte}</small>{record.situation === "retained-missing-volume" && <small className="retained-volume-note">Falta de volume · não atribuída ao motorista</small>}</span>
                           <span><strong>{record.driver}</strong><small>{record.romaneios.join(" · ")} · <time>{formatRomaneioDay(record.day)}</time></small></span>
                           <span className="retained-address"><strong>{sender}</strong><small>{recipient} · <em>{city}</em></small></span>
                           <span className="retained-carrier"><small>PARCEIRA</small><strong>{carriers}</strong></span>
@@ -8409,7 +8425,7 @@ export default function Home() {
                         ),
                       ).join(" · ");
                       const retainedCount = group.documents.filter(
-                        (document) => getRomaneioStatus(group, document)?.situation === "retained",
+                        (document) => isRetainedRomaneioSituation(getRomaneioStatus(group, document)?.situation),
                       ).length;
                       return (
                         <details
