@@ -6,9 +6,10 @@ import { neon } from "@neondatabase/serverless";
 const OWNER = "shared:fechamentos-gmobs";
 const backupPath = process.argv.slice(2).find((argument) => !argument.startsWith("--"));
 const apply = process.argv.includes("--apply");
+const verifyOnly = process.argv.includes("--verify-only");
 if (!backupPath) throw new Error("Informe o caminho do backup JSON.");
-if (apply && !process.env.DATABASE_URL)
-  throw new Error("DATABASE_URL é obrigatória para usar --apply.");
+if ((apply || verifyOnly) && !process.env.DATABASE_URL)
+  throw new Error("DATABASE_URL é obrigatória para usar --apply ou --verify-only.");
 
 const backup = JSON.parse(await readFile(resolve(backupPath), "utf8"));
 if (backup?.product !== "Fechamentos GMOBS" || backup?.version !== 1)
@@ -121,25 +122,55 @@ function collectStates(source) {
 
 const states = collectStates(backup);
 const prepared = states.map((state) => {
-  state.items.sort((left, right) =>
-    left.collection.localeCompare(right.collection) || left.item_key.localeCompare(right.item_key),
+  const encodedItems = state.items.map((item) => ({
+    collection: item.collection,
+    item_key_b64: Buffer.from(item.item_key, "utf8").toString("base64"),
+    payload_text: json(item.payload),
+    item_hash: item.item_hash,
+  }));
+  encodedItems.sort((left, right) =>
+    left.collection.localeCompare(right.collection) ||
+    left.item_key_b64.localeCompare(right.item_key_b64),
   );
   const checksum = createHash("md5")
-    .update(state.items.map((item) => item.item_hash).join(""))
+    .update(encodedItems.map((item) => item.item_hash).sort().join(""))
     .digest("hex");
-  return { ...state, checksum };
+  return { stateKey: state.stateKey, items: encodedItems, checksum };
 });
 
 for (const state of prepared)
   console.log(`${state.stateKey}: ${state.items.length} itens · checksum ${state.checksum}`);
 
-if (!apply) {
+if (!apply && !verifyOnly) {
   console.log("Validação local concluída. Use --apply somente com a conexão Neon correta.");
   process.exit(0);
 }
 
 const sql = neon(process.env.DATABASE_URL);
-await sql.query(`CREATE TABLE IF NOT EXISTS cloud_state_item_snapshots (
+if (verifyOnly) {
+  const sourceVersion = `backup:${backup.exportedAt}`;
+  for (const state of prepared) {
+    const rows = await sql.query(
+      `SELECT item_count, checksum
+       FROM cloud_state_item_snapshots_v2
+       WHERE owner_id = $1 AND state_key = $2 AND source_version = $3 AND status = 'complete'
+       ORDER BY completed_at DESC
+       LIMIT 1`,
+      [OWNER, state.stateKey, sourceVersion],
+    );
+    const row = rows[0];
+    if (Number(row?.item_count) !== state.items.length || row?.checksum !== state.checksum)
+      throw new Error(`${state.stateKey}: snapshot completo não corresponde ao backup.`);
+    console.log(`${state.stateKey}: verificação independente aprovada (${row.item_count} itens).`);
+  }
+  const legacy = await sql.query(
+    `SELECT count(*)::integer AS state_count FROM cloud_state_records WHERE owner_id = $1`,
+    [OWNER],
+  );
+  console.log(`Estrutura original preservada: ${legacy[0]?.state_count ?? 0} conjuntos ativos.`);
+  process.exit(0);
+}
+await sql.query(`CREATE TABLE IF NOT EXISTS cloud_state_item_snapshots_v2 (
   owner_id TEXT NOT NULL,
   state_key TEXT NOT NULL,
   snapshot_id UUID NOT NULL,
@@ -151,25 +182,25 @@ await sql.query(`CREATE TABLE IF NOT EXISTS cloud_state_item_snapshots (
   completed_at TIMESTAMPTZ,
   PRIMARY KEY (owner_id, state_key, snapshot_id)
 )`);
-await sql.query(`CREATE TABLE IF NOT EXISTS cloud_state_items (
+await sql.query(`CREATE TABLE IF NOT EXISTS cloud_state_items_v2 (
   owner_id TEXT NOT NULL,
   state_key TEXT NOT NULL,
   snapshot_id UUID NOT NULL,
   collection TEXT NOT NULL,
-  item_key TEXT NOT NULL,
-  payload JSONB NOT NULL,
+  item_key_b64 TEXT NOT NULL,
+  payload_text TEXT NOT NULL,
   item_hash TEXT NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (owner_id, state_key, snapshot_id, collection, item_key)
+  PRIMARY KEY (owner_id, state_key, snapshot_id, collection, item_key_b64)
 )`);
-await sql.query(`CREATE INDEX IF NOT EXISTS cloud_state_items_active_lookup
-  ON cloud_state_items (owner_id, state_key, snapshot_id, collection)`);
+await sql.query(`CREATE INDEX IF NOT EXISTS cloud_state_items_v2_active_lookup
+  ON cloud_state_items_v2 (owner_id, state_key, snapshot_id, collection)`);
 
 for (const state of prepared) {
   const snapshotId = randomUUID();
   const sourceVersion = `backup:${backup.exportedAt}`;
   await sql.query(
-    `INSERT INTO cloud_state_item_snapshots
+    `INSERT INTO cloud_state_item_snapshots_v2
       (owner_id, state_key, snapshot_id, source_version, status)
      VALUES ($1, $2, $3, $4, 'preparing')`,
     [OWNER, state.stateKey, snapshotId, sourceVersion],
@@ -177,18 +208,18 @@ for (const state of prepared) {
   for (let offset = 0; offset < state.items.length; offset += 500) {
     const batch = state.items.slice(offset, offset + 500);
     await sql.query(
-      `INSERT INTO cloud_state_items
-        (owner_id, state_key, snapshot_id, collection, item_key, payload, item_hash)
-       SELECT $1, $2, $3, item.collection, item.item_key, item.payload, item.item_hash
+      `INSERT INTO cloud_state_items_v2
+        (owner_id, state_key, snapshot_id, collection, item_key_b64, payload_text, item_hash)
+       SELECT $1, $2, $3, item.collection, item.item_key_b64, item.payload_text, item.item_hash
        FROM jsonb_to_recordset($4::jsonb)
-         AS item(collection TEXT, item_key TEXT, payload JSONB, item_hash TEXT)`,
+         AS item(collection TEXT, item_key_b64 TEXT, payload_text TEXT, item_hash TEXT)`,
       [OWNER, state.stateKey, snapshotId, JSON.stringify(batch)],
     );
   }
   const verification = await sql.query(
     `SELECT count(*)::integer AS item_count,
-       md5(string_agg(item_hash, '' ORDER BY collection, item_key)) AS checksum
-     FROM cloud_state_items
+       md5(string_agg(item_hash, '' ORDER BY item_hash)) AS checksum
+     FROM cloud_state_items_v2
      WHERE owner_id = $1 AND state_key = $2 AND snapshot_id = $3`,
     [OWNER, state.stateKey, snapshotId],
   );
@@ -196,7 +227,7 @@ for (const state of prepared) {
   if (Number(row?.item_count) !== state.items.length || row?.checksum !== state.checksum)
     throw new Error(`${state.stateKey}: a conferência do Neon não corresponde ao backup; snapshot não ativado.`);
   await sql.query(
-    `UPDATE cloud_state_item_snapshots
+    `UPDATE cloud_state_item_snapshots_v2
      SET status = 'complete', item_count = $4, checksum = $5, completed_at = now()
      WHERE owner_id = $1 AND state_key = $2 AND snapshot_id = $3 AND status = 'preparing'`,
     [OWNER, state.stateKey, snapshotId, state.items.length, state.checksum],
@@ -204,4 +235,4 @@ for (const state of prepared) {
   console.log(`${state.stateKey}: snapshot paralelo conferido e concluído.`);
 }
 
-console.log("Migração paralela concluída. cloud_state_records não foi alterada.");
+console.log("Migração paralela v2 concluída. cloud_state_records não foi alterada.");
