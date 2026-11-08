@@ -535,3 +535,10 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - Os oito snapshots foram marcados como `complete` somente após a conferência no banco: `closing-data` 163.285, `closing-ops` 1.045, `scans` 21.029, `tde` 4.556, `maex` 22, `billed` 5.090, `romaneio-data` 4.463 e `romaneio-ops` 26.710 itens; total de 226.200.
 - Uma segunda leitura independente confirmou novamente os oito totais e checksums do backup. A estrutura original permanece com 10 conjuntos ativos em `cloud_state_records` e segue como única fonte do site nesta fase; nenhum código de leitura ou gravação da produção foi trocado ainda.
 - Tentativas preparatórias incompletas permanecem com estado `preparing` e não podem ser usadas. Elas não alteram a estrutura oficial nem os snapshots v2 completos.
+
+# Teste de gravação dupla — 08/11/2026
+
+- O período de validação usa `cloud_state_records` como fonte oficial e `cloud_state_shadow_records` como espelho. A tabela de espelho é preenchida inicialmente a partir dos 10 conjuntos oficiais sem remover ou alterar a origem.
+- Cada confirmação de gravação usa uma única instrução atômica no Neon: primeiro aplica a proteção de versão no conjunto oficial e, somente se ela for aceita, grava exatamente a mesma versão, codificação, conteúdo e horário no espelho. A resposta de sucesso só existe quando ambos foram confirmados.
+- A cópia para o espelho ocorre dentro do Neon e não reenvia o conteúdo pelo navegador, evitando dobrar a transferência da Vercel ou travar a tela. Conflitos entre computadores continuam usando a reconciliação existente antes da confirmação dupla.
+- A consulta autenticada `?mirror=1` compara versão, codificação e conteúdo integral dos dois lados, conjunto por conjunto. Durante este teste, a estrutura individual v2 permanece inativa e a leitura do site não foi trocada.

@@ -33,6 +33,17 @@ function ensureUploadSchema() {
           chunk_index INTEGER NOT NULL, encoding TEXT NOT NULL, payload TEXT NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY (owner_id, state_key, upload_id, chunk_index))`);
+        await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_shadow_records (
+          owner_id TEXT NOT NULL, state_key TEXT NOT NULL, version TEXT NOT NULL,
+          encoding TEXT NOT NULL, payload TEXT NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL,
+          PRIMARY KEY (owner_id, state_key))`);
+        await sql().query(`INSERT INTO cloud_state_shadow_records
+          (owner_id, state_key, version, encoding, payload, updated_at)
+          SELECT owner_id, state_key, version, encoding, payload, updated_at
+          FROM cloud_state_records
+          WHERE owner_id = $1
+          ON CONFLICT (owner_id, state_key) DO NOTHING`, [OWNER]);
         return;
       } catch (error) {
         const code = (error as { code?: string }).code;
@@ -132,6 +143,23 @@ export async function HEAD(request: Request) {
 }
 
 export async function GET(request: Request) {
+  if (new URL(request.url).searchParams.get("mirror") === "1") {
+    if (!(await authenticatedUsername(request)))
+      return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
+    try {
+      await ensureUploadSchema();
+      const rows = await sql().query(`SELECT current.state_key,
+          current.version AS current_version, shadow.version AS shadow_version,
+          (current.version = shadow.version AND current.encoding = shadow.encoding
+            AND current.payload = shadow.payload) AS matches
+        FROM cloud_state_records current
+        LEFT JOIN cloud_state_shadow_records shadow
+          ON shadow.owner_id = current.owner_id AND shadow.state_key = current.state_key
+        WHERE current.owner_id = $1
+        ORDER BY current.state_key`, [OWNER]);
+      return Response.json(rows, { headers: { "cache-control": "no-store" } });
+    } catch (error) { return failure(error); }
+  }
   if (new URL(request.url).searchParams.get("storage") === "1") {
     if (!(await authenticatedUsername(request)))
       return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
@@ -139,6 +167,7 @@ export async function GET(request: Request) {
       await ensureUploadSchema();
       const rows = await sql().query(`SELECT
         pg_total_relation_size('cloud_state_records') AS records_bytes,
+        pg_total_relation_size('cloud_state_shadow_records') AS shadow_records_bytes,
         pg_total_relation_size('cloud_state_upload_chunks') AS temporary_bytes,
         (SELECT coalesce(sum(octet_length(payload)), 0) FROM cloud_state_records WHERE owner_id = $1) AS useful_payload_bytes,
         (SELECT count(*) FROM cloud_state_upload_chunks) AS temporary_parts`, [OWNER]) as Record<string, unknown>[];
@@ -210,7 +239,8 @@ export async function PUT(request: Request) {
   try {
     await ensureUploadSchema();
     const rows = await sql().query(
-      `INSERT INTO cloud_state_records (owner_id, state_key, version, encoding, payload, updated_at)
+      `WITH saved AS (
+       INSERT INTO cloud_state_records (owner_id, state_key, version, encoding, payload, updated_at)
        SELECT $1, $2, $3, $4, string_agg(payload, '' ORDER BY chunk_index), $5
        FROM cloud_state_upload_chunks
        WHERE owner_id = $1 AND state_key = $2 AND upload_id = $3 AND encoding = $4
@@ -223,7 +253,17 @@ export async function PUT(request: Request) {
        DO UPDATE SET version = EXCLUDED.version, encoding = EXCLUDED.encoding,
                      payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
        WHERE cloud_state_records.version = $7
-       RETURNING version`,
+       RETURNING owner_id, state_key, version, encoding, payload, updated_at
+       ), mirrored AS (
+         INSERT INTO cloud_state_shadow_records
+           (owner_id, state_key, version, encoding, payload, updated_at)
+         SELECT owner_id, state_key, version, encoding, payload, updated_at FROM saved
+         ON CONFLICT (owner_id, state_key)
+         DO UPDATE SET version = EXCLUDED.version, encoding = EXCLUDED.encoding,
+                       payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+         RETURNING version
+       )
+       SELECT version FROM mirrored`,
       [OWNER, access.key, uploadId, encoding, new Date().toISOString(), chunkCount, expectedVersion],
     ) as Record<string, unknown>[];
     if (!rows.length) {

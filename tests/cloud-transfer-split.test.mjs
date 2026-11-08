@@ -13,3 +13,12 @@ test("sincronizacao separa relatorios grandes das operacoes frequentes", async (
   assert.doesNotMatch(page, /useCloudStateSync\(\s*"closing"/);
   assert.doesNotMatch(page, /useCloudStateSync\(\s*"romaneios"/);
 });
+
+test("gravacao oficial e espelho sao confirmados pela mesma operacao atomica", async () => {
+  const route = await readFile(new URL("../app/api/cloud-state/route.ts", import.meta.url), "utf8");
+  assert.match(route, /CREATE TABLE IF NOT EXISTS cloud_state_shadow_records/);
+  assert.match(route, /WITH saved AS \([\s\S]*INSERT INTO cloud_state_records/);
+  assert.match(route, /mirrored AS \([\s\S]*INSERT INTO cloud_state_shadow_records/);
+  assert.match(route, /SELECT version FROM mirrored/);
+  assert.match(route, /current\.payload = shadow\.payload/);
+});
