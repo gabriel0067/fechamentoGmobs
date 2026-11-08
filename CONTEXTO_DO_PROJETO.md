@@ -514,3 +514,11 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - Também foi incluído `Retido por falta de volume (OC)`. Ele permanece no Relatório de Retidos e mantém a mesma regra financeira do Retido, somando documento e produção/frete.
 - O Retido por falta de volume aparece em azul, com o aviso `Falta de volume · não atribuída ao motorista`, para distingui-lo dos retidos de responsabilidade operacional do motorista.
 - Os dois campos são opcionais e retrocompatíveis; nenhum registro antigo é alterado ou migrado.
+
+# Primeira etapa de estabilidade e desempenho — 08/11/2026
+
+- Alterações sucessivas no mesmo conjunto durante uma gravação deixam de formar uma fila de cópias completas intermediárias. O navegador preserva o estado local mais recente e, assim que a gravação atual termina, envia uma única versão consolidada com todas as alterações feitas naquele intervalo.
+- A consolidação não aplica a regra de “último computador vence”. Quando existe conflito com outro computador, a reconciliação continua preservando alterações distintas. Se uma nova mudança local ocorrer durante essa reconciliação, ela é combinada com o resultado remoto antes do próximo envio.
+- A consulta automática de versões agora é de execução única: os eventos de foco, visibilidade e temporizador não podem abrir consultas simultâneas. Quando outro evento acontece durante a consulta, fica no máximo uma nova verificação pendente.
+- Uma falha temporária apenas na atualização automática não bloqueia mais a tela nem marca o banco inteiro como indisponível. A aplicação mantém os dados já carregados e tenta novamente no próximo ciclo. Falhas reais de gravação continuam sendo exibidas e mantêm a proteção contra saída da página.
+- Esta etapa não cria tabelas, não migra, não remove e não regrava o histórico existente. A futura separação por registros permanece como segunda etapa, condicionada a backup e validação paralela.

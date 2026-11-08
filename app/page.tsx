@@ -16,6 +16,7 @@ import {
   getCloudStateVersions,
   isHostedSite,
   loadCloudStateRecord,
+  mergeConcurrentValue,
   saveCloudState,
   saveCloudStateReconciled,
   type CloudStateKey,
@@ -1150,10 +1151,19 @@ function useCloudStateSync<T>(
   ) => void,
 ) {
   const enabledOnce = useRef(false);
-  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const latestValueRef = useRef(value);
+  const pendingSaveRef = useRef(false);
+  const saveRunningRef = useRef(false);
+  const saveTimerRef = useRef<number | null>(null);
+  latestValueRef.current = value;
   useEffect(() => {
     if (!enabled) {
       enabledOnce.current = false;
+      pendingSaveRef.current = false;
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
       return;
     }
     if (!enabledOnce.current) {
@@ -1163,40 +1173,64 @@ function useCloudStateSync<T>(
     if (skipSaveRef.current.delete(stateKey)) return;
 
     onQueue();
-    let started = false;
-    let cancelled = false;
+    pendingSaveRef.current = true;
     const saveDelay =
       stateKey === "closing-data" || stateKey === "closing-ops" ||
       stateKey === "romaneio-data" || stateKey === "romaneio-ops" || stateKey === "billed"
         ? 350
         : 250;
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     const timer = window.setTimeout(() => {
-      if (cancelled) return;
-      started = true;
-      onStart();
-      const save = saveChainRef.current.then(async () => {
+      saveTimerRef.current = null;
+      if (saveRunningRef.current) return;
+      saveRunningRef.current = true;
+      void (async () => {
         try {
-          const expectedVersion = getExpectedVersion(stateKey);
-          const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
-          const result = await saveCloudStateReconciled(
-            stateKey,
-            value,
-            expectedVersion,
-            cached?.version === expectedVersion ? cached.value : value,
-          );
-          await writeCloudStateCache(stateKey, result.version, result.value).catch(() => undefined);
-          if (result.reconciled) onReconciled(result.value);
-          onFinish(stateKey, true, result.version);
-        } catch (error) {
-          onFinish(stateKey, false, undefined, error instanceof Error ? error : undefined);
+          while (pendingSaveRef.current && enabledOnce.current) {
+            pendingSaveRef.current = false;
+            const valueToSave = latestValueRef.current;
+            onStart();
+            try {
+              const expectedVersion = getExpectedVersion(stateKey);
+              const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
+              const result = await saveCloudStateReconciled(
+                stateKey,
+                valueToSave,
+                expectedVersion,
+                cached?.version === expectedVersion ? cached.value : valueToSave,
+              );
+              await writeCloudStateCache(stateKey, result.version, result.value).catch(() => undefined);
+              if (result.reconciled) {
+                if (pendingSaveRef.current) {
+                  const combined = mergeConcurrentValue(
+                    valueToSave,
+                    latestValueRef.current,
+                    result.value,
+                  ) as T;
+                  latestValueRef.current = combined;
+                  onReconciled(combined);
+                } else {
+                  onReconciled(result.value);
+                }
+              }
+              onFinish(stateKey, true, result.version);
+            } catch (error) {
+              pendingSaveRef.current = false;
+              onFinish(stateKey, false, undefined, error instanceof Error ? error : undefined);
+              break;
+            }
+          }
+        } finally {
+          saveRunningRef.current = false;
         }
-      });
-      saveChainRef.current = save;
+      })();
     }, saveDelay);
+    saveTimerRef.current = timer;
     return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      if (!started) return;
+      if (saveTimerRef.current === timer) {
+        window.clearTimeout(timer);
+        saveTimerRef.current = null;
+      }
     };
   }, [
     enabled,
@@ -1719,6 +1753,8 @@ export default function Home() {
   const skipCloudSaveRef = useRef(new Set<CloudStateKey>());
   const lastLocalChangeRef = useRef(0);
   const lastUserInteractionRef = useRef(0);
+  const cloudRefreshRunningRef = useRef(false);
+  const cloudRefreshQueuedRef = useRef(false);
   useEffect(() => {
     if (!message) return;
     const timer = window.setTimeout(() => {
@@ -2627,6 +2663,11 @@ export default function Home() {
       document.visibilityState !== "visible"
     )
       return;
+    if (cloudRefreshRunningRef.current) {
+      cloudRefreshQueuedRef.current = true;
+      return;
+    }
+    cloudRefreshRunningRef.current = true;
     const keys: CloudStateKey[] = [
       "closing-data",
       "closing-ops",
@@ -2768,10 +2809,15 @@ export default function Home() {
         }
       }
       setCloudStatus("ready");
-    } catch {
-      cloudSaveFailedRef.current = false;
-      setCloudReady(false);
-      setCloudStatus("error");
+    } catch (error) {
+      console.warn("A atualização automática será tentada novamente.", error);
+      setCloudStatus(cloudSaveFailedRef.current ? "error" : "ready");
+    } finally {
+      cloudRefreshRunningRef.current = false;
+      if (cloudRefreshQueuedRef.current) {
+        cloudRefreshQueuedRef.current = false;
+        window.setTimeout(() => void refreshCloudData(), 0);
+      }
     }
   }, [cloudReady, romaneioDocumentDrafts]);
   useEffect(() => {
