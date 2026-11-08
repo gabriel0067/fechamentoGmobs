@@ -40,7 +40,7 @@ function ensureUploadSchema() {
           PRIMARY KEY (owner_id, state_key))`);
         await sql().query(`INSERT INTO cloud_state_shadow_records
           (owner_id, state_key, version, encoding, payload, updated_at)
-          SELECT owner_id, state_key, version, encoding, payload, updated_at
+          SELECT owner_id, state_key, version, encoding, payload, updated_at::timestamptz
           FROM cloud_state_records
           WHERE owner_id = $1
           ON CONFLICT (owner_id, state_key) DO NOTHING`, [OWNER]);
@@ -257,7 +257,7 @@ export async function PUT(request: Request) {
        ), mirrored AS (
          INSERT INTO cloud_state_shadow_records
            (owner_id, state_key, version, encoding, payload, updated_at)
-         SELECT owner_id, state_key, version, encoding, payload, updated_at FROM saved
+         SELECT owner_id, state_key, version, encoding, payload, updated_at::timestamptz FROM saved
          ON CONFLICT (owner_id, state_key)
          DO UPDATE SET version = EXCLUDED.version, encoding = EXCLUDED.encoding,
                        payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
