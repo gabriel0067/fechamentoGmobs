@@ -522,3 +522,12 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - A consulta automática de versões agora é de execução única: os eventos de foco, visibilidade e temporizador não podem abrir consultas simultâneas. Quando outro evento acontece durante a consulta, fica no máximo uma nova verificação pendente.
 - Uma falha temporária apenas na atualização automática não bloqueia mais a tela nem marca o banco inteiro como indisponível. A aplicação mantém os dados já carregados e tenta novamente no próximo ciclo. Falhas reais de gravação continuam sendo exibidas e mantêm a proteção contra saída da página.
 - Esta etapa não cria tabelas, não migra, não remove e não regrava o histórico existente. A futura separação por registros permanece como segunda etapa, condicionada a backup e validação paralela.
+
+# Segunda etapa — preparação e cópia de segurança — 08/11/2026
+
+- O backup completo baixado da produção foi validado antes de qualquer mudança no banco. Arquivo: `Backup Fechamentos GMOBS - 08-11-2026.json`, exportado em `2026-11-08T19:30:44.245Z`, com SHA-256 `7E38F0CA8E9D802ADCE0DD00B2CE797955B48D59B62D4BB9BBD0DD4F59765636`.
+- Foi criada uma segunda cópia verificada em `backups-segunda-etapa`, com o mesmo tamanho e a mesma assinatura. O backup contém Capas, geradores de Capas, fechamentos, faturamento, coletas, dedicados, parceiros, TDE, romaneios, ticagem/status, retidos, romaneios manuais, ajustes e dados financeiros.
+- A validação encontrou 64.716 entregas atuais, 98.568 entregas de referência, 591 Capas, 61 faturas, 315 coletas, 21.029 registros de parceiros, 5.090 faturados, 4.462 romaneios, 24.632 situações de documentos e 766 eventos no histórico de Retidos, sem identidades ausentes ou repetidas nos conjuntos principais.
+- O preparador `scripts/migrate-backup-to-items.mjs` divide o backup em registros individuais dentro de uma estrutura paralela. Ele não altera nem remove `cloud_state_records`, que continua sendo a fonte oficial e a opção de retorno.
+- A simulação local separou 226.200 itens em oito conjuntos e calculou totais e assinaturas independentes para validação. A aplicação no Neon cria primeiro um snapshot com estado `preparing`, compara contagem e assinatura no próprio banco e somente então o marca como `complete`; snapshots incompletos não podem ser ativados.
+- A leitura e a gravação do site ainda não foram mudadas nesta preparação. A troca só poderá ocorrer depois de a cópia paralela no Neon ser preenchida e comparada integralmente.
