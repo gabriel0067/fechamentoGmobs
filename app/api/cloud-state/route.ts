@@ -33,17 +33,6 @@ function ensureUploadSchema() {
           chunk_index INTEGER NOT NULL, encoding TEXT NOT NULL, payload TEXT NOT NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           PRIMARY KEY (owner_id, state_key, upload_id, chunk_index))`);
-        await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_shadow_records (
-          owner_id TEXT NOT NULL, state_key TEXT NOT NULL, version TEXT NOT NULL,
-          encoding TEXT NOT NULL, payload TEXT NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL,
-          PRIMARY KEY (owner_id, state_key))`);
-        await sql().query(`INSERT INTO cloud_state_shadow_records
-          (owner_id, state_key, version, encoding, payload, updated_at)
-          SELECT owner_id, state_key, version, encoding, payload, updated_at::timestamptz
-          FROM cloud_state_records
-          WHERE owner_id = $1
-          ON CONFLICT (owner_id, state_key) DO NOTHING`, [OWNER]);
         return;
       } catch (error) {
         const code = (error as { code?: string }).code;
@@ -239,8 +228,7 @@ export async function PUT(request: Request) {
   try {
     await ensureUploadSchema();
     const rows = await sql().query(
-      `WITH saved AS (
-       INSERT INTO cloud_state_records (owner_id, state_key, version, encoding, payload, updated_at)
+      `INSERT INTO cloud_state_records (owner_id, state_key, version, encoding, payload, updated_at)
        SELECT $1, $2, $3, $4, string_agg(payload, '' ORDER BY chunk_index), $5
        FROM cloud_state_upload_chunks
        WHERE owner_id = $1 AND state_key = $2 AND upload_id = $3 AND encoding = $4
@@ -253,17 +241,7 @@ export async function PUT(request: Request) {
        DO UPDATE SET version = EXCLUDED.version, encoding = EXCLUDED.encoding,
                      payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
        WHERE cloud_state_records.version = $7
-       RETURNING owner_id, state_key, version, encoding, payload, updated_at
-       ), mirrored AS (
-         INSERT INTO cloud_state_shadow_records
-           (owner_id, state_key, version, encoding, payload, updated_at)
-         SELECT owner_id, state_key, version, encoding, payload, updated_at::timestamptz FROM saved
-         ON CONFLICT (owner_id, state_key)
-         DO UPDATE SET version = EXCLUDED.version, encoding = EXCLUDED.encoding,
-                       payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
-         RETURNING version
-       )
-       SELECT version FROM mirrored`,
+       RETURNING version`,
       [OWNER, access.key, uploadId, encoding, new Date().toISOString(), chunkCount, expectedVersion],
     ) as Record<string, unknown>[];
     if (!rows.length) {

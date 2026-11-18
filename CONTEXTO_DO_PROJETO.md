@@ -542,3 +542,11 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - Cada confirmação de gravação usa uma única instrução atômica no Neon: primeiro aplica a proteção de versão no conjunto oficial e, somente se ela for aceita, grava exatamente a mesma versão, codificação, conteúdo e horário no espelho. A resposta de sucesso só existe quando ambos foram confirmados.
 - A cópia para o espelho ocorre dentro do Neon e não reenvia o conteúdo pelo navegador, evitando dobrar a transferência da Vercel ou travar a tela. Conflitos entre computadores continuam usando a reconciliação existente antes da confirmação dupla.
 - A consulta autenticada `?mirror=1` compara versão, codificação e conteúdo integral dos dois lados, conjunto por conjunto. Durante este teste, a estrutura individual v2 permanece inativa e a leitura do site não foi trocada.
+
+# Encerramento da gravação dupla e reforço da fila — 17/11/2026
+
+- O período de validação do espelho foi encerrado. Novas alterações voltam a ser gravadas somente em `cloud_state_records`, que permanece como fonte oficial. `cloud_state_shadow_records` não é apagada nem modificada e continua disponível como fotografia final do teste para a análise posterior.
+- A inicialização das funções deixou de criar, preencher ou percorrer a tabela de espelho. Ela garante somente a tabela temporária de partes de envio, eliminando leituras e comparações de conteúdos grandes em novas instâncias da Vercel.
+- Se uma gravação falhar depois das tentativas imediatas de rede, a versão local mais recente permanece pendente. O navegador tenta novamente em segundo plano com espera progressiva de 5 a 60 segundos, sem formar várias cópias intermediárias e sem substituir silenciosamente alterações feitas por outro computador.
+- Falha de sessão não gera tentativas automáticas contínuas; a tela mantém o aviso e a proteção ao sair para que o operador entre novamente e use `Tentar sincronizar`.
+- Nenhuma tabela, registro oficial, snapshot individual ou cópia de segurança foi removida ou migrada nesta etapa.

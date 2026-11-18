@@ -1155,6 +1155,7 @@ function useCloudStateSync<T>(
   const pendingSaveRef = useRef(false);
   const saveRunningRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
+  const saveRetryDelayRef = useRef(5_000);
   latestValueRef.current = value;
   useEffect(() => {
     if (!enabled) {
@@ -1180,7 +1181,8 @@ function useCloudStateSync<T>(
         ? 350
         : 250;
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-    const timer = window.setTimeout(() => {
+    let cancelled = false;
+    const runSave = () => {
       saveTimerRef.current = null;
       if (saveRunningRef.current) return;
       saveRunningRef.current = true;
@@ -1213,10 +1215,21 @@ function useCloudStateSync<T>(
                   onReconciled(result.value);
                 }
               }
+              saveRetryDelayRef.current = 5_000;
               onFinish(stateKey, true, result.version);
             } catch (error) {
-              pendingSaveRef.current = false;
-              onFinish(stateKey, false, undefined, error instanceof Error ? error : undefined);
+              const saveError = error instanceof Error ? error : undefined;
+              pendingSaveRef.current = true;
+              onFinish(stateKey, false, undefined, saveError);
+              if (
+                enabledOnce.current &&
+                !cancelled &&
+                !/Entre no site/i.test(saveError?.message || "")
+              ) {
+                const retryDelay = saveRetryDelayRef.current;
+                saveRetryDelayRef.current = Math.min(retryDelay * 2, 60_000);
+                saveTimerRef.current = window.setTimeout(runSave, retryDelay);
+              }
               break;
             }
           }
@@ -1224,11 +1237,13 @@ function useCloudStateSync<T>(
           saveRunningRef.current = false;
         }
       })();
-    }, saveDelay);
+    };
+    const timer = window.setTimeout(runSave, saveDelay);
     saveTimerRef.current = timer;
     return () => {
-      if (saveTimerRef.current === timer) {
-        window.clearTimeout(timer);
+      cancelled = true;
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
     };
