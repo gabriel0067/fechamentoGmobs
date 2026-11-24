@@ -462,6 +462,8 @@ export async function saveCloudStateReconciled<T>(
       };
     } catch (error) {
       if (!(error instanceof CloudStateConflictError) || attempt === 3) throw error;
+      if (base === undefined)
+        throw new CloudStateConflictError("Não foi possível confirmar a versão de origem. A alteração continua pendente.");
       const remote = await loadCloudStateRecord<T>(stateKey);
       if (!remote) throw error;
       localValue = mergeConcurrentValue(base, localValue, remote.value) as T;
