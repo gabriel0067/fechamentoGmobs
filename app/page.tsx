@@ -261,6 +261,7 @@ type ManualRomaneio = {
   plate: string;
   route: string;
   documents: ManualRomaneioDocument[];
+  completed?: boolean;
 };
 type RomaneioSituationConfirmation = {
   groupKey: string;
@@ -1661,6 +1662,8 @@ export default function Home() {
   const [manualRomaneioDate, setManualRomaneioDate] = useState(() =>
     new Date().toLocaleDateString("en-CA"),
   );
+  const [manualRomaneioPlate, setManualRomaneioPlate] = useState("");
+  const [manualRomaneioCompleted, setManualRomaneioCompleted] = useState(false);
   const [manualRomaneioDraft, setManualRomaneioDraft] = useState<ManualRomaneioDocument[]>([]);
   const manualRomaneioScanRef = useRef<HTMLInputElement>(null);
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
@@ -1668,6 +1671,8 @@ export default function Home() {
   const [driverClosingMode, setDriverClosingMode] = useState<"driver" | "vehicle">("driver");
   const [driverClosingView, setDriverClosingView] = useState<"closing" | "daily">("closing");
   const [driverDailyPayments, setDriverDailyPayments] = useState<Record<string, string>>({});
+  const [driverDailyTotals, setDriverDailyTotals] = useState<Record<string, string>>({});
+  const [driverDailyDiscounts, setDriverDailyDiscounts] = useState<Record<string, string>>({});
   const [driverClosingListLimit, setDriverClosingListLimit] = useState(40);
   const [selectedDriverClosings, setSelectedDriverClosings] = useState<
     string[]
@@ -3127,6 +3132,18 @@ export default function Home() {
       drivers.set(manualRomaneioCustomDriver.key, manualRomaneioCustomDriver);
     return [...drivers.values()].sort((a, b) => a.driver.localeCompare(b.driver, "pt-BR"));
   }, [manualRomaneioCustomDriver, manualRomaneios, romaneioDailyGroups]);
+  const manualRomaneioScanIndex = useMemo(() => {
+    const index = new Map<string, Entry[]>();
+    const source = [...new Map(
+      [...entriesWithTde, ...romaneioReferenceEntries].map((entry) => [entry.id, entry] as const),
+    ).values()];
+    source.forEach((entry) => documentLookupTokens(entry).forEach((token) => {
+      const matches = index.get(token) || [];
+      matches.push(entry);
+      index.set(token, matches);
+    }));
+    return index;
+  }, [entriesWithTde, romaneioReferenceEntries]);
   const romaneioScanIndex = useMemo(() => {
     const index = new Map<string, { group: RomaneioDailyGroup; document: RomaneioDailyDocument; order: number }[]>();
     let order = 0;
@@ -4951,8 +4968,10 @@ export default function Home() {
       return;
     }
     if (!raw) return;
-    const source = [...new Map([...entriesWithTde, ...romaneioReferenceEntries].map((entry) => [entry.id, entry] as const)).values()];
-    const matches = source.filter((entry) => entryMatchesGlobalDocumentScan(entry, raw));
+    const matches = [...new Map(
+      [...scanLookupTokens(raw)].flatMap((token) => manualRomaneioScanIndex.get(token) || [])
+        .map((entry) => [entry.id, entry] as const),
+    ).values()];
     if (!matches.length) {
       setMessageIsError(true);
       setMessage(`${raw} não foi encontrado nos relatórios importados.`);
@@ -4995,6 +5014,7 @@ export default function Home() {
     const customDriver = { key, driver, cpf, plate };
     setManualRomaneioCustomDriver(customDriver);
     setManualRomaneioDriverKey(key);
+    setManualRomaneioPlate(plate);
     setManualRomaneioDriverDraft({ driver: "", cpf: "", plate: "" });
     setMessageIsError(false);
     setMessage(`${driver} foi selecionado para o novo romaneio manual.`);
@@ -5031,9 +5051,10 @@ export default function Home() {
       createdBy: activeOperator,
       driver: driver.driver,
       cpf: driver.cpf,
-      plate: driver.plate,
+      plate: manualRomaneioPlate.trim().toUpperCase() || driver.plate,
       route,
       documents: manualRomaneioDraft,
+      completed: manualRomaneioCompleted,
     };
     const documentLabels = manualRomaneioDraft.map((document) =>
       document.mde
@@ -5049,14 +5070,14 @@ export default function Home() {
       filial: "MANUAL",
       romaneio: number,
       tabela: "MANUAL",
-      status: "CONFERIDO",
+      status: manualRomaneioCompleted ? "CONFERIDO" : "EM ABERTO",
       emissionDate: day,
       deliveryPartner: "",
       freightLetter: "",
       freightLetterDate: "",
       cpf: driver.cpf,
       driver: driver.driver,
-      plate: driver.plate,
+      plate: manualRomaneioPlate.trim().toUpperCase() || driver.plate,
       vehicleType: "",
       trailer: "",
       freight: roundMoney(manualRomaneioDraft.reduce((sum, document) => sum + document.freight, 0)),
@@ -5071,7 +5092,7 @@ export default function Home() {
     const driverIdentity = normalizeCnpj(driver.cpf) || normalized(driver.driver);
     const groupKey = `${day}|${driverIdentity || "sem-motorista"}|${normalized(number)}`;
     const statuses: Record<string, RomaneioDocumentStatusRecord> = {};
-    manualRomaneioDraft.forEach((document, index) => {
+    if (manualRomaneioCompleted) manualRomaneioDraft.forEach((document, index) => {
       const label = documentLabels[index];
       const reference = romaneioDocumentReference(label);
       const documentKey = romaneioDocumentKey(label);
@@ -5105,8 +5126,11 @@ export default function Home() {
     setRomaneioDocumentStatuses((current) => ({ ...current, ...statuses }));
     setManualRomaneios((current) => [romaneio, ...current]);
     setManualRomaneioDraft([]);
+    setManualRomaneioCompleted(false);
     setMessageIsError(false);
-    setMessage(`${romaneio.number} gravado como concluído, com ${romaneio.documents.length} documento(s) entregues e cidades preenchidas pelos relatórios.`);
+    setMessage(manualRomaneioCompleted
+      ? `${romaneio.number} gravado como baixado, com ${romaneio.documents.length} documento(s) entregues.`
+      : `${romaneio.number} gravado em aberto para ser ticado posteriormente.`);
     await printManualRomaneio(romaneio);
   }
 
@@ -6150,6 +6174,8 @@ export default function Home() {
         periodFrom: report.periodFrom,
         periodTo: report.periodTo,
         discounts: report.discounts,
+        totalPaid: parseMoney(driverDailyTotals[report.key] || "") ?? undefined,
+        manualDiscount: parseMoney(driverDailyDiscounts[report.key] || "") ?? 0,
         days: report.days.map((day) => ({
           date: day.date,
           cities: day.cities,
@@ -8409,7 +8435,8 @@ export default function Home() {
                 <section className="manual-romaneio-builder">
                   <div className="manual-romaneio-fields">
                     <label>Data do romaneio<input type="date" value={manualRomaneioDate} onChange={(event) => setManualRomaneioDate(event.target.value)} /></label>
-                    <label>Motorista<select value={manualRomaneioDriverKey} onChange={(event) => setManualRomaneioDriverKey(event.target.value)}><option value="">Selecione...</option>{manualRomaneioDrivers.map((driver) => <option key={driver.key} value={driver.key}>{driver.driver}{driver.plate ? ` · ${driver.plate}` : ""}</option>)}</select></label>
+                    <label>Motorista<select value={manualRomaneioDriverKey} onChange={(event) => { const key = event.target.value; setManualRomaneioDriverKey(key); setManualRomaneioPlate(manualRomaneioDrivers.find((driver) => driver.key === key)?.plate || ""); }}><option value="">Selecione...</option>{manualRomaneioDrivers.map((driver) => <option key={driver.key} value={driver.key}>{driver.driver}{driver.plate ? ` · ${driver.plate}` : ""}</option>)}</select></label>
+                    <label>Placa do veículo<input value={manualRomaneioPlate} onChange={(event) => setManualRomaneioPlate(event.target.value.toUpperCase())} placeholder="Última placa usada pelo motorista" aria-label="Placa do romaneio manual" /></label>
                     <div className="manual-romaneio-auto-city"><small>CIDADES / ROTA</small><strong>{[...new Set(manualRomaneioDraft.map((document) => document.city).filter(Boolean))].join(" · ") || "Preenchidas automaticamente conforme os documentos"}</strong></div>
                   </div>
                   <form className="driver-manual-subject manual-romaneio-new-driver" onSubmit={addManualRomaneioDriver}>
@@ -8426,11 +8453,12 @@ export default function Home() {
                   <div className="manual-romaneio-documents">
                     {manualRomaneioDraft.length ? manualRomaneioDraft.map((document, index) => <article key={document.key}><b>{index + 1}</b><span><strong>{document.mde ? `MD-e ${document.mde}` : document.cte ? `CT-e ${document.cte}` : `NF ${document.invoice}`}</strong><small>{document.invoice ? `NF ${document.invoice} · ` : ""}{document.sender || "Sem remetente"} → {document.recipient || "Sem destinatário"}</small></span><button type="button" onClick={() => setManualRomaneioDraft((current) => current.filter((item) => item.key !== document.key))}>Remover</button></article>) : <div className="empty romaneio-empty"><span>▤</span><h3>Nenhum documento bipado</h3><p>Os últimos documentos bipados aparecerão primeiro.</p></div>}
                   </div>
+                  <label className="manual-romaneio-completed"><input aria-label="Criar romaneio manual já baixado" type="checkbox" checked={manualRomaneioCompleted} onChange={(event) => setManualRomaneioCompleted(event.target.checked)} /><span><strong>Criar já baixado</strong><small>Desmarcado: o romaneio fica em aberto para ticagem posterior.</small></span></label>
                   <button type="button" className="primary manual-romaneio-save" disabled={!manualRomaneioDate || !manualRomaneioDriverKey || !manualRomaneioDraft.length} onClick={saveManualRomaneio}>Gravar e imprimir ({manualRomaneioDraft.length})</button>
                 </section>
                 <section className="manual-romaneio-history">
                   <div><small>ROMANEIOS GRAVADOS</small><h3>Histórico manual</h3></div>
-                  {manualRomaneios.length ? manualRomaneios.map((romaneio) => <article key={romaneio.id}><span><strong>{romaneio.number}</strong><small>{new Date(romaneio.createdAt).toLocaleString("pt-BR")} · {romaneio.createdBy}</small></span><span><strong>{romaneio.driver}</strong><small>{romaneio.plate || "Sem placa"} · {romaneio.documents.length} documento(s)</small></span><button type="button" onClick={() => printManualRomaneio(romaneio)}>Imprimir</button></article>) : <p>Nenhum romaneio manual gravado.</p>}
+                  {manualRomaneios.length ? manualRomaneios.map((romaneio) => <article key={romaneio.id}><span><strong>{romaneio.number} · {romaneio.completed === false ? "Em aberto" : "Baixado"}</strong><small>{new Date(romaneio.createdAt).toLocaleString("pt-BR")} · {romaneio.createdBy}</small></span><span><strong>{romaneio.driver}</strong><small>{romaneio.plate || "Sem placa"} · {romaneio.documents.length} documento(s)</small></span><button type="button" onClick={() => printManualRomaneio(romaneio)}>Imprimir</button></article>) : <p>Nenhum romaneio manual gravado.</p>}
                 </section>
               </div>
             ) : romaneioSection === "full" ? (
@@ -8710,7 +8738,11 @@ export default function Home() {
                     </div>
                     {selectedDriverClosingReports.map((report) => (
                       <section key={report.key} className="driver-pdf-preview-card">
-                        <div className="driver-pdf-preview-title"><div><strong>{report.driver}</strong><small>{report.cpf || "CPF não informado"}</small></div><span><small>TOTAL INFORMADO</small><b>{money(report.days.reduce((sum, day) => sum + (parseMoney(driverDailyPayments[`${report.key}|${day.date}`] || "") ?? 0), 0))}</b></span></div>
+                        <div className="driver-pdf-preview-title"><div><strong>{report.driver}</strong><small>{report.cpf || "CPF não informado"}</small></div><span><small>TOTAL INFORMADO</small><b>{money(Math.max(0, (parseMoney(driverDailyTotals[report.key] || "") ?? report.days.reduce((sum, day) => sum + (parseMoney(driverDailyPayments[`${report.key}|${day.date}`] || "") ?? 0), 0)) - (parseMoney(driverDailyDiscounts[report.key] || "") ?? 0)))}</b></span></div>
+                        <div className="daily-report-total-fields">
+                          <label><span>Valor total fechado na quinzena</span><input inputMode="decimal" value={driverDailyTotals[report.key] || ""} onChange={(event) => setDriverDailyTotals((current) => ({ ...current, [report.key]: event.target.value }))} placeholder="Opcional · substitui a soma dos dias" /></label>
+                          <label><span>Desconto deste fechamento</span><input inputMode="decimal" value={driverDailyDiscounts[report.key] || ""} onChange={(event) => setDriverDailyDiscounts((current) => ({ ...current, [report.key]: event.target.value }))} placeholder="R$ 0,00" /></label>
+                        </div>
                         <div className="driver-pdf-days daily-report-days">
                           <div className="driver-pdf-day-head"><span>Data</span><span>Cidades</span><span>Docs.</span><span>Valor pago</span></div>
                           {report.days.map((day) => <div className="driver-pdf-day-row" key={day.date}><span><strong>{formatRomaneioDay(day.date)}</strong></span><span>{day.cities.join(" · ") || "Não informada"}</span><span><strong>{day.invoiceCount}</strong></span><input inputMode="decimal" value={driverDailyPayments[`${report.key}|${day.date}`] || ""} onChange={(event) => setDriverDailyPayments((current) => ({ ...current, [`${report.key}|${day.date}`]: event.target.value }))} placeholder="R$ 0,00" aria-label={`Valor da diária de ${report.driver} em ${formatRomaneioDay(day.date)}`} /></div>)}

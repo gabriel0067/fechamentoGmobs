@@ -245,6 +245,8 @@ export type DriverDailyReportExport = {
     paidAmount: number;
   }>;
   discounts?: DriverClosingDiscount[];
+  totalPaid?: number;
+  manualDiscount?: number;
 };
 
 export type CoverDocumentExport = {
@@ -2247,8 +2249,8 @@ export function exportDriverDailyReportPdf(report: DriverDailyReportExport) {
   const moneyText = (value: number) =>
     value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const period = [report.periodFrom, report.periodTo].filter(Boolean).map(pdfDate).join(" a ") || "Todo o período";
-  const discountTotal = (report.discounts || []).reduce((sum, item) => sum + item.amount, 0);
-  const grossTotal = report.days.reduce((sum, day) => sum + day.paidAmount, 0);
+  const discountTotal = (report.discounts || []).reduce((sum, item) => sum + item.amount, 0) + (report.manualDiscount || 0);
+  const grossTotal = report.totalPaid ?? report.days.reduce((sum, day) => sum + day.paidAmount, 0);
   const netTotal = Math.max(0, grossTotal - discountTotal);
   let y = 18;
   pdf.setFont("helvetica", "bold");
@@ -2300,6 +2302,11 @@ export function exportDriverDailyReportPdf(report: DriverDailyReportExport) {
     y += 7;
     pdf.setFontSize(8);
     pdf.text(report.discounts.map((item) => `${item.description} ${item.installment}/${item.installments}: ${moneyText(item.amount)}`).join(" · "), margin, y, { maxWidth: tableWidth });
+  }
+  if (report.manualDiscount) {
+    y += report.discounts?.length ? 5 : 7;
+    pdf.setFontSize(8);
+    pdf.text(`Desconto informado neste fechamento: ${moneyText(report.manualDiscount)}`, margin, y, { maxWidth: tableWidth });
   }
   const safeDriver = safePdfFilenamePart(report.driver) || "Sem nome";
   const safePeriod = safePdfFilenamePart(period) || "Todo periodo";

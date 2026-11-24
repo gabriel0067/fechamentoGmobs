@@ -15,6 +15,8 @@ export type CloudSaveResult<T> = { value: T; version: string; reconciled: boolea
 type CloudEncoding = "gzip-base64" | "json";
 
 const CLOUD_STATE_ENDPOINT = "/api/cloud-state";
+const CLOUD_ITEMS_ENDPOINT = "/api/cloud-items";
+const ITEM_STATE_KEYS = new Set<CloudStateKey>(["closing-ops", "romaneio-ops"]);
 const TRANSFER_CHUNK_SIZE = 700_000;
 const CLOUD_RETRY_DELAYS = [250, 750, 1_500];
 
@@ -157,6 +159,15 @@ function cloudError(response: Response) {
 }
 
 export async function loadCloudStateRecord<T>(stateKey: CloudStateKey) {
+  if (ITEM_STATE_KEYS.has(stateKey)) {
+    const response = await fetchCloud(
+      `${CLOUD_ITEMS_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
+      { cache: "no-store" },
+    );
+    if (response.status === 204) return undefined;
+    if (!response.ok) throw cloudError(response);
+    return response.json() as Promise<CloudStateRecord<T>>;
+  }
   const head = await fetchCloud(
     `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
     { method: "HEAD", cache: "no-store" },
@@ -195,6 +206,15 @@ export async function loadCloudState<T>(stateKey: CloudStateKey) {
 }
 
 export async function getCloudStateVersion(stateKey: CloudStateKey) {
+  if (ITEM_STATE_KEYS.has(stateKey)) {
+    const response = await fetchCloud(
+      `${CLOUD_ITEMS_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
+      { method: "HEAD", cache: "no-store" },
+    );
+    if (response.status === 204) return undefined;
+    if (!response.ok) throw cloudError(response);
+    return response.headers.get("x-gmobs-version") || "";
+  }
   const response = await fetchCloud(
     `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
     { method: "HEAD", cache: "no-store" },
@@ -265,9 +285,82 @@ export function mergeConcurrentValue(base: unknown, local: unknown, remote: unkn
 }
 
 export async function getCloudStateVersions(): Promise<Partial<Record<CloudStateKey, string>>> {
-  const response = await fetchCloud(`${CLOUD_STATE_ENDPOINT}?versions=1`, { cache: "no-store" });
+  const [legacyResponse, itemResponse] = await Promise.all([
+    fetchCloud(`${CLOUD_STATE_ENDPOINT}?versions=1`, { cache: "no-store" }),
+    fetchCloud(`${CLOUD_ITEMS_ENDPOINT}?versions=1`, { cache: "no-store" }),
+  ]);
+  if (!legacyResponse.ok) throw cloudError(legacyResponse);
+  if (!itemResponse.ok) throw cloudError(itemResponse);
+  return { ...(await legacyResponse.json()), ...(await itemResponse.json()) };
+}
+
+type ItemChange = { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean };
+const itemShapes: Record<string, Record<string, "array" | "map" | "string-array">> = {
+  "closing-ops": {
+    covers: "array", coverGenerators: "string-array", closingAdditionals: "array",
+    billingInvoices: "array", pickupRecords: "array", dedicatedRecords: "array",
+    financialEntries: "array", financialAccountNames: "string-array",
+  },
+  "romaneio-ops": {
+    documentStatuses: "map", routeLabels: "map", groupNotes: "map",
+    manualFreights: "map", pickupQuantities: "map", driverDiscountPlans: "map",
+    retainedHistory: "array", manualRomaneios: "array",
+  },
+};
+
+function itemIdentity(value: unknown, index: number) {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  return String(record?.id || record?.key || `fallback:${index}:${JSON.stringify(value)}`);
+}
+
+function flattenItemState(stateKey: CloudStateKey, value: unknown) {
+  const flat = new Map<string, { collection: string; itemKey: string; position: number; value: unknown }>();
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  for (const [collection, kind] of Object.entries(itemShapes[stateKey] || {})) {
+    const current = source[collection];
+    if (kind === "map") {
+      for (const [itemKey, itemValue] of Object.entries(
+        current && typeof current === "object" && !Array.isArray(current) ? current : {},
+      )) flat.set(`${collection}\u0000${itemKey}`, { collection, itemKey, position: 0, value: itemValue });
+    } else {
+      const list = Array.isArray(current) ? current : [];
+      list.forEach((itemValue, index) => {
+        const itemKey = kind === "string-array" ? `${String(itemValue)}\u0000${index}` : itemIdentity(itemValue, index);
+        flat.set(`${collection}\u0000${itemKey}`, { collection, itemKey, position: index, value: itemValue });
+      });
+    }
+  }
+  return flat;
+}
+
+export function itemChanges(stateKey: CloudStateKey, base: unknown, value: unknown): ItemChange[] {
+  const before = flattenItemState(stateKey, base);
+  const after = flattenItemState(stateKey, value);
+  const changes: ItemChange[] = [];
+  for (const [key, item] of after) {
+    const previous = before.get(key);
+    if (!previous || previous.position !== item.position || !sameValue(previous.value, item.value))
+      changes.push({ collection: item.collection, itemKey: item.itemKey, position: item.position, value: item.value });
+  }
+  for (const [key, item] of before)
+    if (!after.has(key)) changes.push({ collection: item.collection, itemKey: item.itemKey, deleted: true });
+  return changes;
+}
+
+async function saveItemState(
+  stateKey: CloudStateKey, value: unknown, expectedVersion: string, baseValue: unknown,
+) {
+  const version = crypto.randomUUID();
+  const changes = itemChanges(stateKey, baseValue, value);
+  if (!changes.length) return expectedVersion;
+  const response = await fetchCloud(`${CLOUD_ITEMS_ENDPOINT}?key=${encodeURIComponent(stateKey)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedVersion, version, changes }),
+  });
+  if (response.status === 409) throw new CloudStateConflictError("Outra pessoa alterou os dados durante a gravação.");
   if (!response.ok) throw cloudError(response);
-  return response.json();
+  return version;
 }
 
 export async function saveCloudState(
@@ -326,7 +419,9 @@ export async function saveCloudStateReconciled<T>(
     try {
       return {
         value: localValue,
-        version: await saveCloudState(stateKey, localValue, version),
+        version: ITEM_STATE_KEYS.has(stateKey)
+          ? await saveItemState(stateKey, localValue, version, base)
+          : await saveCloudState(stateKey, localValue, version),
         reconciled,
       };
     } catch (error) {

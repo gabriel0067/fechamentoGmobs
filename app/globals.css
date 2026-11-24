@@ -2167,6 +2167,9 @@ button {
   color: #695719;
   font-weight: 800;
 }
+.daily-report-total-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; border: 1px solid #d7e4dc; border-radius: 12px; background: #f5f9f7; }
+.daily-report-total-fields label { display: grid; gap: 6px; color: #385646; font-size: 12px; font-weight: 800; }
+.daily-report-total-fields input { width: 100%; border: 1px solid #c9d8d0; border-radius: 9px; padding: 10px 11px; background: #fff; }
 .driver-manual-subject {
   display: grid;
   grid-template-columns: minmax(220px, 1.3fr) repeat(3, minmax(150px, 1fr)) auto;
@@ -2412,6 +2415,10 @@ button {
 .manual-romaneio-documents button { color: #a13d3d; background: #f9ecec; }
 .manual-romaneio-history button { color: #176f48; background: #e5f2eb; }
 .manual-romaneio-save { justify-self: end; }
+.manual-romaneio-completed { display: flex; align-items: center; gap: 10px; width: fit-content; padding: 11px 13px; border: 1px solid #cfe0d6; border-radius: 11px; background: #f4f9f6; color: #244d38; }
+.manual-romaneio-completed input { width: 18px; height: 18px; accent-color: #176f48; }
+.manual-romaneio-completed span { display: grid; gap: 2px; }
+.manual-romaneio-completed small { color: #6b7a72; font-weight: 600; }
 @media (max-width: 760px) {
   .manual-romaneio-fields { grid-template-columns: 1fr; }
   .manual-romaneio-documents article, .manual-romaneio-history article { align-items: flex-start; flex-wrap: wrap; }
