@@ -389,7 +389,7 @@ export function itemChanges(stateKey: CloudStateKey, base: unknown, value: unkno
         : added > 0 && previous.every((item, index) => sameValue(item, next[index])) ? "last" : undefined;
       if (!edge) { reindex.add(collection); continue; }
       const occupied = new Set(previous.map(itemIdentity));
-      const additions = (edge === "first" ? next.slice(0, added) : next.slice(previous.length)).map((item, index) => ({
+      const additions = (edge === "first" ? next.slice(0, added) : next.slice(previous.length)).map((item, index): ItemChange => ({
         collection, itemKey: itemIdentity(item, edge === "first" ? index : previous.length + index),
         position: edge === "first" ? index - added : index + 1, value: item, edge,
       }));
