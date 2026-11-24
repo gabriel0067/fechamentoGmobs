@@ -1,6 +1,7 @@
-import { gunzipSync } from "node:zlib";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { neon } from "@neondatabase/serverless";
 import { authenticatedUsername } from "../../auth";
+import { decodeItemKey, encodeItemKey, encodeItemPayload } from "../../cloud-item-codec";
 
 export const runtime = "nodejs";
 
@@ -47,6 +48,7 @@ function ensureSchema() {
       PRIMARY KEY (owner_id, backup_id, state_key))`);
     await sql().query("ALTER TABLE cloud_state_live_v3 ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready'");
     await sql().query("ALTER TABLE cloud_state_live_items_v3 ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0");
+    await sql().query("ALTER TABLE cloud_state_live_items_v3 ADD COLUMN IF NOT EXISTS payload_encoded BOOLEAN NOT NULL DEFAULT false");
     await sql().query(`CREATE INDEX IF NOT EXISTS cloud_state_live_items_v3_lookup
       ON cloud_state_live_items_v3 (owner_id, state_key, collection)`);
     await sql().query(`INSERT INTO cloud_state_activation_backups_v3
@@ -92,63 +94,58 @@ function flatten(stateKey: string, value: Record<string, unknown>) {
 }
 
 async function ensureSeeded(stateKey: string) {
-  let existing = await sql().query(
+  const existing = await sql().query(
     "SELECT version, status FROM cloud_state_live_v3 WHERE owner_id = $1 AND state_key = $2",
     [OWNER, stateKey],
   ) as { version: string; status: string }[];
   if (existing[0]?.status === "ready") return existing[0].version;
-  if (existing[0]?.status === "preparing") {
-    for (let attempt = 0; attempt < 25; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      existing = await sql().query(
-        "SELECT version, status FROM cloud_state_live_v3 WHERE owner_id = $1 AND state_key = $2",
-        [OWNER, stateKey],
-      ) as { version: string; status: string }[];
-      if (existing[0]?.status === "ready") return existing[0].version;
-    }
-    throw new Error(`A preparação de ${stateKey} ainda não terminou.`);
-  }
   const legacy = await sql().query(
     "SELECT version, encoding, payload FROM cloud_state_records WHERE owner_id = $1 AND state_key = $2",
     [OWNER, stateKey],
   ) as { version: string; encoding: string; payload: string }[];
   if (!legacy.length) return "";
   const version = `v3:${legacy[0].version}`;
-  const inserted = await sql().query(
-    `INSERT INTO cloud_state_live_v3 (owner_id, state_key, version, status)
-     VALUES ($1, $2, $3, 'preparing') ON CONFLICT DO NOTHING RETURNING version`,
-    [OWNER, stateKey, `preparing:${crypto.randomUUID()}`],
-  ) as { version: string }[];
-  if (inserted.length) {
-    const rows = flatten(stateKey, decodeLegacy(legacy[0].encoding, legacy[0].payload));
+  const attempt = `preparing:${crypto.randomUUID()}`;
+  const rows = flatten(stateKey, decodeLegacy(legacy[0].encoding, legacy[0].payload))
+    .map((row) => ({ ...row, item_key: encodeItemKey(row.item_key), ...encodeItemPayload(row.payload) }));
+  // The claim, replacement of incomplete rows, and activation commit together.
+  await sql().transaction((tx) => {
+    const queries = [
+      tx.query(
+        `INSERT INTO cloud_state_live_v3 (owner_id, state_key, version, status)
+         VALUES ($1, $2, $3, 'preparing')
+         ON CONFLICT (owner_id, state_key) DO UPDATE SET version = EXCLUDED.version
+         WHERE cloud_state_live_v3.status = 'preparing'`,
+        [OWNER, stateKey, attempt],
+      ),
+      tx.query(
+        `DELETE FROM cloud_state_live_items_v3 item USING cloud_state_live_v3 state
+         WHERE item.owner_id = $1 AND item.state_key = $2
+           AND state.owner_id = $1 AND state.state_key = $2
+           AND state.version = $3 AND state.status = 'preparing'`,
+        [OWNER, stateKey, attempt],
+      ),
+    ];
     for (let offset = 0; offset < rows.length; offset += 500) {
-      await sql().query(
+      queries.push(tx.query(
         `INSERT INTO cloud_state_live_items_v3
-          (owner_id, state_key, collection, item_key, position, payload)
-         SELECT $1, $2, row.collection, row.item_key, row.position, row.payload
-         FROM jsonb_to_recordset($3::jsonb)
-           AS row(collection TEXT, item_key TEXT, position INTEGER, payload JSONB)
-         ON CONFLICT (owner_id, state_key, collection, item_key)
-         DO NOTHING`,
-        [OWNER, stateKey, JSON.stringify(rows.slice(offset, offset + 500))],
-      );
+           (owner_id, state_key, collection, item_key, position, payload, payload_encoded)
+         SELECT $1, $2, row.collection, row.item_key, row.position, row.payload, row.payload_encoded
+         FROM cloud_state_live_v3 state, jsonb_to_recordset($4::jsonb)
+           AS row(collection TEXT, item_key TEXT, position INTEGER, payload JSONB, payload_encoded BOOLEAN)
+         WHERE state.owner_id = $1 AND state.state_key = $2
+           AND state.version = $3 AND state.status = 'preparing'
+         ON CONFLICT (owner_id, state_key, collection, item_key) DO NOTHING`,
+        [OWNER, stateKey, attempt, JSON.stringify(rows.slice(offset, offset + 500))],
+      ));
     }
-    await sql().query(
-      `UPDATE cloud_state_live_v3 SET version = $3, status = 'ready', updated_at = now()
-       WHERE owner_id = $1 AND state_key = $2 AND status = 'preparing'`,
-      [OWNER, stateKey, version],
-    );
-  } else {
-    for (let attempt = 0; attempt < 25; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      const concurrent = await sql().query(
-        "SELECT version FROM cloud_state_live_v3 WHERE owner_id = $1 AND state_key = $2 AND status = 'ready'",
-        [OWNER, stateKey],
-      ) as { version: string }[];
-      if (concurrent.length) return concurrent[0].version;
-    }
-    throw new Error(`A preparação concorrente de ${stateKey} ainda não terminou.`);
-  }
+    queries.push(tx.query(
+      `UPDATE cloud_state_live_v3 SET version = $4, status = 'ready', updated_at = now()
+       WHERE owner_id = $1 AND state_key = $2 AND version = $3 AND status = 'preparing'`,
+      [OWNER, stateKey, attempt, version],
+    ));
+    return queries;
+  });
   const ready = await sql().query(
     "SELECT version FROM cloud_state_live_v3 WHERE owner_id = $1 AND state_key = $2 AND status = 'ready'",
     [OWNER, stateKey],
@@ -216,19 +213,27 @@ export async function GET(request: Request) {
     const version = await ensureSeeded(access.stateKey);
     if (!version) return new Response(null, { status: 204 });
     const rows = await sql().query(
-      `SELECT collection, item_key, position, payload
+      `SELECT collection, item_key, position, payload, payload_encoded
        FROM cloud_state_live_items_v3
        WHERE owner_id = $1 AND state_key = $2
        ORDER BY collection, position, item_key`,
       [OWNER, access.stateKey],
-    ) as { collection: string; item_key: string; payload: unknown }[];
+    ) as { collection: string; item_key: string; payload: unknown; payload_encoded: boolean }[];
     const value: Record<string, unknown> = {};
     for (const [collection, kind] of Object.entries(shapes[access.stateKey]))
       value[collection] = kind === "map" ? {} : [];
     for (const row of rows) {
+      const payload = row.payload_encoded ? JSON.parse(String(row.payload)) : row.payload;
       if (shapes[access.stateKey][row.collection] === "map")
-        (value[row.collection] as Record<string, unknown>)[row.item_key] = row.payload;
-      else (value[row.collection] as unknown[]).push(row.payload);
+        (value[row.collection] as Record<string, unknown>)[decodeItemKey(row.item_key)] = payload;
+      else (value[row.collection] as unknown[]).push(payload);
+    }
+    if (request.headers.get("accept-encoding")?.includes("gzip")) {
+      const body = gzipSync(JSON.stringify({ value, version }));
+      return new Response(new Uint8Array(body), { headers: {
+        "cache-control": "no-store", "content-type": "application/json",
+        "content-encoding": "gzip", vary: "Accept-Encoding",
+      } });
     }
     return Response.json({ value, version }, { headers: { "cache-control": "no-store" } });
   } catch (error) { return failure(error); }
@@ -260,16 +265,20 @@ export async function PATCH(request: Request) {
            AND item.collection = change.collection AND item.item_key = change.item_key
        ), saved AS (
          INSERT INTO cloud_state_live_items_v3
-           (owner_id, state_key, collection, item_key, position, payload)
-         SELECT $1, $2, change.collection, change.item_key, coalesce(change.position, 0), change.payload
+           (owner_id, state_key, collection, item_key, position, payload, payload_encoded)
+         SELECT $1, $2, change.collection, change.item_key, coalesce(change.position, 0), change.payload, change.payload_encoded
          FROM accepted, jsonb_to_recordset($5::jsonb)
-           AS change(collection TEXT, item_key TEXT, position INTEGER, deleted BOOLEAN, payload JSONB)
+           AS change(collection TEXT, item_key TEXT, position INTEGER, deleted BOOLEAN, payload JSONB, payload_encoded BOOLEAN)
          WHERE change.deleted IS NOT TRUE
          ON CONFLICT (owner_id, state_key, collection, item_key)
-         DO UPDATE SET position = EXCLUDED.position, payload = EXCLUDED.payload, updated_at = now()
+         DO UPDATE SET position = EXCLUDED.position, payload = EXCLUDED.payload,
+           payload_encoded = EXCLUDED.payload_encoded, updated_at = now()
        ) SELECT version FROM accepted`,
       [OWNER, access.stateKey, input.expectedVersion, input.version,
-       JSON.stringify(changes.map((change) => ({ collection: change.collection, item_key: change.itemKey, position: change.position || 0, deleted: !!change.deleted, payload: change.deleted ? null : change.value })))],
+       JSON.stringify(changes.map((change) => ({
+         collection: change.collection, item_key: encodeItemKey(change.itemKey), position: change.position || 0,
+         deleted: !!change.deleted, ...encodeItemPayload(change.deleted ? null : change.value),
+       })))],
     ) as { version: string }[];
     if (!rows.length)
       return Response.json({ error: "Os dados foram alterados por outra pessoa. Nenhum registro foi substituído." }, { status: 409 });
