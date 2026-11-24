@@ -2,6 +2,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { decodeItemKey, encodeItemKey, encodeItemPayload } from "../app/cloud-item-codec.ts";
+import { itemChanges } from "../app/cloud-storage.ts";
+
+for (const [state, field] of [["closing-ops", "covers"], ["romaneio-ops", "retainedHistory"]]) {
+  test(`${field}: inserir no topo não reenvia o conteúdo dos registros anteriores`, () => {
+    const older = { id: "old", data: "x".repeat(5000) };
+    const added = { id: "new", data: "novo" };
+    assert.deepEqual(itemChanges(state, { [field]: [older] }, { [field]: [added, { data: older.data, id: older.id }] }), [
+      { collection: field, itemKey: "new", position: 0, value: added },
+      { collection: field, itemKey: "old", position: 1, move: true },
+    ]);
+  });
+}
 
 test("chaves e valores com NUL sobrevivem ao armazenamento em JSONB", () => {
   for (const key of ["normal", "Operador\u00000", 'gmobs:escaped:"normal"']) {
@@ -20,7 +32,7 @@ test("a gravacao individual envia somente o registro operacional alterado", asyn
   const source = await readFile(new URL("../app/cloud-storage.ts", import.meta.url), "utf8");
   assert.match(source, /ITEM_STATE_KEYS.*closing-ops.*romaneio-ops/s);
   assert.match(source, /function itemChanges/);
-  assert.match(source, /if \(!previous \|\| previous\.position !== item\.position \|\| !sameValue\(previous\.value, item\.value\)\)/);
+  assert.match(source, /if \(!previous \|\| !sameValue\(previous\.value, item\.value\)\)/);
   assert.match(source, /if \(!after\.has\(key\)\).*deleted: true/);
 });
 

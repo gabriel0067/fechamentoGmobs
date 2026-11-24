@@ -242,11 +242,19 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   const access = await authorize(request);
   if (access.response) return access.response;
-  let input: { expectedVersion?: string; version?: string; changes?: { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean }[] };
-  try { input = await request.json(); } catch { return Response.json({ error: "Alteração inválida." }, { status: 400 }); }
+  let input: { expectedVersion?: string; version?: string; changes?: { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean; move?: boolean }[] };
+  try {
+    const encoding = request.headers.get("x-gmobs-encoding");
+    input = encoding === "gzip-base64"
+      ? decodeLegacy(encoding, await request.text()) as typeof input
+      : await request.json();
+  } catch { return Response.json({ error: "Alteração inválida." }, { status: 400 }); }
   if (!input.expectedVersion || !input.version || !Array.isArray(input.changes) || input.changes.length > 20_000)
     return Response.json({ error: "Alteração inválida." }, { status: 400 });
-  const changes = input.changes.filter((change) => shapes[access.stateKey][change.collection] && change.itemKey);
+  const changes = input.changes.filter((change) =>
+    change && Object.hasOwn(shapes[access.stateKey], change.collection) &&
+    typeof change.itemKey === "string" && change.itemKey &&
+    (change.deleted === true || change.move === true || Object.hasOwn(change, "value")));
   if (changes.length !== input.changes.length)
     return Response.json({ error: "Alteração inválida." }, { status: 400 });
   try {
@@ -257,6 +265,13 @@ export async function PATCH(request: Request) {
          UPDATE cloud_state_live_v3 SET version = $4, updated_at = now()
          WHERE owner_id = $1 AND state_key = $2 AND version = $3 AND status = 'ready'
          RETURNING version
+       ), moved AS (
+         UPDATE cloud_state_live_items_v3 item SET position = change.position
+         FROM accepted, jsonb_to_recordset($5::jsonb)
+           AS change(collection TEXT, item_key TEXT, position INTEGER, move BOOLEAN, deleted BOOLEAN)
+         WHERE change.move IS TRUE AND change.deleted IS NOT TRUE
+           AND item.owner_id = $1 AND item.state_key = $2
+           AND item.collection = change.collection AND item.item_key = change.item_key
        ), removed AS (
          DELETE FROM cloud_state_live_items_v3 item
          USING accepted, jsonb_to_recordset($5::jsonb)
@@ -268,8 +283,8 @@ export async function PATCH(request: Request) {
            (owner_id, state_key, collection, item_key, position, payload, payload_encoded)
          SELECT $1, $2, change.collection, change.item_key, coalesce(change.position, 0), change.payload, change.payload_encoded
          FROM accepted, jsonb_to_recordset($5::jsonb)
-           AS change(collection TEXT, item_key TEXT, position INTEGER, deleted BOOLEAN, payload JSONB, payload_encoded BOOLEAN)
-         WHERE change.deleted IS NOT TRUE
+           AS change(collection TEXT, item_key TEXT, position INTEGER, deleted BOOLEAN, move BOOLEAN, payload JSONB, payload_encoded BOOLEAN)
+         WHERE change.deleted IS NOT TRUE AND change.move IS NOT TRUE
          ON CONFLICT (owner_id, state_key, collection, item_key)
          DO UPDATE SET position = EXCLUDED.position, payload = EXCLUDED.payload,
            payload_encoded = EXCLUDED.payload_encoded, updated_at = now()
@@ -277,7 +292,8 @@ export async function PATCH(request: Request) {
       [OWNER, access.stateKey, input.expectedVersion, input.version,
        JSON.stringify(changes.map((change) => ({
          collection: change.collection, item_key: encodeItemKey(change.itemKey), position: change.position || 0,
-         deleted: !!change.deleted, ...encodeItemPayload(change.deleted ? null : change.value),
+         deleted: !!change.deleted, move: !!change.move,
+         ...encodeItemPayload(change.deleted || change.move ? null : change.value),
        })))],
     ) as { version: string }[];
     if (!rows.length)

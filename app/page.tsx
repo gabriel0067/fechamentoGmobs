@@ -1200,7 +1200,7 @@ function useCloudStateSync<T>(
                 stateKey,
                 valueToSave,
                 expectedVersion,
-                cached?.version === expectedVersion ? cached.value : valueToSave,
+                cached?.version === expectedVersion ? cached.value : undefined,
               );
               await writeCloudStateCache(stateKey, result.version, result.value).catch(() => undefined);
               if (result.reconciled) {
@@ -7312,7 +7312,7 @@ export default function Home() {
           key,
           value,
           expectedVersion,
-          cached?.version === expectedVersion ? cached.value : value,
+          cached?.version === expectedVersion ? cached.value : undefined,
         );
         await writeCloudStateCache(key, result.version, result.value).catch(() => undefined);
         cloudVersionsRef.current[key] = result.version;

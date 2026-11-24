@@ -17,6 +17,7 @@ type CloudEncoding = "gzip-base64" | "json";
 const CLOUD_STATE_ENDPOINT = "/api/cloud-state";
 const CLOUD_ITEMS_ENDPOINT = "/api/cloud-items";
 const ITEM_STATE_KEYS = new Set<CloudStateKey>(["closing-ops", "romaneio-ops"]);
+const confirmedItemStates = new Map<CloudStateKey, CloudStateRecord<unknown>>();
 const TRANSFER_CHUNK_SIZE = 700_000;
 const CLOUD_RETRY_DELAYS = [250, 750, 1_500];
 
@@ -166,7 +167,9 @@ export async function loadCloudStateRecord<T>(stateKey: CloudStateKey) {
     );
     if (response.status === 204) return undefined;
     if (!response.ok) throw cloudError(response);
-    return response.json() as Promise<CloudStateRecord<T>>;
+    const record = await response.json() as CloudStateRecord<T>;
+    confirmedItemStates.set(stateKey, record);
+    return record;
   }
   const head = await fetchCloud(
     `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
@@ -226,8 +229,19 @@ export async function getCloudStateVersion(stateKey: CloudStateKey) {
 
 export class CloudStateConflictError extends Error {}
 
-const sameValue = (left: unknown, right: unknown) =>
-  JSON.stringify(left) === JSON.stringify(right);
+function sameValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right))
+    return Array.isArray(left) && Array.isArray(right) &&
+      left.length === right.length && left.every((value, index) => sameValue(value, right[index]));
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).filter((key) => leftRecord[key] !== undefined);
+  const rightKeys = Object.keys(rightRecord).filter((key) => rightRecord[key] !== undefined);
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => Object.hasOwn(rightRecord, key) && sameValue(leftRecord[key], rightRecord[key]));
+}
 
 export function mergeConcurrentValue(base: unknown, local: unknown, remote: unknown): unknown {
   if (sameValue(local, base)) return remote;
@@ -294,7 +308,7 @@ export async function getCloudStateVersions(): Promise<Partial<Record<CloudState
   return { ...(await legacyResponse.json()), ...(await itemResponse.json()) };
 }
 
-type ItemChange = { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean };
+type ItemChange = { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean; move?: boolean };
 const itemShapes: Record<string, Record<string, "array" | "map" | "string-array">> = {
   "closing-ops": {
     covers: "array", coverGenerators: "string-array", closingAdditionals: "array",
@@ -339,8 +353,10 @@ export function itemChanges(stateKey: CloudStateKey, base: unknown, value: unkno
   const changes: ItemChange[] = [];
   for (const [key, item] of after) {
     const previous = before.get(key);
-    if (!previous || previous.position !== item.position || !sameValue(previous.value, item.value))
+    if (!previous || !sameValue(previous.value, item.value))
       changes.push({ collection: item.collection, itemKey: item.itemKey, position: item.position, value: item.value });
+    else if (previous.position !== item.position)
+      changes.push({ collection: item.collection, itemKey: item.itemKey, position: item.position, move: true });
   }
   for (const [key, item] of before)
     if (!after.has(key)) changes.push({ collection: item.collection, itemKey: item.itemKey, deleted: true });
@@ -352,13 +368,23 @@ async function saveItemState(
 ) {
   const version = crypto.randomUUID();
   const changes = itemChanges(stateKey, baseValue, value);
-  if (!changes.length) return expectedVersion;
+  if (!changes.length) {
+    if (await getCloudStateVersion(stateKey) !== expectedVersion)
+      throw new CloudStateConflictError("Outra pessoa alterou os dados durante a gravação.");
+    return expectedVersion;
+  }
+  const { encoding, payload } = await encodeState({ expectedVersion, version, changes });
   const response = await fetchCloud(`${CLOUD_ITEMS_ENDPOINT}?key=${encodeURIComponent(stateKey)}`, {
     method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ expectedVersion, version, changes }),
+    headers: { "content-type": "text/plain;charset=UTF-8", "x-gmobs-encoding": encoding },
+    body: payload,
   });
-  if (response.status === 409) throw new CloudStateConflictError("Outra pessoa alterou os dados durante a gravação.");
+  if (response.status === 409) {
+    if (await getCloudStateVersion(stateKey).catch(() => "") === version) return version;
+    throw new CloudStateConflictError("Outra pessoa alterou os dados durante a gravação.");
+  }
+  if (response.status === 413)
+    throw new Error("O lote excedeu o limite de envio. As alterações continuam pendentes.");
   if (!response.ok) throw cloudError(response);
   return version;
 }
@@ -409,19 +435,29 @@ export async function saveCloudStateReconciled<T>(
   stateKey: CloudStateKey,
   value: T,
   expectedVersion: string,
-  baseValue: T,
+  baseValue: T | undefined,
 ): Promise<CloudSaveResult<T>> {
   let localValue = value;
-  let base = baseValue;
+  const itemState = ITEM_STATE_KEYS.has(stateKey);
+  const confirmed = confirmedItemStates.get(stateKey);
+  let base = itemState && confirmed?.version === expectedVersion ? confirmed.value as T : baseValue;
+  if (itemState && base === undefined) {
+    const remote = await loadCloudStateRecord<T>(stateKey);
+    if (!remote || remote.version !== expectedVersion)
+      throw new CloudStateConflictError("Não foi possível confirmar a versão de origem. A alteração continua pendente.");
+    base = remote.value;
+  }
   let version = expectedVersion;
   let reconciled = false;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
+      const savedVersion = itemState
+        ? await saveItemState(stateKey, localValue, version, base)
+        : await saveCloudState(stateKey, localValue, version);
+      if (itemState) confirmedItemStates.set(stateKey, { value: localValue, version: savedVersion });
       return {
         value: localValue,
-        version: ITEM_STATE_KEYS.has(stateKey)
-          ? await saveItemState(stateKey, localValue, version, base)
-          : await saveCloudState(stateKey, localValue, version),
+        version: savedVersion,
         reconciled,
       };
     } catch (error) {

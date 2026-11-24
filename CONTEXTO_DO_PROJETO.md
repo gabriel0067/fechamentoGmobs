@@ -562,3 +562,5 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 - No Relatório de diárias, cada motorista aceita valores por dia ou um valor total direto para a quinzena. O total direto substitui a soma dos dias no PDF; um desconto adicional opcional é abatido e exibido separadamente.
 
 Em 24/11/2026, a API de registros individuais passou a codificar chaves e valores com NUL de forma reversível para o Neon. A preparação interrompida pode ser retomada em uma transação, que reconstrói somente o conjunto ainda em preparação a partir da origem preservada. As respostas operacionais aceitam gzip para reduzir o tamanho retornado pela Vercel.
+
+Para Capas, Retidos e os demais registros operacionais, a gravação envia apenas posição ao mover um item e compacta os lotes. A versão de origem é confirmada antes de gerar o lote quando falta cache local. A versão e as alterações continuam sendo aplicadas na mesma transação.
