@@ -564,3 +564,7 @@ Atualize este arquivo sempre que houver uma decisão relevante, mudança de regr
 Em 24/11/2026, a API de registros individuais passou a codificar chaves e valores com NUL de forma reversível para o Neon. A preparação interrompida pode ser retomada em uma transação, que reconstrói somente o conjunto ainda em preparação a partir da origem preservada. As respostas operacionais aceitam gzip para reduzir o tamanho retornado pela Vercel.
 
 Para Capas, Retidos e os demais registros operacionais, a gravação envia apenas posição ao mover um item e compacta os lotes. A versão de origem é confirmada antes de gerar o lote quando falta cache local. A versão e as alterações continuam sendo aplicadas na mesma transação.
+
+Novas Capas e eventos de Retidos recebem posição antes ou depois do histórico, sem atualizar a posição dos itens existentes. Uma edição simples mantém a posição já gravada. O navegador reutiliza a versão operacional confirmada em memória para evitar clonar todo o histórico no IndexedDB a cada gravação.
+
+A aba Capas reaproveita o índice de documentos já construído e mantém o índice de capas salvas entre trocas de tela. O relatório renderiza 50 capas por página e conserva pesquisa e seleção sobre todo o resultado.

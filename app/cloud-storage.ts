@@ -18,6 +18,15 @@ const CLOUD_STATE_ENDPOINT = "/api/cloud-state";
 const CLOUD_ITEMS_ENDPOINT = "/api/cloud-items";
 const ITEM_STATE_KEYS = new Set<CloudStateKey>(["closing-ops", "romaneio-ops"]);
 const confirmedItemStates = new Map<CloudStateKey, CloudStateRecord<unknown>>();
+
+export function rememberConfirmedItemState<T>(key: CloudStateKey, record: CloudStateRecord<T>) {
+  if (ITEM_STATE_KEYS.has(key)) confirmedItemStates.set(key, record);
+}
+
+export function getConfirmedItemState<T>(key: CloudStateKey, version: string) {
+  const record = confirmedItemStates.get(key);
+  return record?.version === version ? record as CloudStateRecord<T> : undefined;
+}
 const TRANSFER_CHUNK_SIZE = 700_000;
 const CLOUD_RETRY_DELAYS = [250, 750, 1_500];
 
@@ -308,7 +317,8 @@ export async function getCloudStateVersions(): Promise<Partial<Record<CloudState
   return { ...(await legacyResponse.json()), ...(await itemResponse.json()) };
 }
 
-type ItemChange = { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean; move?: boolean };
+type ItemChange = { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean; move?: boolean; edge?: "first" | "last"; keepPosition?: boolean };
+const edgeCollections = new Set(["covers", "retainedHistory"]);
 const itemShapes: Record<string, Record<string, "array" | "map" | "string-array">> = {
   "closing-ops": {
     covers: "array", coverGenerators: "string-array", closingAdditionals: "array",
@@ -348,14 +358,55 @@ function flattenItemState(stateKey: CloudStateKey, value: unknown) {
 }
 
 export function itemChanges(stateKey: CloudStateKey, base: unknown, value: unknown): ItemChange[] {
-  const before = flattenItemState(stateKey, base);
-  const after = flattenItemState(stateKey, value);
   const changes: ItemChange[] = [];
+  const reindex = new Set<string>();
+  const previousState = { ...base as Record<string, unknown> };
+  const nextState = { ...value as Record<string, unknown> };
+  for (const [collection, kind] of Object.entries(itemShapes[stateKey] || {})) {
+    const previous = previousState[collection];
+    const next = nextState[collection];
+    if (previous !== next) {
+      if (kind !== "array" || !edgeCollections.has(collection) ||
+          !Array.isArray(previous) || !Array.isArray(next)) continue;
+      if ([...previous, ...next].some((item) => !item || typeof item !== "object" ||
+          !((item as Record<string, unknown>).id || (item as Record<string, unknown>).key))) {
+        reindex.add(collection);
+        continue;
+      }
+      const added = next.length - previous.length;
+      const idsUnchanged = added === 0 && previous.every((item, index) => itemIdentity(item, index) === itemIdentity(next[index], index));
+      if (idsUnchanged) {
+        next.forEach((item, index) => {
+          if (!sameValue(previous[index], item)) changes.push({
+            collection, itemKey: itemIdentity(item, index), value: item, keepPosition: true,
+          });
+        });
+        delete previousState[collection];
+        delete nextState[collection];
+        continue;
+      }
+      const edge = added > 0 && previous.every((item, index) => sameValue(item, next[index + added])) ? "first"
+        : added > 0 && previous.every((item, index) => sameValue(item, next[index])) ? "last" : undefined;
+      if (!edge) { reindex.add(collection); continue; }
+      const occupied = new Set(previous.map(itemIdentity));
+      const additions = (edge === "first" ? next.slice(0, added) : next.slice(previous.length)).map((item, index) => ({
+        collection, itemKey: itemIdentity(item, edge === "first" ? index : previous.length + index),
+        position: edge === "first" ? index - added : index + 1, value: item, edge,
+      }));
+      if (additions.some(({ itemKey }) => occupied.has(itemKey)) ||
+          new Set(additions.map(({ itemKey }) => itemKey)).size !== added) { reindex.add(collection); continue; }
+      changes.push(...additions);
+    }
+    delete previousState[collection];
+    delete nextState[collection];
+  }
+  const before = flattenItemState(stateKey, previousState);
+  const after = flattenItemState(stateKey, nextState);
   for (const [key, item] of after) {
     const previous = before.get(key);
     if (!previous || !sameValue(previous.value, item.value))
       changes.push({ collection: item.collection, itemKey: item.itemKey, position: item.position, value: item.value });
-    else if (previous.position !== item.position)
+    else if (previous.position !== item.position || reindex.has(item.collection))
       changes.push({ collection: item.collection, itemKey: item.itemKey, position: item.position, move: true });
   }
   for (const [key, item] of before)

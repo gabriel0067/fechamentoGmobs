@@ -12,11 +12,13 @@ import {
 } from "react";
 import {
   CloudStateConflictError,
+  getConfirmedItemState,
   getCloudStateVersion,
   getCloudStateVersions,
   isHostedSite,
   loadCloudStateRecord,
   mergeConcurrentValue,
+  rememberConfirmedItemState,
   saveCloudState,
   saveCloudStateReconciled,
   type CloudStateKey,
@@ -1195,14 +1197,16 @@ function useCloudStateSync<T>(
             onStart();
             try {
               const expectedVersion = getExpectedVersion(stateKey);
-              const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
+              const cached = getConfirmedItemState<T>(stateKey, expectedVersion) ??
+                await readCloudStateCache<T>(stateKey).catch(() => null);
               const result = await saveCloudStateReconciled(
                 stateKey,
                 valueToSave,
                 expectedVersion,
                 cached?.version === expectedVersion ? cached.value : undefined,
               );
-              await writeCloudStateCache(stateKey, result.version, result.value).catch(() => undefined);
+              if (stateKey !== "closing-ops" && stateKey !== "romaneio-ops")
+                await writeCloudStateCache(stateKey, result.version, result.value).catch(() => undefined);
               if (result.reconciled) {
                 if (pendingSaveRef.current) {
                   const combined = mergeConcurrentValue(
@@ -1435,8 +1439,10 @@ function LoginGate({
 async function loadCachedCloudStateRecord<T>(stateKey: CloudStateKey) {
   const version = await getCloudStateVersion(stateKey);
   const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
-  if (version && cached?.version === version)
+  if (version && cached?.version === version) {
+    rememberConfirmedItemState(stateKey, cached);
     return { value: cached.value, version };
+  }
   const record = await loadCloudStateRecord<T>(stateKey);
   if (record)
     void writeCloudStateCache(stateKey, record.version, record.value).catch(() => undefined);
@@ -1517,6 +1523,7 @@ export default function Home() {
   const [covers, setCovers] = useState<CoverExport[]>([]);
   const [coverGenerators, setCoverGenerators] = useState<string[]>([]);
   const [coverSection, setCoverSection] = useState<CoverKind | "report">("shipment");
+  const [coverReportPage, setCoverReportPage] = useState(0);
   const [coverPartnerId, setCoverPartnerId] = useState("");
   const [coverChoiceOpen, setCoverChoiceOpen] = useState(false);
   const [coverChoiceKind, setCoverChoiceKind] = useState<CoverKind | "">("");
@@ -3876,26 +3883,7 @@ export default function Home() {
   const effectiveCoverGenerator = activeOperator;
   const coverDraftKey = `${coverSection}|${effectiveCoverPartnerId}`;
   const currentCoverDraft = coverDrafts[coverDraftKey] || [];
-  const coverReferenceLookup = useMemo(() => {
-    if (tab !== "covers" || coverSection === "report")
-      return new Map<string, Map<string, Entry>>();
-    const uniqueEntries = new Map<string, Entry>();
-    [...entriesWithTde, ...romaneioReferenceEntries].forEach((entry) =>
-      uniqueEntries.set(entry.id, entry),
-    );
-    const lookup = new Map<string, Map<string, Entry>>();
-    uniqueEntries.forEach((entry) => {
-      documentLookupTokens(entry).forEach((token) => {
-        const bucket = lookup.get(token) || new Map<string, Entry>();
-        bucket.set(entry.id, entry);
-        lookup.set(token, bucket);
-      });
-    });
-    return lookup;
-  }, [coverSection, entriesWithTde, romaneioReferenceEntries, tab]);
   const savedCoverDocumentLookup = useMemo(() => {
-    if (tab !== "covers" || coverSection === "report")
-      return new Map<string, CoverDocumentExport[]>();
     const lookup = new Map<string, CoverDocumentExport[]>();
     covers
       .filter((cover) => cover.id !== editingCoverId)
@@ -3908,29 +3896,33 @@ export default function Home() {
         });
       });
     return lookup;
-  }, [coverSection, covers, editingCoverId, tab]);
+  }, [covers, editingCoverId]);
   const reportCovers = useMemo(
     () => {
-      if (tab !== "covers" || coverSection !== "report") return [];
+      if (coverSection !== "report") return [];
+      const search = scanKey(coverReportSearch);
       return covers.filter((cover) => {
       const day = cover.createdAt.slice(0, 10);
       const dateMatches = (!coverReportFrom || day >= coverReportFrom) && (!coverReportTo || day <= coverReportTo);
-      const search = scanKey(coverReportSearch);
-      if (!search) return dateMatches;
-      const coverMatches = !search || scanKey(cover.id).includes(search) || String(cover.sequenceNumber || "").includes(search);
-      const documentMatches = cover.documents.some((document) => matchesCoverDocumentSearch(document, coverReportSearch));
-      return dateMatches && (coverMatches || documentMatches);
+      if (!dateMatches || !search) return dateMatches;
+      return scanKey(cover.id).includes(search) || String(cover.sequenceNumber || "").includes(search) ||
+        cover.documents.some((document) => matchesCoverDocumentSearch(document, coverReportSearch));
     }).sort((left, right) =>
       (Date.parse(right.createdAt) || 0) - (Date.parse(left.createdAt) || 0) ||
       (right.sequenceNumber || 0) - (left.sequenceNumber || 0) ||
       right.id.localeCompare(left.id, "pt-BR"),
     );
     },
-    [coverReportFrom, coverReportSearch, coverReportTo, coverSection, covers, tab],
+    [coverReportFrom, coverReportSearch, coverReportTo, coverSection, covers],
   );
-  const selectedReportCovers = reportCovers.filter((cover) =>
-    selectedCoverReportIds.includes(cover.id),
-  );
+  const coverReportPageSize = 50;
+  const coverReportPageCount = Math.max(1, Math.ceil(reportCovers.length / coverReportPageSize));
+  const activeCoverReportPage = Math.min(coverReportPage, coverReportPageCount - 1);
+  const visibleReportCovers = reportCovers.slice(activeCoverReportPage * coverReportPageSize, (activeCoverReportPage + 1) * coverReportPageSize);
+  const selectedReportCovers = useMemo(() => {
+    const selected = new Set(selectedCoverReportIds);
+    return reportCovers.filter((cover) => selected.has(cover.id));
+  }, [reportCovers, selectedCoverReportIds]);
   const allIds = partners.map((p) => p.id);
   const assignmentPartners = useMemo(() => {
     const options = new Map<string, string>();
@@ -6294,7 +6286,7 @@ export default function Home() {
     }
     const indexedMatches = new Map<string, Entry>();
     scanLookupTokens(raw).forEach((token) =>
-      coverReferenceLookup.get(token)?.forEach((entry) => indexedMatches.set(entry.id, entry)),
+      manualRomaneioScanIndex.get(token)?.forEach((entry) => indexedMatches.set(entry.id, entry)),
     );
     const matches = [...indexedMatches.values()].filter((entry) =>
       entryMatchesGlobalDocumentScan(entry, raw),
@@ -7056,7 +7048,8 @@ export default function Home() {
         markCloudSaveStart();
         cloudSaveStarted = true;
         const expectedVersion = getExpectedCloudVersion("closing-ops");
-        const cached = await readCloudStateCache<typeof closingOpsCloudState>("closing-ops").catch(() => null);
+        const cached = getConfirmedItemState<typeof closingOpsCloudState>("closing-ops", expectedVersion) ??
+          await readCloudStateCache<typeof closingOpsCloudState>("closing-ops").catch(() => null);
         const nextClosingOpsState = { ...closingOpsCloudState, covers: nextCovers };
         const result = await saveCloudStateReconciled(
           "closing-ops",
@@ -7064,7 +7057,6 @@ export default function Home() {
           expectedVersion,
           cached?.version === expectedVersion ? cached.value : closingOpsCloudState,
         );
-        await writeCloudStateCache("closing-ops", result.version, result.value).catch(() => undefined);
         reconcileClosingOps(result.value);
         markCloudSaveFinish("closing-ops", true, result.version);
       } else {
@@ -8957,17 +8949,17 @@ export default function Home() {
               <div className="cover-report">
                 <section className="cover-report-filters">
                   <div><small>HISTÓRICO DE CAPAS</small><h3>Filtre, selecione a capa e gere o relatório</h3></div>
-                  <label>De<input type="date" value={coverReportFrom} onChange={(event) => setCoverReportFrom(event.target.value)} /></label>
-                  <label>Até<input type="date" value={coverReportTo} onChange={(event) => setCoverReportTo(event.target.value)} /></label>
+                  <label>De<input type="date" value={coverReportFrom} onChange={(event) => { setCoverReportPage(0); setCoverReportFrom(event.target.value); }} /></label>
+                  <label>Até<input type="date" value={coverReportTo} onChange={(event) => { setCoverReportPage(0); setCoverReportTo(event.target.value); }} /></label>
                   <button type="button" className="primary" disabled={!selectedReportCovers.length} onClick={async () => (await loadExcelModule()).exportCoversReportXlsx(selectedReportCovers, coverReportFrom, coverReportTo)}>Gerar relatório ({selectedReportCovers.length})</button>
                   <button type="button" className="danger" disabled={!selectedReportCovers.length} onClick={() => setCoverDeleteConfirmation(true)}>Excluir selecionadas</button>
                 </section>
                 <section className="cover-report-search">
-                  <ConfirmedSearchField label="Localizar por identificador da capa ou documento" value={coverReportSearch} onSearch={setCoverReportSearch} placeholder="Ex.: 10000, E-10000, NF, MD-e, CTE ou chave" />
+                  <ConfirmedSearchField label="Localizar por identificador da capa ou documento" value={coverReportSearch} onSearch={(value) => { setCoverReportPage(0); setCoverReportSearch(value); }} placeholder="Ex.: 10000, E-10000, NF, MD-e, CTE ou chave" />
                   <small>{coverReportSearch ? `${reportCovers.length} capa(s) encontrada(s).` : "A busca mostra a capa pelo número, identificador ou documento incluído."}</small>
                 </section>
                 <div className="cover-history">
-                  {reportCovers.length ? reportCovers.map((cover) => (
+                  {visibleReportCovers.length ? visibleReportCovers.map((cover) => (
                     <div className={selectedCoverReportIds.includes(cover.id) ? "selected" : ""} key={cover.id}>
                       <input type="checkbox" aria-label={`Selecionar capa ${cover.id}`} checked={selectedCoverReportIds.includes(cover.id)} onChange={(event) => setSelectedCoverReportIds((current) => event.target.checked ? [...new Set([...current, cover.id])] : current.filter((id) => id !== cover.id))} />
                       <span className={`cover-kind ${cover.kind}`}>{cover.kind === "shipment" ? "Embarque" : cover.kind === "collection" ? "Coleta" : "Capas"}</span>
@@ -8980,6 +8972,11 @@ export default function Home() {
                     </div>
                   )) : <p className="cover-empty">Nenhuma capa salva neste período.</p>}
                 </div>
+                {coverReportPageCount > 1 && <div className="toolbar" aria-label="Páginas do relatório de capas">
+                  <button type="button" disabled={activeCoverReportPage === 0} onClick={() => setCoverReportPage(activeCoverReportPage - 1)}>Anterior</button>
+                  <span>{activeCoverReportPage + 1} / {coverReportPageCount}</span>
+                  <button type="button" disabled={activeCoverReportPage + 1 === coverReportPageCount} onClick={() => setCoverReportPage(activeCoverReportPage + 1)}>Próxima</button>
+                </div>}
               </div>
             )}
             {coverSection !== "report" && !coverChoiceOpen && <button type="button" className="primary cover-floating-generate" disabled={!currentCoverDraft.length || savingCover} onClick={generateCover}>{savingCover ? "Salvando capa..." : editingCoverId ? `Salvar ${editingCoverId}` : "Gerar capa"} ({currentCoverDraft.length})</button>}

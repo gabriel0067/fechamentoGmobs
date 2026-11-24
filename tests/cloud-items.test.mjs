@@ -9,8 +9,13 @@ for (const [state, field] of [["closing-ops", "covers"], ["romaneio-ops", "retai
     const older = { id: "old", data: "x".repeat(5000) };
     const added = { id: "new", data: "novo" };
     assert.deepEqual(itemChanges(state, { [field]: [older] }, { [field]: [added, { data: older.data, id: older.id }] }), [
-      { collection: field, itemKey: "new", position: 0, value: added },
-      { collection: field, itemKey: "old", position: 1, move: true },
+      { collection: field, itemKey: "new", position: -1, value: added, edge: "first" },
+    ]);
+    assert.deepEqual(itemChanges(state, { [field]: [older] }, { [field]: [older, added] }), [
+      { collection: field, itemKey: "new", position: 1, value: added, edge: "last" },
+    ]);
+    assert.deepEqual(itemChanges(state, { [field]: [older, added] }, { [field]: [older, { ...added, data: "editado" }] }), [
+      { collection: field, itemKey: "new", value: { ...added, data: "editado" }, keepPosition: true },
     ]);
   });
 }

@@ -242,7 +242,7 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   const access = await authorize(request);
   if (access.response) return access.response;
-  let input: { expectedVersion?: string; version?: string; changes?: { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean; move?: boolean }[] };
+  let input: { expectedVersion?: string; version?: string; changes?: { collection: string; itemKey: string; position?: number; value?: unknown; deleted?: boolean; move?: boolean; edge?: "first" | "last"; keepPosition?: boolean }[] };
   try {
     const encoding = request.headers.get("x-gmobs-encoding");
     input = encoding === "gzip-base64"
@@ -281,18 +281,34 @@ export async function PATCH(request: Request) {
        ), saved AS (
          INSERT INTO cloud_state_live_items_v3
            (owner_id, state_key, collection, item_key, position, payload, payload_encoded)
-         SELECT $1, $2, change.collection, change.item_key, coalesce(change.position, 0), change.payload, change.payload_encoded
+         SELECT $1, $2, change.collection, change.item_key,
+           CASE change.edge
+             WHEN 'first' THEN COALESCE(bounds.first_position, 0) + change.position
+             WHEN 'last' THEN COALESCE(bounds.last_position, -1) + change.position
+             ELSE COALESCE(change.position, 0)
+           END,
+           change.payload, change.payload_encoded
          FROM accepted, jsonb_to_recordset($5::jsonb)
-           AS change(collection TEXT, item_key TEXT, position INTEGER, deleted BOOLEAN, move BOOLEAN, payload JSONB, payload_encoded BOOLEAN)
+           AS change(collection TEXT, item_key TEXT, position INTEGER, deleted BOOLEAN, move BOOLEAN, edge TEXT, keep_position BOOLEAN, payload JSONB, payload_encoded BOOLEAN)
+         LEFT JOIN LATERAL (
+           SELECT min(position) AS first_position, max(position) AS last_position
+           FROM cloud_state_live_items_v3
+           WHERE change.edge IS NOT NULL AND owner_id = $1 AND state_key = $2 AND collection = change.collection
+         ) bounds ON true
          WHERE change.deleted IS NOT TRUE AND change.move IS NOT TRUE
          ON CONFLICT (owner_id, state_key, collection, item_key)
-         DO UPDATE SET position = EXCLUDED.position, payload = EXCLUDED.payload,
+         DO UPDATE SET position = CASE WHEN EXISTS (
+             SELECT 1 FROM jsonb_to_recordset($5::jsonb) AS edits(collection TEXT, item_key TEXT, keep_position BOOLEAN)
+             WHERE edits.keep_position IS TRUE AND edits.collection = EXCLUDED.collection AND edits.item_key = EXCLUDED.item_key
+           ) THEN cloud_state_live_items_v3.position ELSE EXCLUDED.position END,
+           payload = EXCLUDED.payload,
            payload_encoded = EXCLUDED.payload_encoded, updated_at = now()
        ) SELECT version FROM accepted`,
       [OWNER, access.stateKey, input.expectedVersion, input.version,
        JSON.stringify(changes.map((change) => ({
          collection: change.collection, item_key: encodeItemKey(change.itemKey), position: change.position || 0,
          deleted: !!change.deleted, move: !!change.move,
+         edge: change.edge, keep_position: !!change.keepPosition,
          ...encodeItemPayload(change.deleted || change.move ? null : change.value),
        })))],
     ) as { version: string }[];
