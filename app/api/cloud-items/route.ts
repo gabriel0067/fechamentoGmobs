@@ -7,6 +7,8 @@ export const runtime = "nodejs";
 
 const OWNER = "shared:fechamentos-gmobs";
 const ITEM_KEYS = new Set(["closing-ops", "romaneio-ops"]);
+const READ_BATCH_SIZE = 1_000;
+const READ_BATCH_CONCURRENCY = 4;
 let client: ReturnType<typeof neon> | undefined;
 let schemaReady: Promise<void> | undefined;
 let manualSequenceReady: Promise<unknown> | undefined;
@@ -271,26 +273,56 @@ export async function GET(request: Request) {
   try {
     await ensureSchema();
     if (!(await ensureSeeded(access.stateKey))) return new Response(null, { status: 204 });
-    const rows = await sql().query(
-      `SELECT state.version, item.collection, item.item_key, item.payload, item.payload_encoded
+    const [snapshot] = await sql().query(
+      `SELECT state.version, (SELECT count(*) FROM cloud_state_live_items_v3 item
+         WHERE item.owner_id = state.owner_id AND item.state_key = state.state_key) AS item_count
        FROM cloud_state_live_v3 state
-       LEFT JOIN cloud_state_live_items_v3 item ON item.owner_id = state.owner_id AND item.state_key = state.state_key
-       WHERE state.owner_id = $1 AND state.state_key = $2 AND state.status = 'ready'
-       ORDER BY item.collection, item.position, item.item_key`,
+       WHERE state.owner_id = $1 AND state.state_key = $2 AND state.status = 'ready'`,
       [OWNER, access.stateKey],
-    ) as { version: string; collection: string | null; item_key: string; payload: unknown; payload_encoded: boolean }[];
-    const version = rows[0]?.version;
-    if (!version) return new Response(null, { status: 204 });
+    ) as { version: string; item_count: string | number }[];
+    if (!snapshot) return new Response(null, { status: 204 });
+    const { version } = snapshot;
+    const itemCount = Number(snapshot.item_count);
+    const readBatch = async (offset: number) => await sql().query(
+      `WITH page_keys AS MATERIALIZED (
+         SELECT collection, item_key
+         FROM cloud_state_live_items_v3
+         WHERE owner_id = $1 AND state_key = $2
+         ORDER BY collection, item_key LIMIT $4 OFFSET $5
+       )
+       SELECT item.collection, item.item_key, item.position, item.payload, item.payload_encoded
+       FROM page_keys
+       JOIN cloud_state_live_items_v3 item ON item.owner_id = $1 AND item.state_key = $2
+         AND item.collection = page_keys.collection AND item.item_key = page_keys.item_key
+       JOIN cloud_state_live_v3 state ON state.owner_id = item.owner_id AND state.state_key = item.state_key
+       WHERE state.version = $3 AND state.status = 'ready'
+       ORDER BY page_keys.collection, page_keys.item_key`,
+      [OWNER, access.stateKey, version, READ_BATCH_SIZE, offset],
+    ) as { collection: string; item_key: string; position: number; payload: unknown; payload_encoded: boolean }[];
     const value: Record<string, unknown> = {};
+    const lists = new Map<string, { position: number; payload: unknown }[]>();
     for (const [collection, kind] of Object.entries(shapes[access.stateKey]))
-      value[collection] = kind === "map" ? {} : [];
-    for (const row of rows) {
-      if (!row.collection || !Object.hasOwn(shapes[access.stateKey], row.collection)) continue;
-      const payload = row.payload_encoded ? JSON.parse(String(row.payload)) : row.payload;
-      if (shapes[access.stateKey][row.collection] === "map")
-        (value[row.collection] as Record<string, unknown>)[decodeItemKey(row.item_key)] = payload;
-      else (value[row.collection] as unknown[]).push(payload);
+      if (kind === "map") value[collection] = {};
+      else lists.set(collection, []);
+    const waveSize = READ_BATCH_SIZE * READ_BATCH_CONCURRENCY;
+    for (let start = 0; start < itemCount; start += waveSize) {
+      const batchCount = Math.min(READ_BATCH_CONCURRENCY, Math.ceil((itemCount - start) / READ_BATCH_SIZE));
+      const pages = await Promise.all(Array.from({ length: batchCount }, (_, index) =>
+        readBatch(start + index * READ_BATCH_SIZE),
+      ));
+      const expectedRows = Math.min(waveSize, itemCount - start);
+      if (pages.reduce((total, rows) => total + rows.length, 0) !== expectedRows)
+        return Response.json({ error: "Os dados mudaram durante a leitura. Tente novamente." }, { status: 409 });
+      for (const rows of pages) for (const row of rows) {
+        if (!Object.hasOwn(shapes[access.stateKey], row.collection)) continue;
+        const payload = row.payload_encoded ? JSON.parse(String(row.payload)) : row.payload;
+        if (shapes[access.stateKey][row.collection] === "map")
+          (value[row.collection] as Record<string, unknown>)[decodeItemKey(row.item_key)] = payload;
+        else lists.get(row.collection)?.push({ position: row.position, payload });
+      }
     }
+    for (const [collection, rows] of lists)
+      value[collection] = rows.sort((left, right) => left.position - right.position).map((row) => row.payload);
     if (request.headers.get("accept-encoding")?.includes("gzip")) {
       const body = gzipSync(JSON.stringify({ value, version }));
       return new Response(new Uint8Array(body), { headers: {

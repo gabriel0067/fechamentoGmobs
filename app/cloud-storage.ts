@@ -33,14 +33,14 @@ const CLOUD_RETRY_DELAYS = [250, 750, 1_500];
 const wait = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-async function fetchCloud(input: RequestInfo | URL, init?: RequestInit) {
+async function fetchCloud(input: RequestInfo | URL, init?: RequestInit, readTimeout = 12_000) {
   let lastError: unknown;
   for (let attempt = 0; attempt <= CLOUD_RETRY_DELAYS.length; attempt++) {
     try {
       const method = init?.method || "GET";
       const timedRead = method === "GET" || method === "HEAD";
       const response = await fetch(input, timedRead && !init?.signal
-        ? { ...init, signal: AbortSignal.timeout(12_000) }
+        ? { ...init, signal: AbortSignal.timeout(readTimeout) }
         : init);
       if (response.status < 500 && response.status !== 429) return response;
       lastError = new Error(`Falha temporária do banco (${response.status}).`);
@@ -179,7 +179,10 @@ export async function loadCloudStateRecord<T>(stateKey: CloudStateKey, retryOnVe
     const response = await fetchCloud(
       `${CLOUD_ITEMS_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
       { cache: "no-store" },
+      30_000,
     );
+    if (response.status === 409 && retryOnVersionChange)
+      return loadCloudStateRecord<T>(stateKey, false);
     if (response.status === 204) return undefined;
     if (!response.ok) throw cloudError(response);
     const record = await response.json() as CloudStateRecord<T>;

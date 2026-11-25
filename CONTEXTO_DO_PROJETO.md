@@ -582,3 +582,9 @@ A aba Capas reaproveita o índice de documentos já construído e mantém o índ
 - Consultas de versão e leitura evitam preparar tabelas de upload. Quando o esquema operacional e o backup de ativação já existem, a API não repete a preparação. A leitura dos registros individuais usa a versão da mesma consulta que devolve os dados.
 - No relatório de diárias, deixar o total quinzenal em branco soma os pagamentos dos dias. Um total preenchido substitui a soma. A prévia e o PDF usam a mesma regra para total bruto, descontos vinculados e manuais, e total a pagar.
 - Próxima etapa: conferir a entrada autenticada com o volume real após publicar e acompanhar o tempo de resposta e os erros pela Vercel.
+
+## Correção da leitura operacional em produção — 25/11/2026
+
+- Os registros da Vercel mostraram que a conexão encerrava a resposta durante a consulta em `/api/cloud-items` após o login. A leitura passou a buscar até mil registros por consulta, com até quatro consultas simultâneas, usando o índice já existente e mantendo a ordem do histórico.
+- Todos os lotes precisam corresponder à mesma versão. Se outra operação alterar os dados durante a leitura, o aplicativo recomeça a consulta uma vez. A gravação permanece com o mesmo controle de versão.
+- Próxima etapa: validar o login com sessão de operação, observar a duração das leituras com a base real e confirmar o acesso às telas de Capas e Romaneios.
