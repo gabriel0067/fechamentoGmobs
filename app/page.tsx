@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import {
+  CloudSessionExpiredError,
   CloudStateConflictError,
   getConfirmedItemState,
   getCloudStateVersion,
@@ -39,6 +40,7 @@ import {
   uniqueClosingExportRows,
 } from "./excel-light";
 import {
+  driverDailyReportTotals,
   romaneioClosingInvoiceCount,
   romaneioFreightPartsTotal,
 } from "./romaneio-light";
@@ -248,10 +250,14 @@ type ManualRomaneioDocument = {
   invoice: string;
   sender: string;
   recipient: string;
+  destinationAddress?: string;
   city: string;
   freight: number;
   weight: number;
   volumes: number;
+};
+type ManualRomaneioDraftDocument = Omit<ManualRomaneioDocument, "volumes"> & {
+  volumes: number | null;
 };
 type ManualRomaneio = {
   id: string;
@@ -1053,6 +1059,8 @@ const parseMoney = (value: string) => {
   const parsed = Number(normalizedValue.replace(/[^0-9.-]/g, ""));
   return Number.isFinite(parsed) ? parsed : null;
 };
+const driverDailyPaymentKey = (driverKey: string, day: DriverClosingPreviewReport["days"][number]) =>
+  `${driverKey}|${"manualId" in day && day.manualId ? day.manualId : day.date}`;
 const manualFreightProduction = (grossFreight: number) =>
   roundMoney(grossFreight * MANUAL_ROMANEIO_FREIGHT_FACTOR);
 const parseCnpjList = (value: string) => {
@@ -1151,6 +1159,7 @@ function useCloudStateSync<T>(
     succeeded: boolean,
     version?: string,
     error?: Error,
+    confirmedValue?: T,
   ) => void,
 ) {
   const enabledOnce = useRef(false);
@@ -1221,7 +1230,7 @@ function useCloudStateSync<T>(
                 }
               }
               saveRetryDelayRef.current = 5_000;
-              onFinish(stateKey, true, result.version);
+              onFinish(stateKey, true, result.version, undefined, result.value);
             } catch (error) {
               const saveError = error instanceof Error ? error : undefined;
               pendingSaveRef.current = true;
@@ -1436,9 +1445,8 @@ function LoginGate({
   );
 }
 
-async function loadCachedCloudStateRecord<T>(stateKey: CloudStateKey) {
-  const version = await getCloudStateVersion(stateKey);
-  const cached = await readCloudStateCache<T>(stateKey).catch(() => null);
+async function loadCachedCloudStateRecord<T>(stateKey: CloudStateKey, version?: string) {
+  const cached = version ? await readCloudStateCache<T>(stateKey).catch(() => null) : null;
   if (version && cached?.version === version) {
     rememberConfirmedItemState(stateKey, cached);
     return { value: cached.value, version };
@@ -1671,7 +1679,15 @@ export default function Home() {
   );
   const [manualRomaneioPlate, setManualRomaneioPlate] = useState("");
   const [manualRomaneioCompleted, setManualRomaneioCompleted] = useState(false);
-  const [manualRomaneioDraft, setManualRomaneioDraft] = useState<ManualRomaneioDocument[]>([]);
+  const [manualRomaneioDraft, setManualRomaneioDraft] = useState<ManualRomaneioDraftDocument[]>([]);
+  const [savingManualRomaneio, setSavingManualRomaneio] = useState(false);
+  const [pendingManualPrintIds, setPendingManualPrintIds] = useState<Set<string>>(() => new Set());
+  const pendingManualPrintsRef = useRef(new Map<string, {
+    entryId: string;
+    romaneio: ManualRomaneio;
+    dataConfirmed: boolean;
+    opsConfirmed: boolean;
+  }>());
   const manualRomaneioScanRef = useRef<HTMLInputElement>(null);
   const [driverClosingFrom, setDriverClosingFrom] = useState("");
   const [driverClosingTo, setDriverClosingTo] = useState("");
@@ -2084,7 +2100,10 @@ export default function Home() {
         if (cancelled) return;
         setCloudReady(false);
         setCloudStatus("loading");
-        const session = await fetch("/api/auth/session", { cache: "no-store" });
+        setCloudFailureMessage("");
+        const session = await fetch("/api/auth/session", {
+          cache: "no-store", signal: AbortSignal.timeout(10_000),
+        });
         if (session.status === 401) {
           if (!cancelled) {
             setAuthStatus("signedOut");
@@ -2094,6 +2113,9 @@ export default function Home() {
         }
         if (!session.ok) throw new Error("Não foi possível validar a sessão.");
         setAuthStatus("signedIn");
+        const versions = await getCloudStateVersions();
+        if (cancelled) return;
+        const loadState = <T,>(key: CloudStateKey) => loadCachedCloudStateRecord<T>(key, versions[key]);
 
         const [
           closingDataRecord,
@@ -2105,12 +2127,12 @@ export default function Home() {
           romaneioDataRecord,
           romaneioOpsRecord,
         ] = await Promise.all([
-            loadCachedCloudStateRecord<{
+            loadState<{
               entries: Entry[];
               referenceEntries?: RomaneioReferenceEntry[];
               importInfo: ImportInfo | null;
             }>("closing-data"),
-            loadCachedCloudStateRecord<{
+            loadState<{
               covers?: CoverExport[];
               coverGenerators?: string[];
               closingAdditionals?: ClosingAdditional[];
@@ -2120,20 +2142,20 @@ export default function Home() {
               financialEntries?: FinancialEntry[];
               financialAccountNames?: string[];
             }>("closing-ops"),
-            loadCachedCloudStateRecord<Record<string, Record<string, ScanRecord>>>(
+            loadState<Record<string, Record<string, ScanRecord>>>(
               "scans",
             ),
-            loadCachedCloudStateRecord<{
+            loadState<{
             rates: TdeRateRecord[];
             importInfo: TdeImportInfo | null;
             }>("tde"),
-            loadCachedCloudStateRecord<Record<string, MaexAdditionalSender>>("maex"),
-            loadCachedCloudStateRecord<Record<string, BilledDocumentRecord>>("billed"),
-            loadCachedCloudStateRecord<{
+            loadState<Record<string, MaexAdditionalSender>>("maex"),
+            loadState<Record<string, BilledDocumentRecord>>("billed"),
+            loadState<{
               entries: RomaneioEntry[];
               importInfo: RomaneioImportInfo | null;
             }>("romaneio-data"),
-            loadCachedCloudStateRecord<{
+            loadState<{
               documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
               routeLabels: Record<string, string>;
               groupNotes?: Record<string, string>;
@@ -2147,7 +2169,7 @@ export default function Home() {
         if (cancelled) return;
 
         const legacyClosingRecord = !closingDataRecord || !closingOpsRecord
-          ? await loadCachedCloudStateRecord<{
+          ? await loadState<{
               entries: Entry[];
               referenceEntries?: RomaneioReferenceEntry[];
               importInfo: ImportInfo | null;
@@ -2239,7 +2261,7 @@ export default function Home() {
           billedRecord?.version || (await initializeCloudState("billed", {}));
 
         const legacyRomaneiosRecord = !romaneioDataRecord || !romaneioOpsRecord
-          ? await loadCachedCloudStateRecord<{
+          ? await loadState<{
               entries: RomaneioEntry[]; importInfo: RomaneioImportInfo | null;
               documentStatuses: Record<string, RomaneioDocumentStatusRecord>;
               routeLabels: Record<string, string>; groupNotes?: Record<string, string>;
@@ -2278,10 +2300,18 @@ export default function Home() {
           setCloudReady(true);
           setCloudStatus("ready");
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setCloudReady(false);
-          setCloudStatus("error");
+          if (error instanceof CloudSessionExpiredError) {
+            setAuthStatus("signedOut");
+            setCloudStatus("loading");
+            setLoginError("Sua sessão expirou. Entre novamente para carregar os dados.");
+          } else {
+            console.error("Falha no carregamento inicial do GMOBS.", error);
+            setCloudFailureMessage("Os dados compartilhados não puderam ser carregados. Você pode tentar novamente.");
+            setCloudStatus("error");
+          }
         }
       }
     };
@@ -2546,8 +2576,37 @@ export default function Home() {
     setRetainedHistory(value.retainedHistory || []);
     setManualRomaneios(value.manualRomaneios || []);
   }, []);
+  const printManualRomaneio = useCallback(async (romaneio: ManualRomaneio) => {
+    try {
+      const { exportManualRomaneioPdf } = await loadExcelModule();
+      exportManualRomaneioPdf(romaneio);
+    } catch {
+      setMessageIsError(true);
+      setMessage(`Não foi possível gerar o PDF de ${romaneio.number}. Use Imprimir no histórico para tentar novamente.`);
+    }
+  }, []);
+  const confirmManualRomaneioPrint = useCallback((key: CloudStateKey, value: unknown) => {
+    if (!pendingManualPrintsRef.current.size || (key !== "romaneio-data" && key !== "romaneio-ops")) return;
+    for (const [id, pending] of pendingManualPrintsRef.current) {
+      if (key === "romaneio-data")
+        pending.dataConfirmed = (value as typeof romaneioDataCloudState | null)?.entries?.some((entry) => entry.id === pending.entryId) ?? false;
+      else
+        pending.opsConfirmed = (value as typeof romaneioOpsCloudState | null)?.manualRomaneios?.some((romaneio) => romaneio.id === id) ?? false;
+      if (pending.dataConfirmed && pending.opsConfirmed) {
+        pendingManualPrintsRef.current.delete(id);
+        setPendingManualPrintIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+        setMessageIsError(false);
+        setMessage(`${pending.romaneio.number} gravado no banco${pending.romaneio.completed ? " como baixado" : " em aberto"}.`);
+        void printManualRomaneio(pending.romaneio);
+      }
+    }
+  }, [printManualRomaneio]);
   const markCloudSaveFinish = useCallback(
-    (stateKey: CloudStateKey, succeeded: boolean, version?: string, error?: Error) => {
+    (stateKey: CloudStateKey, succeeded: boolean, version?: string, error?: Error, confirmedValue?: unknown) => {
       if (!succeeded) {
         cloudFailedKeysRef.current.add(stateKey);
         cloudSaveFailedRef.current = true;
@@ -2559,11 +2618,12 @@ export default function Home() {
         if (!cloudSaveFailedRef.current) setCloudFailureMessage("");
       }
       if (succeeded && version) cloudVersionsRef.current[stateKey] = version;
+      if (succeeded && confirmedValue !== undefined) confirmManualRomaneioPrint(stateKey, confirmedValue);
       cloudWritesRef.current = Math.max(0, cloudWritesRef.current - 1);
       if (cloudWritesRef.current === 0)
         setCloudStatus(cloudSaveFailedRef.current ? "error" : "ready");
     },
-    [],
+    [confirmManualRomaneioPrint],
   );
   useCloudStateSync(
     "closing-data",
@@ -2889,7 +2949,7 @@ export default function Home() {
     return [...baseEntries, ...additionalEntries];
   }, [closingAdditionals, entries, tdeRates]);
   const closingAdditionalMatch = useMemo(
-    () => entries.find((entry) => entryMatchesGlobalDocumentScan(entry, closingAdditionalSearch)),
+    () => closingAdditionalSearch ? entries.find((entry) => entryMatchesGlobalDocumentScan(entry, closingAdditionalSearch)) : undefined,
     [closingAdditionalSearch, entries],
   );
   const latestGeneralEmissionDate = useMemo(
@@ -2901,7 +2961,10 @@ export default function Home() {
       }, ""),
     [entries],
   );
+  const needsRomaneioGroups = tab === "romaneios" || tab === "covers" || tab === "dedicated";
+  const needsManualScanIndex = tab === "covers" || (tab === "romaneios" && romaneioSection === "manual");
   const romaneioDocumentMatches = useMemo(() => {
+    if (!needsRomaneioGroups) return new Map<string, { type: "MD-e" | "CT-e" | "Documento"; number: string; found: boolean; entries: RomaneioReferenceEntry[] }>();
     const mdes = new Map<string, RomaneioReferenceEntry[]>();
     const ctes = new Map<string, RomaneioReferenceEntry[]>();
     const orderedMatchCache = new Map<string, RomaneioReferenceEntry[]>();
@@ -2973,8 +3036,9 @@ export default function Home() {
       }),
     );
     return matches;
-  }, [entriesWithTde, romaneioEntries, romaneioReferenceEntries]);
+  }, [entriesWithTde, needsRomaneioGroups, romaneioEntries, romaneioReferenceEntries]);
   const romaneioDailyGroups = useMemo(() => {
+    if (!needsRomaneioGroups) return [];
     const groups = new Map<string, RomaneioDailyGroup>();
     const documentIndexes = new Map<string, Map<string, RomaneioDailyDocument>>();
     romaneioEntries.forEach((row) => {
@@ -3122,7 +3186,7 @@ export default function Home() {
         b.day.localeCompare(a.day) ||
         a.driver.localeCompare(b.driver, "pt-BR"),
     );
-  }, [romaneioDocumentMatches, romaneioEntries]);
+  }, [needsRomaneioGroups, romaneioDocumentMatches, romaneioEntries]);
   const manualRomaneioDrivers = useMemo(() => {
     const drivers = new Map<string, { key: string; driver: string; cpf: string; plate: string }>();
     romaneioDailyGroups.forEach((group) => {
@@ -3141,6 +3205,7 @@ export default function Home() {
   }, [manualRomaneioCustomDriver, manualRomaneios, romaneioDailyGroups]);
   const manualRomaneioScanIndex = useMemo(() => {
     const index = new Map<string, Entry[]>();
+    if (!needsManualScanIndex) return index;
     const source = [...new Map(
       [...entriesWithTde, ...romaneioReferenceEntries].map((entry) => [entry.id, entry] as const),
     ).values()];
@@ -3150,7 +3215,7 @@ export default function Home() {
       index.set(token, matches);
     }));
     return index;
-  }, [entriesWithTde, romaneioReferenceEntries]);
+  }, [entriesWithTde, needsManualScanIndex, romaneioReferenceEntries]);
   const romaneioScanIndex = useMemo(() => {
     const index = new Map<string, { group: RomaneioDailyGroup; document: RomaneioDailyDocument; order: number }[]>();
     let order = 0;
@@ -3673,6 +3738,7 @@ export default function Home() {
   );
   const reportFallbackIdentifiersByIdentifier = useMemo(() => {
     const matches = new Map<string, Set<string>>();
+    if (tab !== "romaneios" || romaneioSection !== "checking") return matches;
     [...entriesWithTde, ...romaneioReferenceEntries].forEach((entry) => {
       if (normalized(entry.status) === "cf") return;
       const identifiers = entryOperationalIdentifiers(entry);
@@ -3683,7 +3749,7 @@ export default function Home() {
       });
     });
     return matches;
-  }, [entriesWithTde, romaneioReferenceEntries]);
+  }, [entriesWithTde, romaneioReferenceEntries, romaneioSection, tab]);
   const retainedRomaneioByIdentifier = useMemo(() => {
     const matches = new Map<string, RomaneioDocumentStatusRecord>();
     retainedRomaneioDocuments.forEach((record) => {
@@ -4986,7 +5052,12 @@ export default function Home() {
       setMessage(`O documento ${raw} já está neste romaneio manual.`);
       return;
     }
-    setManualRomaneioDraft((current) => [{ key, mde: entry.mde, cte: entry.cte, cteKey: entry.cteKey, invoice: entry.invoice, sender: entry.sender, recipient: entry.recipient, city: entry.city, freight: entry.reportedTotal ?? entry.freight ?? 0, weight: entry.weight || 0, volumes: entry.volumes || 0 }, ...current]);
+    setManualRomaneioDraft((current) => [{
+      key, mde: entry.mde, cte: entry.cte, cteKey: entry.cteKey, invoice: entry.invoice,
+      sender: entry.sender, recipient: entry.recipient, city: entry.city,
+      freight: entry.reportedTotal ?? entry.freight ?? 0, weight: entry.weight || 0,
+      volumes: entry.volumes || null,
+    }, ...current]);
     setMessageIsError(false);
     setMessage(`Documento ${entry.mde || entry.cte || entry.invoice} incluído no romaneio manual.`);
     playRomaneioSuccessSound();
@@ -5012,22 +5083,29 @@ export default function Home() {
     setMessage(`${driver} foi selecionado para o novo romaneio manual.`);
   }
 
-  async function printManualRomaneio(romaneio: ManualRomaneio) {
-    const { exportManualRomaneioPdf } = await loadExcelModule();
-    exportManualRomaneioPdf(romaneio);
-  }
-
   async function saveManualRomaneio() {
+    if (savingManualRomaneio) return;
     const driver = manualRomaneioDrivers.find((item) => item.key === manualRomaneioDriverKey);
     if (!driver || !manualRomaneioDate || !manualRomaneioDraft.length) {
       setMessageIsError(true);
       setMessage("Escolha a data, o motorista e bipe ao menos um documento.");
       return;
     }
+    if (manualRomaneioDraft.some(({ destinationAddress, volumes }) =>
+      !destinationAddress?.trim() || volumes === null || !Number.isSafeInteger(volumes) || volumes < 0)) {
+      setMessageIsError(true);
+      setMessage("Informe o endereço de destino e a quantidade inteira de volumes de cada documento.");
+      return;
+    }
+    const documents = manualRomaneioDraft.map((document) => ({
+      ...document,
+      destinationAddress: document.destinationAddress?.trim(),
+      volumes: document.volumes ?? 0,
+    }));
     const savedAt = new Date().toISOString();
     const createdAt = new Date(`${manualRomaneioDate}T12:00:00`).toISOString();
     const day = manualRomaneioDate;
-    const route = [...new Set(manualRomaneioDraft.map((document) => document.city.trim()).filter(Boolean))].join(" · ");
+    const route = [...new Set(documents.map((document) => document.city.trim()).filter(Boolean))].join(" · ");
     const lastManualNumber = [...manualRomaneios.map((item) => item.number), ...romaneioEntries
       .filter((item) => item.sourceFile === "Romaneio manual")
       .map((item) => item.romaneio)]
@@ -5035,7 +5113,34 @@ export default function Home() {
         const sequence = /^RM-?(\d+)$/i.exec(value.trim())?.[1];
         return sequence ? Math.max(highest, Number(sequence)) : highest;
       }, 999);
-    const number = `RM-${lastManualNumber + 1}`;
+    let number = `RM-${lastManualNumber + 1}`;
+    if (cloudHosted) {
+      setSavingManualRomaneio(true);
+      try {
+        const response = await fetch("/api/cloud-items?key=romaneio-ops", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ minimum: lastManualNumber }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (response.status === 401) {
+          setMessageIsError(true);
+          setMessage("Sua sessão expirou. Entre novamente para gravar o romaneio.");
+          return;
+        }
+        if (!response.ok) throw new Error();
+        const allocation = await response.json();
+        if (typeof allocation.number !== "string" || !/^RM-\d+$/.test(allocation.number))
+          throw new Error();
+        number = allocation.number;
+      } catch {
+        setMessageIsError(true);
+        setMessage("O banco não confirmou a numeração. O rascunho continua na tela. Tente gravar novamente.");
+        return;
+      } finally {
+        setSavingManualRomaneio(false);
+      }
+    }
     const romaneio: ManualRomaneio = {
       id: newId(),
       number,
@@ -5045,10 +5150,10 @@ export default function Home() {
       cpf: driver.cpf,
       plate: manualRomaneioPlate.trim().toUpperCase() || driver.plate,
       route,
-      documents: manualRomaneioDraft,
+      documents,
       completed: manualRomaneioCompleted,
     };
-    const documentLabels = manualRomaneioDraft.map((document) =>
+    const documentLabels = documents.map((document) =>
       document.mde
         ? `M-${operationalIdentifier(document.mde)}`
         : document.cte
@@ -5072,10 +5177,10 @@ export default function Home() {
       plate: manualRomaneioPlate.trim().toUpperCase() || driver.plate,
       vehicleType: "",
       trailer: "",
-      freight: roundMoney(manualRomaneioDraft.reduce((sum, document) => sum + document.freight, 0)),
-      weight: roundMoney(manualRomaneioDraft.reduce((sum, document) => sum + document.weight, 0)),
-      deliveries: manualRomaneioDraft.length,
-      volumes: manualRomaneioDraft.reduce((sum, document) => sum + document.volumes, 0),
+      freight: roundMoney(documents.reduce((sum, document) => sum + document.freight, 0)),
+      weight: roundMoney(documents.reduce((sum, document) => sum + document.weight, 0)),
+      deliveries: documents.length,
+      volumes: documents.reduce((sum, document) => sum + document.volumes, 0),
       route,
       documents: documentLabels,
       helpers: "",
@@ -5084,7 +5189,7 @@ export default function Home() {
     const driverIdentity = normalizeCnpj(driver.cpf) || normalized(driver.driver);
     const groupKey = `${day}|${driverIdentity || "sem-motorista"}|${normalized(number)}`;
     const statuses: Record<string, RomaneioDocumentStatusRecord> = {};
-    if (manualRomaneioCompleted) manualRomaneioDraft.forEach((document, index) => {
+    if (manualRomaneioCompleted) documents.forEach((document, index) => {
       const label = documentLabels[index];
       const reference = romaneioDocumentReference(label);
       const documentKey = romaneioDocumentKey(label);
@@ -5114,12 +5219,22 @@ export default function Home() {
         identifiers: [...new Set([document.mde, document.cte, document.cteKey, document.invoice].flatMap((value) => entryOperationalIdentifiers({ mde: value, cte: value, cteKey: value, invoice: value })))],
       };
     });
+    if (cloudHosted) {
+      pendingManualPrintsRef.current.set(romaneio.id, {
+        entryId, romaneio, dataConfirmed: false, opsConfirmed: false,
+      });
+      setPendingManualPrintIds((current) => new Set(current).add(romaneio.id));
+    }
     setRomaneioEntries((current) => [syntheticEntry, ...current]);
     setRomaneioDocumentStatuses((current) => ({ ...current, ...statuses }));
     setManualRomaneios((current) => [romaneio, ...current]);
     setManualRomaneioDraft([]);
     setManualRomaneioCompleted(false);
     setMessageIsError(false);
+    if (cloudHosted) {
+      setMessage(`Salvando ${romaneio.number}. O PDF será gerado após a confirmação do banco.`);
+      return;
+    }
     setMessage(manualRomaneioCompleted
       ? `${romaneio.number} gravado como baixado, com ${romaneio.documents.length} documento(s) entregues.`
       : `${romaneio.number} gravado em aberto para ser ticado posteriormente.`);
@@ -6152,6 +6267,19 @@ export default function Home() {
     playRomaneioAttentionSound();
   }
 
+  function driverDailyReportValues(report: DriverClosingPreviewReport) {
+    const total = driverDailyTotals[report.key]?.trim();
+    return {
+      ...report,
+      totalPaid: total ? parseMoney(total) ?? undefined : undefined,
+      manualDiscount: parseMoney(driverDailyDiscounts[report.key] || "") ?? 0,
+      days: report.days.map((day) => ({
+        ...day,
+        paidAmount: parseMoney(driverDailyPayments[driverDailyPaymentKey(report.key, day)] || "") ?? 0,
+      })),
+    };
+  }
+
   async function exportSelectedDriverDailyReports() {
     if (!selectedDriverClosingReports.length) {
       setMessageIsError(true);
@@ -6159,23 +6287,7 @@ export default function Home() {
       return;
     }
     const { exportDriverDailyReportPdf } = await loadExcelModule();
-    selectedDriverClosingReports.forEach((report) =>
-      exportDriverDailyReportPdf({
-        driver: report.driver,
-        cpf: report.cpf,
-        periodFrom: report.periodFrom,
-        periodTo: report.periodTo,
-        discounts: report.discounts,
-        totalPaid: parseMoney(driverDailyTotals[report.key] || "") ?? undefined,
-        manualDiscount: parseMoney(driverDailyDiscounts[report.key] || "") ?? 0,
-        days: report.days.map((day) => ({
-          date: day.date,
-          cities: day.cities,
-          invoiceCount: day.invoiceCount,
-          paidAmount: parseMoney(driverDailyPayments[`${report.key}|${day.date}`] || "") ?? 0,
-        })),
-      }),
-    );
+    selectedDriverClosingReports.forEach((report) => exportDriverDailyReportPdf(driverDailyReportValues(report)));
     setMessageIsError(false);
     setMessage(`${selectedDriverClosingReports.length} relatório(s) de diárias gerado(s).`);
   }
@@ -7222,6 +7334,7 @@ export default function Home() {
         const response = await fetch("/api/auth/login", {
           method: "POST",
           headers: { "content-type": "application/json" },
+          signal: AbortSignal.timeout(12_000),
           body: JSON.stringify({
             username: username.trim(),
             password,
@@ -7309,6 +7422,7 @@ export default function Home() {
         await writeCloudStateCache(key, result.version, result.value).catch(() => undefined);
         cloudVersionsRef.current[key] = result.version;
         cloudFailedKeysRef.current.delete(key);
+        confirmManualRomaneioPrint(key, result.value);
         if (result.reconciled) {
           if (key === "closing-data") reconcileClosingData(result.value as typeof closingDataCloudState);
           else if (key === "closing-ops") reconcileClosingOps(result.value as typeof closingOpsCloudState);
@@ -8424,7 +8538,7 @@ export default function Home() {
                 <div className="intro">
                   <div><small>NOVO ROMANEIO</small><h2>Romaneio manual</h2><p>Escolha o motorista, bipe os documentos e grave. O PDF segue o modelo operacional de romaneio.</p></div>
                 </div>
-                <section className="manual-romaneio-builder">
+                <fieldset className="manual-romaneio-builder" disabled={savingManualRomaneio} aria-label="Dados do romaneio manual">
                   <div className="manual-romaneio-fields">
                     <label>Data do romaneio<input type="date" value={manualRomaneioDate} onChange={(event) => setManualRomaneioDate(event.target.value)} /></label>
                     <label>Motorista<select value={manualRomaneioDriverKey} onChange={(event) => { const key = event.target.value; setManualRomaneioDriverKey(key); setManualRomaneioPlate(manualRomaneioDrivers.find((driver) => driver.key === key)?.plate || ""); }}><option value="">Selecione...</option>{manualRomaneioDrivers.map((driver) => <option key={driver.key} value={driver.key}>{driver.driver}{driver.plate ? ` · ${driver.plate}` : ""}</option>)}</select></label>
@@ -8443,14 +8557,49 @@ export default function Home() {
                     <button className="primary">Adicionar documento</button>
                   </form>
                   <div className="manual-romaneio-documents">
-                    {manualRomaneioDraft.length ? manualRomaneioDraft.map((document, index) => <article key={document.key}><b>{index + 1}</b><span><strong>{document.mde ? `MD-e ${document.mde}` : document.cte ? `CT-e ${document.cte}` : `NF ${document.invoice}`}</strong><small>{document.invoice ? `NF ${document.invoice} · ` : ""}{document.sender || "Sem remetente"} → {document.recipient || "Sem destinatário"}</small></span><button type="button" onClick={() => setManualRomaneioDraft((current) => current.filter((item) => item.key !== document.key))}>Remover</button></article>) : <div className="empty romaneio-empty"><span>▤</span><h3>Nenhum documento bipado</h3><p>Os últimos documentos bipados aparecerão primeiro.</p></div>}
+                    {manualRomaneioDraft.length ? manualRomaneioDraft.map((document, index) => (
+                      <article key={document.key}>
+                        <b>{index + 1}</b>
+                        <span>
+                          <strong>{document.mde ? `MD-e ${document.mde}` : document.cte ? `CT-e ${document.cte}` : `NF ${document.invoice}`}</strong>
+                          <small>{document.invoice ? `NF ${document.invoice} · ` : ""}{document.sender || "Sem remetente"} → {document.recipient || "Sem destinatário"}</small>
+                        </span>
+                        <button type="button" onClick={() => setManualRomaneioDraft((current) => current.filter((item) => item.key !== document.key))}>Remover</button>
+                        <div className="manual-romaneio-document-fields">
+                          <label>Endereço de destino
+                            <input required maxLength={240} value={document.destinationAddress || ""} placeholder="Rua, número e bairro" onChange={(event) => {
+                              const destinationAddress = event.target.value;
+                              setManualRomaneioDraft((current) => current.map((item) =>
+                                item.key === document.key ? { ...item, destinationAddress } : item));
+                            }} />
+                          </label>
+                          <label>Volumes
+                            <input required type="number" min={0} step={1} inputMode="numeric" value={document.volumes ?? ""} onChange={(event) => {
+                              const value = event.target.valueAsNumber;
+                              const volumes = Number.isFinite(value) ? value : null;
+                              setManualRomaneioDraft((current) => current.map((item) =>
+                                item.key === document.key ? { ...item, volumes } : item));
+                            }} />
+                          </label>
+                        </div>
+                      </article>
+                    )) : <div className="empty romaneio-empty"><span>▤</span><h3>Nenhum documento bipado</h3><p>Os últimos documentos bipados aparecerão primeiro.</p></div>}
                   </div>
                   <label className="manual-romaneio-completed"><input aria-label="Criar romaneio manual já baixado" type="checkbox" checked={manualRomaneioCompleted} onChange={(event) => setManualRomaneioCompleted(event.target.checked)} /><span><strong>Criar já baixado</strong><small>Desmarcado: o romaneio fica em aberto para ticagem posterior.</small></span></label>
-                  <button type="button" className="primary manual-romaneio-save" disabled={!manualRomaneioDate || !manualRomaneioDriverKey || !manualRomaneioDraft.length} onClick={saveManualRomaneio}>Gravar e imprimir ({manualRomaneioDraft.length})</button>
-                </section>
+                  <button type="button" className="primary manual-romaneio-save" disabled={savingManualRomaneio || !manualRomaneioDate || !manualRomaneioDriverKey || !manualRomaneioDraft.length} onClick={saveManualRomaneio}>{savingManualRomaneio ? "Reservando número..." : `Gravar e imprimir (${manualRomaneioDraft.length})`}</button>
+                </fieldset>
                 <section className="manual-romaneio-history">
                   <div><small>ROMANEIOS GRAVADOS</small><h3>Histórico manual</h3></div>
-                  {manualRomaneios.length ? manualRomaneios.map((romaneio) => <article key={romaneio.id}><span><strong>{romaneio.number} · {romaneio.completed === false ? "Em aberto" : "Baixado"}</strong><small>{new Date(romaneio.createdAt).toLocaleString("pt-BR")} · {romaneio.createdBy}</small></span><span><strong>{romaneio.driver}</strong><small>{romaneio.plate || "Sem placa"} · {romaneio.documents.length} documento(s)</small></span><button type="button" onClick={() => printManualRomaneio(romaneio)}>Imprimir</button></article>) : <p>Nenhum romaneio manual gravado.</p>}
+                  {manualRomaneios.length ? manualRomaneios.map((romaneio) => {
+                    const pending = pendingManualPrintIds.has(romaneio.id);
+                    return (
+                      <article key={romaneio.id}>
+                        <span><strong>{romaneio.number} · {romaneio.completed === false ? "Em aberto" : "Baixado"}</strong><small>{new Date(romaneio.createdAt).toLocaleString("pt-BR")} · {romaneio.createdBy}</small></span>
+                        <span><strong>{romaneio.driver}</strong><small>{romaneio.plate || "Sem placa"} · {romaneio.documents.length} documento(s)</small></span>
+                        <button type="button" disabled={pending} onClick={() => printManualRomaneio(romaneio)}>{pending ? "Aguardando gravação" : "Imprimir"}</button>
+                      </article>
+                    );
+                  }) : <p>Nenhum romaneio manual gravado.</p>}
                 </section>
               </div>
             ) : romaneioSection === "full" ? (
@@ -8728,20 +8877,30 @@ export default function Home() {
                       <div><small>PRÉVIA DAS DIÁRIAS</small><h3>Conferir valores pagos</h3><p>Os valores digitados servem somente para este relatório e não alteram a produção gravada.</p></div>
                       <button type="button" className="primary" onClick={exportSelectedDriverDailyReports}>Gerar PDF(s)</button>
                     </div>
-                    {selectedDriverClosingReports.map((report) => (
+                    {selectedDriverClosingReports.map((report) => {
+                      const { grossTotal, discountTotal, netTotal } = driverDailyReportTotals(driverDailyReportValues(report));
+                      return (
                       <section key={report.key} className="driver-pdf-preview-card">
-                        <div className="driver-pdf-preview-title"><div><strong>{report.driver}</strong><small>{report.cpf || "CPF não informado"}</small></div><span><small>TOTAL INFORMADO</small><b>{money(Math.max(0, (parseMoney(driverDailyTotals[report.key] || "") ?? report.days.reduce((sum, day) => sum + (parseMoney(driverDailyPayments[`${report.key}|${day.date}`] || "") ?? 0), 0)) - (parseMoney(driverDailyDiscounts[report.key] || "") ?? 0)))}</b></span></div>
+                        <div className="driver-pdf-preview-title">
+                          <div><strong>{report.driver}</strong><small>{report.cpf || "CPF não informado"}</small></div>
+                          <span><small>TOTAL A PAGAR</small><b>{money(netTotal)}</b></span>
+                        </div>
+                        <p className="daily-report-discount">Total das diárias {money(grossTotal)} · Descontos {money(discountTotal)}</p>
                         <div className="daily-report-total-fields">
                           <label><span>Valor total fechado na quinzena</span><input inputMode="decimal" value={driverDailyTotals[report.key] || ""} onChange={(event) => setDriverDailyTotals((current) => ({ ...current, [report.key]: event.target.value }))} placeholder="Opcional · substitui a soma dos dias" /></label>
                           <label><span>Desconto deste fechamento</span><input inputMode="decimal" value={driverDailyDiscounts[report.key] || ""} onChange={(event) => setDriverDailyDiscounts((current) => ({ ...current, [report.key]: event.target.value }))} placeholder="R$ 0,00" /></label>
                         </div>
                         <div className="driver-pdf-days daily-report-days">
                           <div className="driver-pdf-day-head"><span>Data</span><span>Cidades</span><span>Docs.</span><span>Valor pago</span></div>
-                          {report.days.map((day) => <div className="driver-pdf-day-row" key={day.date}><span><strong>{formatRomaneioDay(day.date)}</strong></span><span>{day.cities.join(" · ") || "Não informada"}</span><span><strong>{day.invoiceCount}</strong></span><input inputMode="decimal" value={driverDailyPayments[`${report.key}|${day.date}`] || ""} onChange={(event) => setDriverDailyPayments((current) => ({ ...current, [`${report.key}|${day.date}`]: event.target.value }))} placeholder="R$ 0,00" aria-label={`Valor da diária de ${report.driver} em ${formatRomaneioDay(day.date)}`} /></div>)}
+                          {report.days.map((day) => {
+                            const key = driverDailyPaymentKey(report.key, day);
+                            return <div className="driver-pdf-day-row" key={key}><span><strong>{formatRomaneioDay(day.date)}</strong></span><span>{day.cities.join(" · ") || "Não informada"}</span><span><strong>{day.invoiceCount}</strong></span><input inputMode="decimal" value={driverDailyPayments[key] || ""} onChange={(event) => setDriverDailyPayments((current) => ({ ...current, [key]: event.target.value }))} placeholder="R$ 0,00" aria-label={`Valor da diária de ${report.driver} em ${formatRomaneioDay(day.date)}`} /></div>;
+                          })}
                         </div>
                         {!!report.discounts?.length && <p className="daily-report-discount">Descontos já vinculados ao motorista: {money(report.discounts.reduce((sum, item) => sum + item.amount, 0))}</p>}
                       </section>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 {driverClosingPreviewOpen && driverClosingView === "closing" && (

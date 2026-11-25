@@ -1,3 +1,11 @@
+export function driverDailyReportTotals(
+  report: { days: { paidAmount: number }[]; totalPaid?: number; manualDiscount?: number; discounts?: { amount: number }[] },
+) {
+  const grossTotal = report.totalPaid ?? report.days.reduce((sum, day) => sum + day.paidAmount, 0);
+  const discountTotal = (report.discounts || []).reduce((sum, item) => sum + item.amount, 0) + (report.manualDiscount ?? 0);
+  return { grossTotal, discountTotal, netTotal: Math.max(0, grossTotal - discountTotal) };
+}
+
 export const romaneioFreightTotal = (values: number[]) => {
   const valid = values.filter((value) => Number.isFinite(value) && value > 0);
   if (!valid.length) return 0;

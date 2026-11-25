@@ -8,10 +8,23 @@ const transpiled = ts.transpileModule(source, { compilerOptions: { module: ts.Mo
 const cjsModule = { exports: {} };
 new Function("module", "exports", transpiled)(cjsModule, cjsModule.exports);
 const {
+  driverDailyReportTotals,
   romaneioClosingInvoiceCount,
   romaneioFreightPartsTotal,
   romaneioFreightTotal,
 } = cjsModule.exports;
+
+test("soma as diárias quando o total da quinzena não foi informado", () => {
+  const days = [{ paidAmount: 150.5 }, { paidAmount: 175.25 }];
+  const discounts = [{ amount: 20 }];
+  assert.deepEqual(driverDailyReportTotals({ days, discounts, manualDiscount: 5 }), {
+    grossTotal: 325.75, discountTotal: 25, netTotal: 300.75,
+  });
+  assert.deepEqual(driverDailyReportTotals({ days, discounts, totalPaid: 400 }), {
+    grossTotal: 400, discountTotal: 20, netTotal: 380,
+  });
+  assert.equal(driverDailyReportTotals({ days, totalPaid: 0 }).grossTotal, 0);
+});
 
 test("não duplica um frete total repetido nas linhas do mesmo romaneio", () => {
   assert.equal(romaneioFreightTotal([100, 100]), 100);

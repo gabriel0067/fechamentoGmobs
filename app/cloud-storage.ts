@@ -37,7 +37,11 @@ async function fetchCloud(input: RequestInfo | URL, init?: RequestInit) {
   let lastError: unknown;
   for (let attempt = 0; attempt <= CLOUD_RETRY_DELAYS.length; attempt++) {
     try {
-      const response = await fetch(input, init);
+      const method = init?.method || "GET";
+      const timedRead = method === "GET" || method === "HEAD";
+      const response = await fetch(input, timedRead && !init?.signal
+        ? { ...init, signal: AbortSignal.timeout(12_000) }
+        : init);
       if (response.status < 500 && response.status !== 429) return response;
       lastError = new Error(`Falha temporária do banco (${response.status}).`);
     } catch (error) {
@@ -164,11 +168,13 @@ async function decodeState<T>(encoding: CloudEncoding, payload: string) {
 
 function cloudError(response: Response) {
   if (response.status === 401)
-    return new Error("Entre no site para acessar os dados salvos no banco.");
+    return new CloudSessionExpiredError("Entre no site para acessar os dados salvos no banco.");
   return new Error("O banco não respondeu. Tente novamente antes de continuar.");
 }
 
-export async function loadCloudStateRecord<T>(stateKey: CloudStateKey) {
+export class CloudSessionExpiredError extends Error {}
+
+export async function loadCloudStateRecord<T>(stateKey: CloudStateKey, retryOnVersionChange = true) {
   if (ITEM_STATE_KEYS.has(stateKey)) {
     const response = await fetchCloud(
       `${CLOUD_ITEMS_ENDPOINT}?key=${encodeURIComponent(stateKey)}`,
@@ -201,10 +207,16 @@ export async function loadCloudStateRecord<T>(stateKey: CloudStateKey) {
           `${CLOUD_STATE_ENDPOINT}?key=${encodeURIComponent(stateKey)}&index=${start + offset}&version=${encodeURIComponent(version)}`,
           { cache: "no-store" },
         );
+        if (response.status === 409 || response.status === 204)
+          throw new CloudStateConflictError("Os dados mudaram durante a leitura.");
         if (!response.ok) throw cloudError(response);
         return response.text();
       }),
-    );
+    ).catch((error) => {
+      if (error instanceof CloudStateConflictError && retryOnVersionChange) return null;
+      throw error;
+    });
+    if (!batch) return loadCloudStateRecord<T>(stateKey, false);
     chunks.push(...batch);
   }
   return {

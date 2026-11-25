@@ -9,6 +9,7 @@ const OWNER = "shared:fechamentos-gmobs";
 const ITEM_KEYS = new Set(["closing-ops", "romaneio-ops"]);
 let client: ReturnType<typeof neon> | undefined;
 let schemaReady: Promise<void> | undefined;
+let manualSequenceReady: Promise<unknown> | undefined;
 
 const shapes: Record<string, Record<string, "array" | "map" | "string-array">> = {
   "closing-ops": {
@@ -31,31 +32,49 @@ function sql() {
 
 function ensureSchema() {
   schemaReady ??= (async () => {
-    await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_live_v3 (
+    const [schema] = await sql().query(`SELECT
+      to_regclass('cloud_state_activation_backups_v3') IS NOT NULL
+      AND to_regclass('cloud_state_live_items_v3_lookup') IS NOT NULL
+      AND EXISTS (SELECT 1 FROM pg_attribute
+        WHERE attrelid = to_regclass('cloud_state_live_v3') AND attname = 'status' AND NOT attisdropped)
+      AND EXISTS (SELECT 1 FROM pg_attribute
+        WHERE attrelid = to_regclass('cloud_state_live_items_v3') AND attname = 'payload_encoded' AND NOT attisdropped)
+      AS ready`) as { ready: boolean }[];
+    if (schema.ready) {
+      const [backup] = await sql().query(`SELECT EXISTS (
+        SELECT 1 FROM cloud_state_activation_backups_v3
+        WHERE owner_id = $1 AND backup_id = 'pre-live-v3-2026-11-23'
+      ) AS ready`, [OWNER]) as { ready: boolean }[];
+      if (backup.ready) return;
+    }
+    await sql().transaction((tx) => [
+    tx.query("SELECT pg_advisory_xact_lock(hashtext('gmobs_cloud_items_schema'))"),
+    tx.query(`CREATE TABLE IF NOT EXISTS cloud_state_live_v3 (
       owner_id TEXT NOT NULL, state_key TEXT NOT NULL, version TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('preparing', 'ready')),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (owner_id, state_key))`);
-    await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_live_items_v3 (
+      PRIMARY KEY (owner_id, state_key))`),
+    tx.query(`CREATE TABLE IF NOT EXISTS cloud_state_live_items_v3 (
       owner_id TEXT NOT NULL, state_key TEXT NOT NULL, collection TEXT NOT NULL,
       item_key TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
       payload JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (owner_id, state_key, collection, item_key))`);
-    await sql().query(`CREATE TABLE IF NOT EXISTS cloud_state_activation_backups_v3 (
+      PRIMARY KEY (owner_id, state_key, collection, item_key))`),
+    tx.query(`CREATE TABLE IF NOT EXISTS cloud_state_activation_backups_v3 (
       owner_id TEXT NOT NULL, backup_id TEXT NOT NULL, state_key TEXT NOT NULL,
       version TEXT NOT NULL, encoding TEXT NOT NULL, payload TEXT NOT NULL,
       captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (owner_id, backup_id, state_key))`);
-    await sql().query("ALTER TABLE cloud_state_live_v3 ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready'");
-    await sql().query("ALTER TABLE cloud_state_live_items_v3 ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0");
-    await sql().query("ALTER TABLE cloud_state_live_items_v3 ADD COLUMN IF NOT EXISTS payload_encoded BOOLEAN NOT NULL DEFAULT false");
-    await sql().query(`CREATE INDEX IF NOT EXISTS cloud_state_live_items_v3_lookup
-      ON cloud_state_live_items_v3 (owner_id, state_key, collection)`);
-    await sql().query(`INSERT INTO cloud_state_activation_backups_v3
+      PRIMARY KEY (owner_id, backup_id, state_key))`),
+    tx.query("ALTER TABLE cloud_state_live_v3 ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ready'"),
+    tx.query("ALTER TABLE cloud_state_live_items_v3 ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0"),
+    tx.query("ALTER TABLE cloud_state_live_items_v3 ADD COLUMN IF NOT EXISTS payload_encoded BOOLEAN NOT NULL DEFAULT false"),
+    tx.query(`CREATE INDEX IF NOT EXISTS cloud_state_live_items_v3_lookup
+      ON cloud_state_live_items_v3 (owner_id, state_key, collection)`),
+    tx.query(`INSERT INTO cloud_state_activation_backups_v3
         (owner_id, backup_id, state_key, version, encoding, payload)
       SELECT owner_id, 'pre-live-v3-2026-11-23', state_key, version, encoding, payload
       FROM cloud_state_records WHERE owner_id = $1
-      ON CONFLICT (owner_id, backup_id, state_key) DO NOTHING`, [OWNER]);
+      ON CONFLICT (owner_id, backup_id, state_key) DO NOTHING`, [OWNER]),
+    ]);
   })().catch((error) => { schemaReady = undefined; throw error; });
   return schemaReady;
 }
@@ -167,6 +186,44 @@ function failure(error: unknown) {
   return Response.json({ error: "Não foi possível acessar os dados." }, { status: 500 });
 }
 
+export async function POST(request: Request) {
+  const access = await authorize(request);
+  if (access.response) return access.response;
+  if (access.stateKey !== "romaneio-ops")
+    return Response.json({ error: "Tipo de dado inválido." }, { status: 400 });
+
+  const body = await request.json().catch(() => null);
+  const minimum = body?.minimum;
+  if (!Number.isInteger(minimum) || minimum < 999 || minimum >= 999_999_999)
+    return Response.json({ error: "Numeração do romaneio inválida." }, { status: 400 });
+
+  try {
+    await ensureSchema();
+    await ensureSeeded(access.stateKey);
+    manualSequenceReady ??= sql().transaction((tx) => [
+      tx.query("SELECT pg_advisory_xact_lock(hashtext('gmobs_manual_romaneio_sequence'))"),
+      tx.query(`CREATE TABLE IF NOT EXISTS cloud_manual_romaneio_sequence (
+        owner_id TEXT PRIMARY KEY, last_number INTEGER NOT NULL)`),
+    ])
+      .catch((error) => { manualSequenceReady = undefined; throw error; });
+    await manualSequenceReady;
+    const [allocation] = await sql().query(
+      `INSERT INTO cloud_manual_romaneio_sequence (owner_id, last_number)
+       SELECT $1, GREATEST($2::integer, COALESCE(MAX((CASE WHEN payload_encoded
+         THEN substring(payload #>> '{}' from '"number":"[Rr][Mm]-?([0-9]{1,9})"')
+         ELSE substring(trim(payload->>'number') from '^[Rr][Mm]-?([0-9]{1,9})$')
+       END)::integer), 999)) + 1
+       FROM cloud_state_live_items_v3
+       WHERE owner_id = $1 AND state_key = 'romaneio-ops' AND collection = 'manualRomaneios'
+       ON CONFLICT (owner_id) DO UPDATE SET last_number =
+         GREATEST(cloud_manual_romaneio_sequence.last_number + 1, EXCLUDED.last_number)
+       RETURNING last_number`,
+      [OWNER, minimum],
+    ) as { last_number: number }[];
+    return Response.json({ number: `RM-${allocation.last_number}` });
+  } catch (error) { return failure(error); }
+}
+
 export async function HEAD(request: Request) {
   const access = await authorize(request);
   if (access.response) return access.response;
@@ -197,32 +254,38 @@ export async function GET(request: Request) {
       return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
     try {
       await ensureSchema();
-      for (const key of ITEM_KEYS) await ensureSeeded(key);
       const rows = await sql().query(
         "SELECT state_key, version FROM cloud_state_live_v3 WHERE owner_id = $1 AND state_key = ANY($2::text[]) AND status = 'ready'",
         [OWNER, [...ITEM_KEYS]],
       ) as { state_key: string; version: string }[];
-      return Response.json(Object.fromEntries(rows.map((row) => [row.state_key, row.version])),
-        { headers: { "cache-control": "no-store" } });
+      const versions = new Map(rows.map(({ state_key, version }) => [state_key, version]));
+      await Promise.all([...ITEM_KEYS].filter((key) => !versions.has(key)).map(async (key) => {
+        const version = await ensureSeeded(key);
+        if (version) versions.set(key, version);
+      }));
+      return Response.json(Object.fromEntries(versions), { headers: { "cache-control": "no-store" } });
     } catch (error) { return failure(error); }
   }
   const access = await authorize(request);
   if (access.response) return access.response;
   try {
     await ensureSchema();
-    const version = await ensureSeeded(access.stateKey);
-    if (!version) return new Response(null, { status: 204 });
+    if (!(await ensureSeeded(access.stateKey))) return new Response(null, { status: 204 });
     const rows = await sql().query(
-      `SELECT collection, item_key, position, payload, payload_encoded
-       FROM cloud_state_live_items_v3
-       WHERE owner_id = $1 AND state_key = $2
-       ORDER BY collection, position, item_key`,
+      `SELECT state.version, item.collection, item.item_key, item.payload, item.payload_encoded
+       FROM cloud_state_live_v3 state
+       LEFT JOIN cloud_state_live_items_v3 item ON item.owner_id = state.owner_id AND item.state_key = state.state_key
+       WHERE state.owner_id = $1 AND state.state_key = $2 AND state.status = 'ready'
+       ORDER BY item.collection, item.position, item.item_key`,
       [OWNER, access.stateKey],
-    ) as { collection: string; item_key: string; payload: unknown; payload_encoded: boolean }[];
+    ) as { version: string; collection: string | null; item_key: string; payload: unknown; payload_encoded: boolean }[];
+    const version = rows[0]?.version;
+    if (!version) return new Response(null, { status: 204 });
     const value: Record<string, unknown> = {};
     for (const [collection, kind] of Object.entries(shapes[access.stateKey]))
       value[collection] = kind === "map" ? {} : [];
     for (const row of rows) {
+      if (!row.collection || !Object.hasOwn(shapes[access.stateKey], row.collection)) continue;
       const payload = row.payload_encoded ? JSON.parse(String(row.payload)) : row.payload;
       if (shapes[access.stateKey][row.collection] === "map")
         (value[row.collection] as Record<string, unknown>)[decodeItemKey(row.item_key)] = payload;

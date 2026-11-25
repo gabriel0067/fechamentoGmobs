@@ -5,6 +5,7 @@ import {
   normalizeInvoiceKey,
   uniqueClosingExportRows,
 } from "./excel-light";
+import { driverDailyReportTotals } from "./romaneio-light";
 export { commissionTotal, normalizeCnpj, normalizeInvoiceKey } from "./excel-light";
 
 export type BillingPdfRow = { partner: string; value: number; createdBy: string };
@@ -294,6 +295,7 @@ export type ManualRomaneioExport = {
     invoice: string;
     sender: string;
     recipient: string;
+    destinationAddress?: string;
     city: string;
     freight: number;
     weight: number;
@@ -305,15 +307,39 @@ export function exportManualRomaneioPdf(romaneio: ManualRomaneioExport) {
   const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   const margin = 7;
   const pageWidth = 297 - margin * 2;
-  const rowHeight = 8;
-  const rowsPerPage = 20;
-  const pages = Math.max(1, Math.ceil(romaneio.documents.length / rowsPerPage));
+  const tableTop = 46;
+  const tableBottom = 173;
+  const lineHeight = 3.1;
   const money = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const date = new Date(romaneio.createdAt);
   const created = Number.isNaN(date.getTime()) ? romaneio.createdAt : date.toLocaleString("pt-BR");
-  const widths = [28, 25, 30, 49, 55, 42, 18, 18, 18];
-  const headers = ["MINUTA", "CT-E", "NF", "REMETENTE", "DESTINATÁRIO", "CIDADE", "FRETE", "PESO", "VOLUMES"];
-  for (let page = 0; page < pages; page++) {
+  const widths = [21, 21, 28, 43, 73, 39, 22, 18, 18];
+  const headers = ["MINUTA", "CT-E", "NF", "REMETENTE", "DESTINATÁRIO / ENDEREÇO", "CIDADE", "FRETE", "PESO", "VOLUMES"];
+  const setCellFont = (index: number) => {
+    pdf.setFont("helvetica", index < 3 ? "bold" : "normal");
+    pdf.setFontSize(index >= 3 && index <= 5 ? 6.8 : 7);
+  };
+  const pages: { cells: string[][]; height: number }[][] = [[]];
+  let nextRowY = tableTop;
+  for (const document of romaneio.documents) {
+    const values = [
+      document.mde || "-", document.cte || "-", document.invoice || "-", document.sender || "-",
+      [document.recipient || "-", document.destinationAddress].filter(Boolean).join("\n"), document.city || "-",
+      money(document.freight), document.weight.toLocaleString("pt-BR"), String(document.volumes ?? 0),
+    ];
+    const cells = values.map((value, index) => {
+      setCellFont(index);
+      return pdf.splitTextToSize(value, widths[index] - 2.4) as string[];
+    });
+    const height = Math.max(8, Math.max(...cells.map((lines) => lines.length)) * lineHeight + 3);
+    if (nextRowY + height > tableBottom && pages[pages.length - 1].length) {
+      pages.push([]);
+      nextRowY = tableTop;
+    }
+    pages[pages.length - 1].push({ cells, height });
+    nextRowY += height;
+  }
+  for (let page = 0; page < pages.length; page++) {
     if (page) pdf.addPage();
     let y = 7;
     pdf.setDrawColor(20, 20, 20);
@@ -326,7 +352,8 @@ export function exportManualRomaneioPdf(romaneio: ManualRomaneioExport) {
     pdf.text(`MOTORISTA: ${romaneio.driver || "NÃO INFORMADO"}`, margin + 3, y + 18);
     pdf.text(`CPF: ${romaneio.cpf || "NÃO INFORMADO"}`, margin + 105, y + 18);
     pdf.text(`PLACA: ${romaneio.plate || "NÃO INFORMADA"}`, margin + 180, y + 18);
-    pdf.text(`ROTA: ${romaneio.route || "NÃO INFORMADA"}`, margin + 3, y + 24);
+    const routeLines = pdf.splitTextToSize(`ROTA: ${romaneio.route || "NÃO INFORMADA"}`, 173);
+    pdf.text(routeLines.slice(0, 2), margin + 3, y + 23, { lineHeightFactor: 1 });
     pdf.text(`EMISSÃO: ${created}`, margin + 180, y + 24);
     y += 32;
     pdf.setFillColor(22, 46, 33);
@@ -339,27 +366,26 @@ export function exportManualRomaneioPdf(romaneio: ManualRomaneioExport) {
       x += widths[index];
     });
     pdf.setTextColor(0, 0, 0);
-    y += 7;
-    romaneio.documents.slice(page * rowsPerPage, (page + 1) * rowsPerPage).forEach((document, row) => {
-      if (row % 2) { pdf.setFillColor(240, 244, 242); pdf.rect(margin, y, pageWidth, rowHeight, "F"); }
-      const values = [document.mde || "-", document.cte || "-", document.invoice || "-", document.sender || "-", document.recipient || "-", document.city || "-", money(document.freight), document.weight.toLocaleString("pt-BR"), String(document.volumes || 0)];
+    y = tableTop;
+    pages[page].forEach(({ cells, height }, row) => {
+      if (row % 2) { pdf.setFillColor(240, 244, 242); pdf.rect(margin, y, pageWidth, height, "F"); }
       x = margin;
-      values.forEach((value, index) => {
-        pdf.rect(x, y, widths[index], rowHeight);
-        pdf.setFont("helvetica", index < 3 ? "bold" : "normal");
-        pdf.setFontSize(index >= 3 && index <= 5 ? 6.2 : 7);
-        pdf.text(String(value).slice(0, 42), x + 1.2, y + 5, { maxWidth: widths[index] - 2.4 });
+      cells.forEach((lines, index) => {
+        pdf.rect(x, y, widths[index], height);
+        setCellFont(index);
+        lines.forEach((line, lineIndex) => pdf.text(line, x + 1.2, y + 4.5 + lineIndex * lineHeight));
         x += widths[index];
       });
-      y += rowHeight;
+      y += height;
     });
-    if (page === pages - 1) {
+    if (page === pages.length - 1) {
       y += 5;
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(9);
       pdf.text(`TOTAL DE DOCUMENTOS: ${romaneio.documents.length}`, margin, y);
       pdf.text(`TOTAL FRETE: ${money(romaneio.documents.reduce((sum, item) => sum + item.freight, 0))}`, margin + 70, y);
       pdf.text(`TOTAL PESO: ${romaneio.documents.reduce((sum, item) => sum + item.weight, 0).toLocaleString("pt-BR")} kg`, margin + 150, y);
+      pdf.text(`TOTAL VOLUMES: ${romaneio.documents.reduce((sum, item) => sum + (item.volumes ?? 0), 0).toLocaleString("pt-BR")}`, margin + 213, y);
       y += 17;
       pdf.line(margin, y, margin + 85, y);
       pdf.line(margin + 100, y, margin + 185, y);
@@ -371,7 +397,7 @@ export function exportManualRomaneioPdf(romaneio: ManualRomaneioExport) {
     }
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(7);
-    pdf.text(`Página ${page + 1}/${pages} · Emitido por ${romaneio.createdBy || "não informado"}`, 297 - margin, 205, { align: "right" });
+    pdf.text(`Página ${page + 1}/${pages.length} · Emitido por ${romaneio.createdBy || "não informado"}`, 297 - margin, 205, { align: "right" });
   }
   pdf.save(`Romaneio Manual ${romaneio.number.replace(/[\\/:*?"<>|]+/g, "-")}.pdf`);
 }
@@ -2249,9 +2275,7 @@ export function exportDriverDailyReportPdf(report: DriverDailyReportExport) {
   const moneyText = (value: number) =>
     value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const period = [report.periodFrom, report.periodTo].filter(Boolean).map(pdfDate).join(" a ") || "Todo o período";
-  const discountTotal = (report.discounts || []).reduce((sum, item) => sum + item.amount, 0) + (report.manualDiscount || 0);
-  const grossTotal = report.totalPaid ?? report.days.reduce((sum, day) => sum + day.paidAmount, 0);
-  const netTotal = Math.max(0, grossTotal - discountTotal);
+  const { grossTotal, discountTotal, netTotal } = driverDailyReportTotals(report);
   let y = 18;
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(15);
@@ -2289,6 +2313,7 @@ export function exportDriverDailyReportPdf(report: DriverDailyReportExport) {
     });
     y += 8;
   });
+  if (y > 240) { pdf.addPage(); y = 18; }
   y += 5;
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(9);

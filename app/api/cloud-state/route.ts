@@ -116,7 +116,6 @@ export async function HEAD(request: Request) {
   const access = await check(request);
   if (access.response) return access.response;
   try {
-    await ensureUploadSchema();
     const rows = await sql().query(
       "SELECT version, encoding, length(payload) AS size FROM cloud_state_records WHERE owner_id = $1 AND state_key = $2",
       [OWNER, access.key],
@@ -167,7 +166,6 @@ export async function GET(request: Request) {
     if (!(await authenticatedUsername(request)))
       return Response.json({ error: "É necessário entrar no site." }, { status: 401 });
     try {
-      await ensureUploadSchema();
       const rows = await sql().query(
         "SELECT state_key, version FROM cloud_state_records WHERE owner_id = $1 AND state_key = ANY($2::text[])",
         [OWNER, ALL_KEYS],

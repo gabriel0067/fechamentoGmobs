@@ -568,3 +568,17 @@ Para Capas, Retidos e os demais registros operacionais, a gravação envia apena
 Novas Capas e eventos de Retidos recebem posição antes ou depois do histórico, sem atualizar a posição dos itens existentes. Uma edição simples mantém a posição já gravada. O navegador reutiliza a versão operacional confirmada em memória para evitar clonar todo o histórico no IndexedDB a cada gravação.
 
 A aba Capas reaproveita o índice de documentos já construído e mantém o índice de capas salvas entre trocas de tela. O relatório renderiza 50 capas por página e conserva pesquisa e seleção sobre todo o resultado.
+
+# Endereço, volumes e numeração do romaneio manual — 25/11/2026
+
+- Na criação de romaneios manuais, cada documento exige endereço de destino e quantidade de volumes. Quando o relatório traz uma quantidade, ela é sugerida e pode ser corrigida. O PDF imprime o endereço junto ao destinatário, os volumes por documento e a soma no rodapé. Romaneios antigos continuam disponíveis para reimpressão.
+- Na versão hospedada, o banco reserva os números `RM-...` em sequência compartilhada para que dois operadores recebam números distintos. A reserva começa acima da numeração já conhecida. Se uma reserva não virar um romaneio gravado, pode haver intervalo na sequência.
+- A impressão automática depende da confirmação das duas gravações do romaneio no banco, a entrada para ticagem e o registro do histórico manual. Se a sincronização falhar, o fluxo existente de novas tentativas continua disponível. A reserva de número usa uma tabela separada e os números históricos são mantidos.
+- Próximas etapas: validar a criação em dois computadores autenticados antes de promover a versão e conferir, com o romaneio impresso e os documentos da viagem em mãos, a identificação das saídas nos registros que já têm número repetido.
+
+# Carregamento após o login e totais de diárias — 25/11/2026
+
+- A entrada consulta as versões em lote e calcula os índices operacionais maiores somente nas telas que usam esses índices. Leituras têm prazo por tentativa e repetem a transferência quando a versão muda durante o download. Uma falha de renderização exibe um aviso com opção de tentar novamente.
+- Consultas de versão e leitura evitam preparar tabelas de upload. Quando o esquema operacional e o backup de ativação já existem, a API não repete a preparação. A leitura dos registros individuais usa a versão da mesma consulta que devolve os dados.
+- No relatório de diárias, deixar o total quinzenal em branco soma os pagamentos dos dias. Um total preenchido substitui a soma. A prévia e o PDF usam a mesma regra para total bruto, descontos vinculados e manuais, e total a pagar.
+- Próxima etapa: conferir a entrada autenticada com o volume real após publicar e acompanhar o tempo de resposta e os erros pela Vercel.
