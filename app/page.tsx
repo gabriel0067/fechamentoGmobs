@@ -97,6 +97,8 @@ type Entry = {
   senderCnpj: string;
   recipient: string;
   recipientCnpj: string;
+  destinationAddress?: string;
+  destinationPostalCode?: string;
   city: string;
   observation: string;
   weight: number;
@@ -251,13 +253,11 @@ type ManualRomaneioDocument = {
   sender: string;
   recipient: string;
   destinationAddress?: string;
+  destinationPostalCode?: string;
   city: string;
   freight: number;
   weight: number;
   volumes: number;
-};
-type ManualRomaneioDraftDocument = Omit<ManualRomaneioDocument, "volumes"> & {
-  volumes: number | null;
 };
 type ManualRomaneio = {
   id: string;
@@ -1679,7 +1679,7 @@ export default function Home() {
   );
   const [manualRomaneioPlate, setManualRomaneioPlate] = useState("");
   const [manualRomaneioCompleted, setManualRomaneioCompleted] = useState(false);
-  const [manualRomaneioDraft, setManualRomaneioDraft] = useState<ManualRomaneioDraftDocument[]>([]);
+  const [manualRomaneioDraft, setManualRomaneioDraft] = useState<ManualRomaneioDocument[]>([]);
   const [savingManualRomaneio, setSavingManualRomaneio] = useState(false);
   const [pendingManualPrintIds, setPendingManualPrintIds] = useState<Set<string>>(() => new Set());
   const pendingManualPrintsRef = useRef(new Map<string, {
@@ -5046,6 +5046,17 @@ export default function Home() {
       return;
     }
     const entry = candidates[0];
+    const accessKey = scanKey(entry.cteKey);
+    const mde = operationalIdentifier(entry.mde);
+    const matchesByKey = accessKey.length === 44
+      ? manualRomaneioScanIndex.get(`exact:${accessKey}`) || []
+      : [];
+    const sameDocument = [...matchesByKey, ...matches].filter((candidate) => {
+      const candidateKey = scanKey(candidate.cteKey);
+      if (accessKey.length === 44 && candidateKey.length === 44)
+        return accessKey === candidateKey;
+      return mde && operationalIdentifier(candidate.mde) === mde;
+    });
     const key = operationalIdentifier(entry.mde) || scanKey(entry.cteKey) || operationalIdentifier(entry.cte) || `${normalizeInvoiceKey(entry.invoice)}|${normalized(entry.sender)}|${normalized(entry.recipient)}`;
     if (manualRomaneioDraft.some((item) => item.key === key)) {
       setMessageIsError(true);
@@ -5055,8 +5066,10 @@ export default function Home() {
     setManualRomaneioDraft((current) => [{
       key, mde: entry.mde, cte: entry.cte, cteKey: entry.cteKey, invoice: entry.invoice,
       sender: entry.sender, recipient: entry.recipient, city: entry.city,
+      destinationAddress: entry.destinationAddress || sameDocument.find((item) => item.destinationAddress)?.destinationAddress,
+      destinationPostalCode: entry.destinationPostalCode || sameDocument.find((item) => item.destinationPostalCode)?.destinationPostalCode,
       freight: entry.reportedTotal ?? entry.freight ?? 0, weight: entry.weight || 0,
-      volumes: entry.volumes || null,
+      volumes: entry.volumes ?? 0,
     }, ...current]);
     setMessageIsError(false);
     setMessage(`Documento ${entry.mde || entry.cte || entry.invoice} incluído no romaneio manual.`);
@@ -5091,17 +5104,7 @@ export default function Home() {
       setMessage("Escolha a data, o motorista e bipe ao menos um documento.");
       return;
     }
-    if (manualRomaneioDraft.some(({ destinationAddress, volumes }) =>
-      !destinationAddress?.trim() || volumes === null || !Number.isSafeInteger(volumes) || volumes < 0)) {
-      setMessageIsError(true);
-      setMessage("Informe o endereço de destino e a quantidade inteira de volumes de cada documento.");
-      return;
-    }
-    const documents = manualRomaneioDraft.map((document) => ({
-      ...document,
-      destinationAddress: document.destinationAddress?.trim(),
-      volumes: document.volumes ?? 0,
-    }));
+    const documents = manualRomaneioDraft;
     const savedAt = new Date().toISOString();
     const createdAt = new Date(`${manualRomaneioDate}T12:00:00`).toISOString();
     const day = manualRomaneioDate;
@@ -5982,6 +5985,8 @@ export default function Home() {
           senderCnpj: row.senderCnpj,
           recipient: row.recipient,
           recipientCnpj: row.recipientCnpj,
+          destinationAddress: row.destinationAddress,
+          destinationPostalCode: row.destinationPostalCode,
           city: row.city,
           observation: row.observation,
           weight: row.weight,
@@ -6036,7 +6041,26 @@ export default function Home() {
       const releasedByRomaneio = additions.filter(
         (entry) => entry.romaneioDocumentKey,
       ).length;
-      setEntries((current) => [...current, ...additions]);
+      const importedDestinations = new Map<string, Pick<Entry, "destinationAddress" | "destinationPostalCode">>();
+      for (const entry of referenceEntries) {
+        if (!entry.destinationAddress && !entry.destinationPostalCode) continue;
+        const key = closingEntryImportIdentity(entry);
+        const previous = importedDestinations.get(key);
+        importedDestinations.set(key, {
+          destinationAddress: entry.destinationAddress || previous?.destinationAddress,
+          destinationPostalCode: entry.destinationPostalCode || previous?.destinationPostalCode,
+        });
+      }
+      const updateDestination = <T extends Entry,>(entry: T): T => {
+        if (!importedDestinations.size) return entry;
+        const destination = importedDestinations.get(closingEntryImportIdentity(entry));
+        if (!destination) return entry;
+        const destinationAddress = destination.destinationAddress || entry.destinationAddress;
+        const destinationPostalCode = destination.destinationPostalCode || entry.destinationPostalCode;
+        return destinationAddress === entry.destinationAddress && destinationPostalCode === entry.destinationPostalCode
+          ? entry : { ...entry, destinationAddress, destinationPostalCode };
+      };
+      setEntries((current) => [...current.map(updateDestination), ...additions.map(updateDestination)]);
       const referenceKeys = new Set(
         [...entries, ...romaneioReferenceEntries, ...additions]
           .map(asRomaneioReferenceEntry)
@@ -6054,10 +6078,10 @@ export default function Home() {
       setRomaneioReferenceEntries((current) => [
         ...current.map((entry) =>
           refreshedReferenceKeys.has(romaneioReferenceIdentity(entry))
-            ? { ...entry, sourceImportedAt }
+            ? { ...updateDestination(entry), sourceImportedAt }
             : entry,
         ),
-        ...referenceAdditions,
+        ...referenceAdditions.map(updateDestination),
       ]);
       setImportInfo({
         file: file.name,
@@ -8565,23 +8589,6 @@ export default function Home() {
                           <small>{document.invoice ? `NF ${document.invoice} · ` : ""}{document.sender || "Sem remetente"} → {document.recipient || "Sem destinatário"}</small>
                         </span>
                         <button type="button" onClick={() => setManualRomaneioDraft((current) => current.filter((item) => item.key !== document.key))}>Remover</button>
-                        <div className="manual-romaneio-document-fields">
-                          <label>Endereço de destino
-                            <input required maxLength={240} value={document.destinationAddress || ""} placeholder="Rua, número e bairro" onChange={(event) => {
-                              const destinationAddress = event.target.value;
-                              setManualRomaneioDraft((current) => current.map((item) =>
-                                item.key === document.key ? { ...item, destinationAddress } : item));
-                            }} />
-                          </label>
-                          <label>Volumes
-                            <input required type="number" min={0} step={1} inputMode="numeric" value={document.volumes ?? ""} onChange={(event) => {
-                              const value = event.target.valueAsNumber;
-                              const volumes = Number.isFinite(value) ? value : null;
-                              setManualRomaneioDraft((current) => current.map((item) =>
-                                item.key === document.key ? { ...item, volumes } : item));
-                            }} />
-                          </label>
-                        </div>
                       </article>
                     )) : <div className="empty romaneio-empty"><span>▤</span><h3>Nenhum documento bipado</h3><p>Os últimos documentos bipados aparecerão primeiro.</p></div>}
                   </div>

@@ -137,6 +137,8 @@ export type ImportedRow = {
   senderCnpj: string;
   recipient: string;
   recipientCnpj: string;
+  destinationAddress?: string;
+  destinationPostalCode?: string;
   city: string;
   observation: string;
   weight: number;
@@ -296,6 +298,7 @@ export type ManualRomaneioExport = {
     sender: string;
     recipient: string;
     destinationAddress?: string;
+    destinationPostalCode?: string;
     city: string;
     freight: number;
     weight: number;
@@ -324,7 +327,7 @@ export function exportManualRomaneioPdf(romaneio: ManualRomaneioExport) {
   for (const document of romaneio.documents) {
     const values = [
       document.mde || "-", document.cte || "-", document.invoice || "-", document.sender || "-",
-      [document.recipient || "-", document.destinationAddress].filter(Boolean).join("\n"), document.city || "-",
+      [document.recipient || "-", document.destinationAddress, document.destinationPostalCode && `CEP ${document.destinationPostalCode}`].filter(Boolean).join("\n"), document.city || "-",
       money(document.freight), document.weight.toLocaleString("pt-BR"), String(document.volumes ?? 0),
     ];
     const cells = values.map((value, index) => {
@@ -465,10 +468,16 @@ const aliases: Record<keyof ImportedRow, string[]> = {
   senderCnpj: [],
   recipient: ["destinatario", "destinatário", "recebedor", "cliente destino"],
   recipientCnpj: [],
+  destinationAddress: [
+    "endereco de entrega", "endereco entrega", "endereco do destino", "endereco de destino",
+    "endereco destino", "endereco do destinatario", "endereco destinatario",
+    "logradouro do destinatario", "logradouro destinatario", "logradouro de entrega",
+  ],
+  destinationPostalCode: ["cep destino", "cep de destino", "cep destinatario", "cep do destinatario", "cep entrega", "cep de entrega"],
   city: ["cidade", "destino", "municipio", "município", "rota"],
   observation: ["observacao", "observação"],
   weight: ["peso"],
-  volumes: ["volumes", "volume", "vol"],
+  volumes: ["volumes", "volume", "vol", "qtd volumes", "quantidade de volumes"],
   merchandiseValue: [
     "valor mercadoria",
     "valor da mercadoria",
@@ -744,6 +753,17 @@ export async function readClosingFile(file: File) {
         map.recipientCnpj = destinatario;
         map.recipient = destinatario + 1;
         map.city = destinatario + 2;
+        if (map.destinationAddress === undefined) {
+          const nextParty = rows[i].findIndex((cell, column) =>
+            column > destinatario && /^(cnpj entrega|cnpj redespacho|cnpj pagador)$/.test(normalize(cell)),
+          );
+          if (nextParty > destinatario) {
+            const address = rows[i].findIndex((cell, column) =>
+              column > destinatario && column < nextParty && /^(endereco|logradouro)$/.test(normalize(cell)),
+            );
+            if (address >= 0) map.destinationAddress = address;
+          }
+        }
       }
       if (redespacho >= 0) map.partner = redespacho + 1;
       if (redespacho >= 0) map.partnerCnpj = redespacho;
@@ -772,6 +792,9 @@ export async function readClosingFile(file: File) {
   const imported = best.rows
     .slice(best.header + 1)
     .map((row) => {
+      const destinationAddress = String(value(row, "destinationAddress") ?? "").trim();
+      const postalDigits = String(value(row, "destinationPostalCode") ?? "").replace(/\D/g, "");
+      const postalCode = /^\d{7,8}$/.test(postalDigits) ? postalDigits.padStart(8, "0") : "";
       const result: ImportedRow = {
         partner: String(value(row, "partner") ?? "").trim(),
         partnerCnpj: String(value(row, "partnerCnpj") ?? "").trim(),
@@ -790,6 +813,8 @@ export async function readClosingFile(file: File) {
         senderCnpj: String(value(row, "senderCnpj") ?? "").trim(),
         recipient: String(value(row, "recipient") ?? "").trim(),
         recipientCnpj: String(value(row, "recipientCnpj") ?? "").trim(),
+        ...(destinationAddress ? { destinationAddress } : {}),
+        ...(postalCode ? { destinationPostalCode: `${postalCode.slice(0, 5)}-${postalCode.slice(5)}` } : {}),
         city: String(value(row, "city") ?? "").trim(),
         observation: String(value(row, "observation") ?? "").trim(),
         weight: toNumber(value(row, "weight")),
